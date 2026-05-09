@@ -67,7 +67,7 @@ function Ensure-Directory {
         return Add-InitResult -Results $Results -Status "existing" -Path $Path
     }
 
-    New-Item -ItemType Directory -Path $Path | Out-Null
+    New-Item -ItemType Directory -Path $Path -Force | Out-Null
     return Add-InitResult -Results $Results -Status "created" -Path $Path
 }
 
@@ -114,6 +114,88 @@ function Write-InitResults {
     }
 }
 
+function Write-RepairFieldResults {
+    param([object[]]$Results)
+
+    $repaired = @($Results | Where-Object { $_.status -eq "repaired" })
+    $unchanged = @($Results | Where-Object { $_.status -eq "unchanged" })
+
+    Write-Section "Repaired Fields"
+    if ($repaired.Count -eq 0) {
+        Write-Host "No config fields repaired."
+    }
+    else {
+        $repaired | ForEach-Object {
+            Write-Host "$($_.name): $($_.oldValue) -> $($_.newValue)"
+        }
+    }
+
+    Write-Section "Unchanged Fields"
+    if ($unchanged.Count -eq 0) {
+        Write-Host "No config fields were already correct."
+    }
+    else {
+        $unchanged | ForEach-Object {
+            Write-Host "$($_.name): $($_.newValue)"
+        }
+    }
+}
+
+function Add-RepairFieldResult {
+    param(
+        [object[]]$Results,
+        [string]$Status,
+        [string]$Name,
+        [object]$OldValue,
+        [object]$NewValue
+    )
+
+    return @($Results) + (New-Object PSObject -Property ([ordered]@{
+        status = $Status
+        name = $Name
+        oldValue = $OldValue
+        newValue = $NewValue
+    }))
+}
+
+function Set-ConfigField {
+    param(
+        [object]$Config,
+        [string]$Name,
+        [string]$Value
+    )
+
+    $member = Get-Member -InputObject $Config -Name $Name -MemberType NoteProperty -ErrorAction SilentlyContinue
+    if ($null -eq $member) {
+        Add-Member -InputObject $Config -MemberType NoteProperty -Name $Name -Value $Value
+        return
+    }
+
+    $Config.$Name = $Value
+}
+
+function Repair-ConfigField {
+    param(
+        [object]$Config,
+        [object[]]$Results,
+        [string]$Name,
+        [string]$ExpectedValue
+    )
+
+    $member = Get-Member -InputObject $Config -Name $Name -MemberType NoteProperty -ErrorAction SilentlyContinue
+    $oldValue = $null
+    if ($null -ne $member) {
+        $oldValue = $Config.$Name
+    }
+
+    if ($null -ne $member -and [string]::Equals([string]$oldValue, $ExpectedValue, [System.StringComparison]::OrdinalIgnoreCase)) {
+        return Add-RepairFieldResult -Results $Results -Status "unchanged" -Name $Name -OldValue $oldValue -NewValue $ExpectedValue
+    }
+
+    Set-ConfigField -Config $Config -Name $Name -Value $ExpectedValue
+    return Add-RepairFieldResult -Results $Results -Status "repaired" -Name $Name -OldValue $oldValue -NewValue $ExpectedValue
+}
+
 function Write-Section {
     param([string]$Title)
 
@@ -151,6 +233,7 @@ function Show-Help {
     Write-Host "Usage:"
     Write-Host "  .\lane.ps1 help"
     Write-Host "  .\lane.ps1 init [-DevRoot <path>]"
+    Write-Host "  .\lane.ps1 init --repair [-DevRoot <path>]"
     Write-Host "  .\lane.ps1 plan"
     Write-Host "  .\lane.ps1 plan backlog"
     Write-Host "  .\lane.ps1 board"
@@ -467,7 +550,10 @@ function Write-TaskPrompt {
 }
 
 function Initialize-LaneRepository {
-    param([string]$Root)
+    param(
+        [string]$Root,
+        [bool]$Repair = $false
+    )
 
     $rootPath = Resolve-DevRoot $Root
     $repoRoot = Get-RepositoryRoot
@@ -476,21 +562,56 @@ function Initialize-LaneRepository {
     $tasksPath = Join-Path $laneRoot "tasks.json"
     $configPath = Join-Path $laneRoot "config.json"
     $vaultPath = Join-Path $rootPath "vaults\AI-Vault\10-Projects\$projectName"
-    $worktreesRoot = Join-Path $rootPath "worktrees"
+    $worktreesRoot = Join-Path $rootPath "worktrees\active"
     $agentsPath = Join-Path $repoRoot "AGENTS.md"
 
     $results = @()
     $results = Ensure-Directory -Path $laneRoot -Results $results
     $results = Ensure-File -Path $tasksPath -Lines @("[]") -Results $results
 
-    $config = New-Object PSObject -Property ([ordered]@{
-        projectName = $projectName
-        devRoot = $rootPath
-        vaultPath = $vaultPath
-        worktreesRoot = $worktreesRoot
-    })
-    $configLines = @(ConvertTo-Json -InputObject $config -Depth 4)
-    $results = Ensure-File -Path $configPath -Lines $configLines -Results $results
+    $fieldResults = @()
+    if ($Repair) {
+        if (Test-Path -LiteralPath $configPath) {
+            $rawConfig = Get-Content -LiteralPath $configPath -Raw
+            if ([string]::IsNullOrWhiteSpace($rawConfig)) {
+                $config = New-Object PSObject
+            }
+            else {
+                $config = $rawConfig | ConvertFrom-Json
+                if ($null -eq $config) {
+                    $config = New-Object PSObject
+                }
+            }
+        }
+        else {
+            $config = New-Object PSObject
+        }
+
+        $fieldResults = Repair-ConfigField -Config $config -Results $fieldResults -Name "projectName" -ExpectedValue $projectName
+        $fieldResults = Repair-ConfigField -Config $config -Results $fieldResults -Name "devRoot" -ExpectedValue $rootPath
+        $fieldResults = Repair-ConfigField -Config $config -Results $fieldResults -Name "vaultPath" -ExpectedValue $vaultPath
+        $fieldResults = Repair-ConfigField -Config $config -Results $fieldResults -Name "worktreesRoot" -ExpectedValue $worktreesRoot
+
+        $configLines = @(ConvertTo-Json -InputObject $config -Depth 10)
+        if (Test-Path -LiteralPath $configPath) {
+            Set-Content -LiteralPath $configPath -Value $configLines -Encoding ASCII
+            $results = Add-InitResult -Results $results -Status "existing" -Path $configPath
+        }
+        else {
+            Set-Content -LiteralPath $configPath -Value $configLines -Encoding ASCII
+            $results = Add-InitResult -Results $results -Status "created" -Path $configPath
+        }
+    }
+    else {
+        $config = New-Object PSObject -Property ([ordered]@{
+            projectName = $projectName
+            devRoot = $rootPath
+            vaultPath = $vaultPath
+            worktreesRoot = $worktreesRoot
+        })
+        $configLines = @(ConvertTo-Json -InputObject $config -Depth 4)
+        $results = Ensure-File -Path $configPath -Lines $configLines -Results $results
+    }
 
     $results = Ensure-Directory -Path $vaultPath -Results $results
     $results = Ensure-Directory -Path (Join-Path $vaultPath "session-notes") -Results $results
@@ -524,10 +645,18 @@ function Initialize-LaneRepository {
         "Use the vault memory for durable project context. Do not overwrite existing repository files unless the task explicitly requires it."
     ) -Results $results
 
-    Write-Host "Initialized Lane project: $projectName"
+    if ($Repair) {
+        Write-Host "Repaired Lane project: $projectName"
+    }
+    else {
+        Write-Host "Initialized Lane project: $projectName"
+    }
     Write-Host "Repo: $repoRoot"
     Write-Host "DevRoot: $rootPath"
     Write-Host "Vault: $vaultPath"
+    if ($Repair) {
+        Write-RepairFieldResults -Results $fieldResults
+    }
     Write-InitResults -Results $results
 }
 
@@ -957,7 +1086,32 @@ switch ($Command.ToLowerInvariant()) {
         Show-Status -Root $DevRoot
     }
     "init" {
-        Initialize-LaneRepository -Root $DevRoot
+        $repair = $false
+        if (-not [string]::IsNullOrWhiteSpace($Subcommand)) {
+            if ($Subcommand -eq "--repair") {
+                $repair = $true
+            }
+            else {
+                Write-Host "Unknown lane init argument: $Subcommand" -ForegroundColor Red
+                Show-Help
+                exit 1
+            }
+        }
+
+        if ($null -ne $RemainingArgs) {
+            foreach ($initArg in $RemainingArgs) {
+                if ($initArg -eq "--repair") {
+                    $repair = $true
+                }
+                else {
+                    Write-Host "Unknown lane init argument: $initArg" -ForegroundColor Red
+                    Show-Help
+                    exit 1
+                }
+            }
+        }
+
+        Initialize-LaneRepository -Root $DevRoot -Repair $repair
     }
     "plan" {
         if ([string]::IsNullOrWhiteSpace($Subcommand)) {

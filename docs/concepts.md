@@ -55,7 +55,28 @@ specs, not in `.lane\tasks.json`.
 - `vaultPath`
 - `worktreesRoot`
 
-Existing files are left unchanged.
+For new configs, `worktreesRoot` points at:
+
+```text
+<dev-root>\worktrees\active
+```
+
+Existing files are left unchanged by normal init.
+
+`lane init --repair [-DevRoot <path>]` is the corrective init mode. It
+re-detects `projectName` from the Git repository root folder and recomputes:
+
+- `vaultPath` as `<dev-root>\vaults\AI-Vault\10-Projects\<project-name>`
+- `worktreesRoot` as `<dev-root>\worktrees\active`
+
+If `.lane\config.json` is missing, repair mode creates it. If it exists, repair
+mode updates the known Lane fields only when they are wrong and preserves
+unknown or custom fields. It also creates the same missing `.lane` files,
+folders, and vault project memory paths as normal init. Existing vault memory
+files are not overwritten.
+
+Repair output reports repaired fields, unchanged fields, created paths, and
+already-existing paths.
 
 `lane plan` reads `config.json` and writes:
 
@@ -284,6 +305,8 @@ metadata. If the merge fails, the metadata stays unchanged.
 Lane is designed around these commands:
 
 - `lane init` creates the repo-local Lane skeleton and AI-Vault project memory.
+- `lane init --repair` repairs known config paths and recreates missing
+  skeleton files without overwriting existing vault memory.
 - `lane plan` writes a manual Codex planner prompt from repo-local Lane config.
 - `lane plan backlog` writes a manual Codex backlog planner prompt.
 - `lane board` groups Lane task metadata by status.

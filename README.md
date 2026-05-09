@@ -33,6 +33,7 @@ Lane v0 supports:
 ```powershell
 .\lane.ps1 help
 .\lane.ps1 init [-DevRoot <path>]
+.\lane.ps1 init --repair [-DevRoot <path>]
 .\lane.ps1 plan
 .\lane.ps1 plan backlog
 .\lane.ps1 board
@@ -71,6 +72,25 @@ It also creates project memory under AI-Vault:
 If `AGENTS.md` is missing, init creates one that instructs Codex to read the
 project vault memory before doing work. Existing files are never overwritten;
 init prints what it created and what already existed.
+
+Use repair mode when an existing `.lane\config.json` points at the wrong
+project, vault, or worktree location:
+
+```powershell
+.\lane.ps1 init --repair [-DevRoot <path>]
+```
+
+Repair mode re-detects the project name from the Git repository root folder,
+recomputes `vaultPath` as
+`<dev-root>\vaults\AI-Vault\10-Projects\<project-name>`, and recomputes
+`worktreesRoot` as `<dev-root>\worktrees\active`. It creates `config.json` if
+missing, updates only the known Lane fields when they are wrong, and preserves
+unknown or custom fields. It also creates the same missing `.lane` files,
+folders, and AI-Vault project memory paths as normal init. Existing vault
+memory files are not overwritten.
+
+Repair mode prints repaired config fields, unchanged config fields, created
+paths, and already-existing paths.
 
 The plan command reads:
 
