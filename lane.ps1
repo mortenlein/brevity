@@ -82,11 +82,11 @@ function Show-Help {
     Write-Host "  .\lane.ps1 help"
     Write-Host "  .\lane.ps1 status [-DevRoot <path>]"
     Write-Host "  .\lane.ps1 task new <slug> [-DevRoot <path>]"
+    Write-Host "  .\lane.ps1 task status"
     Write-Host ""
     Write-Host "Planned commands:"
     Write-Host "  lane init"
     Write-Host "  lane onboard"
-    Write-Host "  lane task status"
     Write-Host "  lane task merge"
     Write-Host "  lane task cleanup"
 }
@@ -189,6 +189,38 @@ function Add-TaskMetadata {
     ConvertTo-Json -InputObject $tasks -Depth 4 | Set-Content -LiteralPath $tasksPath -Encoding ASCII
 }
 
+function Show-TaskStatus {
+    $repoRoot = Get-RepositoryRoot
+    $tasksPath = Join-Path $repoRoot ".lane\tasks.json"
+
+    if (-not (Test-Path -LiteralPath $tasksPath)) {
+        Write-Host "No Lane tasks found."
+        return
+    }
+
+    $rawTasks = Get-Content -LiteralPath $tasksPath -Raw
+    if ([string]::IsNullOrWhiteSpace($rawTasks)) {
+        Write-Host "No Lane tasks found."
+        return
+    }
+
+    $parsedTasks = $rawTasks | ConvertFrom-Json
+    if ($null -eq $parsedTasks) {
+        Write-Host "No Lane tasks found."
+        return
+    }
+
+    $tasks = @($parsedTasks)
+    if ($tasks.Count -eq 0) {
+        Write-Host "No Lane tasks found."
+        return
+    }
+
+    $tasks |
+        Select-Object slug, branch, status, worktreePath, promptPath |
+        Format-List
+}
+
 function New-TaskWorktree {
     param(
         [string]$Root,
@@ -265,7 +297,7 @@ switch ($Command.ToLowerInvariant()) {
 
                 New-TaskWorktree -Root $DevRoot -Slug $taskSlug
             }
-            "status" { Write-NotImplemented "task status" }
+            "status" { Show-TaskStatus }
             "merge" { Write-NotImplemented "task merge" }
             "cleanup" { Write-NotImplemented "task cleanup" }
             default {

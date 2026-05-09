@@ -34,6 +34,7 @@ Lane v0 supports:
 .\lane.ps1 help
 .\lane.ps1 status [-DevRoot <path>]
 .\lane.ps1 task new <slug> [-DevRoot <path>]
+.\lane.ps1 task status
 ```
 
 The status command lists the standard Lane workspace locations when they exist:
@@ -71,6 +72,16 @@ and records task metadata in the source repository at:
 Each task record includes the slug, branch, worktree path, prompt path, status,
 and creation timestamp. New tasks start with `ready-for-worker` status.
 
+The task status command reads:
+
+```text
+<repo>\.lane\tasks.json
+```
+
+When task metadata exists, it prints the slug, branch, status, worktree path,
+and prompt path for each task. When no task metadata exists, it prints
+`No Lane tasks found.`
+
 ## Planned Commands
 
 These commands are part of Lane's public design, but are not implemented in v0:
@@ -78,7 +89,6 @@ These commands are part of Lane's public design, but are not implemented in v0:
 ```powershell
 lane init
 lane onboard
-lane task status
 lane task merge
 lane task cleanup
 ```

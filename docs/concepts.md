@@ -132,6 +132,17 @@ Each record includes:
 
 New task records use `ready-for-worker` status.
 
+`lane task status` reads the same metadata file and reports:
+
+- `slug`
+- `branch`
+- `status`
+- `worktreePath`
+- `promptPath`
+
+If the metadata file does not exist, Lane reports that no Lane tasks were
+found.
+
 ## Command Model
 
 Lane is designed around these commands:
@@ -144,5 +155,5 @@ Lane is designed around these commands:
 - `lane task merge` merges a completed task branch back to its base.
 - `lane task cleanup` removes task worktrees after merge.
 
-Lane v0 only provides the CLI scaffold and status behavior. Planner automation
-is deliberately out of scope.
+Lane v0 provides the CLI scaffold, workspace status, task creation, and task
+status reporting. Planner automation is deliberately out of scope.
