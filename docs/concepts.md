@@ -33,7 +33,7 @@ vaults, scratch files, and Lane orchestration state.
 ```
 
 Lane commands should accept an explicit `-DevRoot` when useful and otherwise
-default to the current working directory.
+default to `C:\dev`.
 
 ## .lane
 
@@ -108,7 +108,7 @@ task/<slug>
 and a worktree named:
 
 ```text
-worktrees\active\<slug>
+worktrees\active\<repo-name>-<slug>
 ```
 
 Lane should keep that convention for `lane task new`.

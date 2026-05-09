@@ -5,7 +5,7 @@ param(
     [Parameter(Position = 1)]
     [string]$Subcommand,
 
-    [string]$DevRoot = (Get-Location).Path,
+    [string]$DevRoot = "C:\dev",
 
     [Parameter(ValueFromRemainingArguments = $true)]
     [string[]]$RemainingArgs
@@ -22,6 +22,28 @@ function Resolve-DevRoot {
     }
 
     return (Resolve-Path -LiteralPath $Path).Path
+}
+
+function Get-RepositoryName {
+    $gitCommonDir = (& git rev-parse --git-common-dir 2>$null)
+    if ($LASTEXITCODE -eq 0 -and -not [string]::IsNullOrWhiteSpace($gitCommonDir)) {
+        $gitCommonPath = $gitCommonDir
+        if (-not [System.IO.Path]::IsPathRooted($gitCommonPath)) {
+            $gitCommonPath = Join-Path (Get-Location).Path $gitCommonPath
+        }
+
+        $gitCommonItem = Get-Item -LiteralPath $gitCommonPath
+        if ($gitCommonItem.Name -eq ".git") {
+            return (Split-Path -Leaf (Split-Path -Parent $gitCommonItem.FullName))
+        }
+    }
+
+    $repoRoot = (& git rev-parse --show-toplevel 2>$null)
+    if ($LASTEXITCODE -eq 0 -and -not [string]::IsNullOrWhiteSpace($repoRoot)) {
+        return (Split-Path -Leaf $repoRoot)
+    }
+
+    return (Split-Path -Leaf (Get-Location).Path)
 }
 
 function Write-Section {
@@ -124,7 +146,9 @@ function New-TaskWorktree {
     }
 
     $rootPath = Resolve-DevRoot $Root
-    $targetPath = Join-Path $rootPath "worktrees\active\$Slug"
+    $repoName = Get-RepositoryName
+    $worktreeName = "$repoName-$Slug"
+    $targetPath = Join-Path $rootPath "worktrees\active\$worktreeName"
     $branchName = "task/$Slug"
 
     if (Test-Path -LiteralPath $targetPath) {

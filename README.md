@@ -47,7 +47,7 @@ The status command lists the standard Lane workspace locations when they exist:
 The task new command creates a Git worktree at:
 
 ```text
-<dev-root>\worktrees\active\<slug>
+<dev-root>\worktrees\active\<repo-name>-<slug>
 ```
 
 and creates the matching branch:
