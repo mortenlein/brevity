@@ -143,6 +143,23 @@ New task records use `ready-for-worker` status.
 If the metadata file does not exist, Lane reports that no Lane tasks were
 found.
 
+`lane task start <slug>` reads the same metadata file and finds the matching
+task record. It prints:
+
+- task slug
+- worktree path
+- prompt path
+- exact Codex start command
+
+The Codex command format is:
+
+```text
+codex -C <worktreePath> -a never -s workspace-write
+```
+
+The command also tells the operator to read `prompt.md` and follow it exactly.
+It does not automatically launch Codex or run planner automation.
+
 `lane task cleanup <slug> [--force]` reads the same metadata file and finds the
 matching task record.
 
@@ -172,10 +189,11 @@ Lane is designed around these commands:
 - `lane onboard` prepares an existing repo and AI-Vault project memory.
 - `lane status` reports repos, worktrees, and vault presence.
 - `lane task new` creates an isolated worktree and task branch.
+- `lane task start` prints the manual Codex start command for a task worktree.
 - `lane task status` reports task worktree state.
 - `lane task merge` merges a completed task branch back to its base.
 - `lane task cleanup` removes task worktrees after merge.
 
 Lane v0 provides the CLI scaffold, workspace status, task creation, task status
-reporting, task merge, and task cleanup. Planner automation is deliberately out
-of scope.
+start instructions, task reporting, task merge, and task cleanup. Planner
+automation is deliberately out of scope.

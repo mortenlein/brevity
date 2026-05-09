@@ -34,6 +34,7 @@ Lane v0 supports:
 .\lane.ps1 help
 .\lane.ps1 status [-DevRoot <path>]
 .\lane.ps1 task new <slug> [-DevRoot <path>]
+.\lane.ps1 task start <slug>
 .\lane.ps1 task status
 .\lane.ps1 task merge <slug>
 .\lane.ps1 task cleanup <slug> [--force]
@@ -73,6 +74,22 @@ and records task metadata in the source repository at:
 
 Each task record includes the slug, branch, worktree path, prompt path, status,
 and creation timestamp. New tasks start with `ready-for-worker` status.
+
+The task start command reads the matching record from:
+
+```text
+<repo>\.lane\tasks.json
+```
+
+It prints the task slug, worktree path, prompt path, and exact Codex command to
+run manually:
+
+```text
+codex -C <worktreePath> -a never -s workspace-write
+```
+
+It also prints `Read prompt.md and follow it exactly.` Lane does not
+automatically launch Codex.
 
 The task status command reads:
 

@@ -82,6 +82,7 @@ function Show-Help {
     Write-Host "  .\lane.ps1 help"
     Write-Host "  .\lane.ps1 status [-DevRoot <path>]"
     Write-Host "  .\lane.ps1 task new <slug> [-DevRoot <path>]"
+    Write-Host "  .\lane.ps1 task start <slug>"
     Write-Host "  .\lane.ps1 task status"
     Write-Host "  .\lane.ps1 task merge <slug>"
     Write-Host "  .\lane.ps1 task cleanup <slug> [--force]"
@@ -219,6 +220,60 @@ function Show-TaskStatus {
     $tasks |
         Select-Object slug, branch, status, worktreePath, promptPath |
         Format-List
+}
+
+function Start-TaskWork {
+    param([string]$Slug)
+
+    if ([string]::IsNullOrWhiteSpace($Slug)) {
+        Write-Host "Missing task slug." -ForegroundColor Red
+        Write-Host "Usage: .\lane.ps1 task start <slug>"
+        exit 1
+    }
+
+    $repoRoot = Get-RepositoryRoot
+    $tasksPath = Join-Path $repoRoot ".lane\tasks.json"
+
+    if (-not (Test-Path -LiteralPath $tasksPath)) {
+        Write-Host "Task not found: $Slug" -ForegroundColor Red
+        Write-Host "No Lane task metadata exists at: $tasksPath"
+        exit 1
+    }
+
+    $rawTasks = Get-Content -LiteralPath $tasksPath -Raw
+    if ([string]::IsNullOrWhiteSpace($rawTasks)) {
+        Write-Host "Task not found: $Slug" -ForegroundColor Red
+        Write-Host "No Lane task metadata exists at: $tasksPath"
+        exit 1
+    }
+
+    $parsedTasks = $rawTasks | ConvertFrom-Json
+    $tasks = @($parsedTasks)
+    $task = $tasks | Where-Object { $_.slug -eq $Slug } | Select-Object -First 1
+
+    if ($null -eq $task) {
+        Write-Host "Task not found: $Slug" -ForegroundColor Red
+        Write-Host "Use .\lane.ps1 task status to list known tasks."
+        exit 1
+    }
+
+    if ([string]::IsNullOrWhiteSpace($task.worktreePath)) {
+        Write-Host "Task metadata is missing worktreePath for: $Slug" -ForegroundColor Red
+        exit 1
+    }
+
+    if ([string]::IsNullOrWhiteSpace($task.promptPath)) {
+        Write-Host "Task metadata is missing promptPath for: $Slug" -ForegroundColor Red
+        exit 1
+    }
+
+    $codexCommand = "codex -C $($task.worktreePath) -a never -s workspace-write"
+
+    Write-Host "Task: $($task.slug)"
+    Write-Host "Worktree: $($task.worktreePath)"
+    Write-Host "Prompt: $($task.promptPath)"
+    Write-Host "Codex: $codexCommand"
+    Write-Host "Read prompt.md and follow it exactly."
 }
 
 function Test-GitWorktreeRegistered {
@@ -520,6 +575,17 @@ switch ($Command.ToLowerInvariant()) {
                 }
 
                 New-TaskWorktree -Root $DevRoot -Slug $taskSlug
+            }
+            "start" {
+                $taskSlug = $null
+                if ($null -ne $RemainingArgs) {
+                    foreach ($taskArg in $RemainingArgs) {
+                        $taskSlug = [string]$taskArg
+                        break
+                    }
+                }
+
+                Start-TaskWork -Slug $taskSlug
             }
             "status" { Show-TaskStatus }
             "merge" {
