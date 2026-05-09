@@ -1,10 +1,2 @@
 [
-    {
-        "slug":  "implement-task-cleanup",
-        "branch":  "task/implement-task-cleanup",
-        "worktreePath":  "C:\\dev\\worktrees\\active\\lane-implement-task-cleanup",
-        "promptPath":  "C:\\dev\\worktrees\\active\\lane-implement-task-cleanup\\prompt.md",
-        "status":  "ready-for-worker",
-        "createdAt":  "2026-05-09T19:34:25.7462007Z"
-    }
 ]
