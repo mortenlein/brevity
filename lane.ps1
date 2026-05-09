@@ -25,6 +25,11 @@ function Resolve-DevRoot {
 }
 
 function Get-RepositoryName {
+    $repoRoot = Get-RepositoryRoot
+    return (Split-Path -Leaf $repoRoot)
+}
+
+function Get-RepositoryRoot {
     $previousErrorActionPreference = $ErrorActionPreference
     $ErrorActionPreference = "Continue"
     $repoRoot = (& git rev-parse --show-toplevel 2>$null)
@@ -32,7 +37,7 @@ function Get-RepositoryName {
     $ErrorActionPreference = $previousErrorActionPreference
 
     if ($gitExitCode -eq 0 -and -not [string]::IsNullOrWhiteSpace($repoRoot)) {
-        return (Split-Path -Leaf $repoRoot)
+        return $repoRoot
     }
 
     Write-Host "lane task new must be run inside a Git repository." -ForegroundColor Red
@@ -126,6 +131,64 @@ function Write-NotImplemented {
     Write-Host "See docs\concepts.md for the command design."
 }
 
+function Write-TaskPrompt {
+    param(
+        [string]$Path,
+        [string]$Slug
+    )
+
+    $promptLines = @(
+        "Read AGENTS.md.",
+        "",
+        "Task: $Slug",
+        "",
+        "Keep changes small.",
+        "",
+        "Stop after patch + summary."
+    )
+
+    Set-Content -LiteralPath $Path -Value $promptLines -Encoding ASCII
+}
+
+function Add-TaskMetadata {
+    param(
+        [string]$RepoRoot,
+        [string]$Slug,
+        [string]$Branch,
+        [string]$WorktreePath,
+        [string]$PromptPath
+    )
+
+    $laneRoot = Join-Path $RepoRoot ".lane"
+    if (-not (Test-Path -LiteralPath $laneRoot)) {
+        New-Item -ItemType Directory -Path $laneRoot | Out-Null
+    }
+
+    $tasksPath = Join-Path $laneRoot "tasks.json"
+    $tasks = @()
+    if (Test-Path -LiteralPath $tasksPath) {
+        $rawTasks = Get-Content -LiteralPath $tasksPath -Raw
+        if (-not [string]::IsNullOrWhiteSpace($rawTasks)) {
+            $parsedTasks = $rawTasks | ConvertFrom-Json
+            if ($null -ne $parsedTasks) {
+                $tasks = @($parsedTasks)
+            }
+        }
+    }
+
+    $taskRecord = New-Object PSObject -Property ([ordered]@{
+        slug = $Slug
+        branch = $Branch
+        worktreePath = $WorktreePath
+        promptPath = $PromptPath
+        status = "ready-for-worker"
+        createdAt = (Get-Date).ToUniversalTime().ToString("o")
+    })
+
+    $tasks = @($tasks) + $taskRecord
+    ConvertTo-Json -InputObject $tasks -Depth 4 | Set-Content -LiteralPath $tasksPath -Encoding ASCII
+}
+
 function New-TaskWorktree {
     param(
         [string]$Root,
@@ -139,10 +202,12 @@ function New-TaskWorktree {
     }
 
     $rootPath = Resolve-DevRoot $Root
+    $repoRoot = Get-RepositoryRoot
     $repoName = Get-RepositoryName
     $worktreeName = "$repoName-$Slug"
     $targetPath = Join-Path $rootPath "worktrees\active\$worktreeName"
     $branchName = "task/$Slug"
+    $promptPath = Join-Path $targetPath "prompt.md"
 
     if (Test-Path -LiteralPath $targetPath) {
         Write-Host "Task worktree already exists: $targetPath" -ForegroundColor Red
@@ -159,10 +224,14 @@ function New-TaskWorktree {
         exit $LASTEXITCODE
     }
 
+    Write-TaskPrompt -Path $promptPath -Slug $Slug
+    Add-TaskMetadata -RepoRoot $repoRoot -Slug $Slug -Branch $branchName -WorktreePath $targetPath -PromptPath $promptPath
+
     Write-Host "Created task worktree"
     Write-Host "Path: $targetPath"
     Write-Host "Branch: $branchName"
-    Write-Host "Start worker: codex -C $targetPath"
+    Write-Host "Prompt: $promptPath"
+    Write-Host "Metadata: $(Join-Path $repoRoot ".lane\tasks.json")"
 }
 
 switch ($Command.ToLowerInvariant()) {

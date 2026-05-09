@@ -111,7 +111,26 @@ and a worktree named:
 worktrees\active\<repo-name>-<slug>
 ```
 
-Lane should keep that convention for `lane task new`.
+Lane should keep that convention for `lane task new`. The command also writes
+a simple `prompt.md` file into the new worktree so a worker has a durable task
+starting point without launching any automation.
+
+Task metadata lives in the source repository:
+
+```text
+<repo>\.lane\tasks.json
+```
+
+Each record includes:
+
+- `slug`
+- `branch`
+- `worktreePath`
+- `promptPath`
+- `status`
+- `createdAt`
+
+New task records use `ready-for-worker` status.
 
 ## Command Model
 

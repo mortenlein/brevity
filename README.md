@@ -56,6 +56,21 @@ and creates the matching branch:
 task/<slug>
 ```
 
+It also writes a placeholder worker prompt to:
+
+```text
+<dev-root>\worktrees\active\<repo-name>-<slug>\prompt.md
+```
+
+and records task metadata in the source repository at:
+
+```text
+<repo>\.lane\tasks.json
+```
+
+Each task record includes the slug, branch, worktree path, prompt path, status,
+and creation timestamp. New tasks start with `ready-for-worker` status.
+
 ## Planned Commands
 
 These commands are part of Lane's public design, but are not implemented in v0:
