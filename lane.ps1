@@ -156,6 +156,7 @@ function Show-Help {
     Write-Host "  .\lane.ps1 board"
     Write-Host "  .\lane.ps1 status [-DevRoot <path>]"
     Write-Host "  .\lane.ps1 task new <slug> [-DevRoot <path>]"
+    Write-Host "  .\lane.ps1 task spec <slug>"
     Write-Host "  .\lane.ps1 task start <slug>"
     Write-Host "  .\lane.ps1 task status"
     Write-Host "  .\lane.ps1 task merge <slug>"
@@ -601,6 +602,30 @@ function Show-TaskStatus {
         Format-List
 }
 
+function Show-TaskSpec {
+    param([string]$Slug)
+
+    if ([string]::IsNullOrWhiteSpace($Slug)) {
+        Write-Host "Missing task slug." -ForegroundColor Red
+        Write-Host "Usage: .\lane.ps1 task spec <slug>"
+        exit 1
+    }
+
+    $config = Read-LaneConfig
+    $specPath = Join-Path (Join-Path $config.vaultPath "tasks") "$Slug.md"
+
+    if (-not (Test-Path -LiteralPath $specPath)) {
+        Write-Host "Vault task spec not found: $Slug" -ForegroundColor Red
+        Write-Host "Expected path: $specPath"
+        exit 1
+    }
+
+    Write-Host "Task: $Slug"
+    Write-Host "Spec: $specPath"
+    Write-Host ""
+    Get-Content -LiteralPath $specPath
+}
+
 function Start-TaskWork {
     param([string]$Slug)
 
@@ -970,6 +995,17 @@ switch ($Command.ToLowerInvariant()) {
                 }
 
                 New-TaskWorktree -Root $DevRoot -Slug $taskSlug
+            }
+            "spec" {
+                $taskSlug = $null
+                if ($null -ne $RemainingArgs) {
+                    foreach ($taskArg in $RemainingArgs) {
+                        $taskSlug = [string]$taskArg
+                        break
+                    }
+                }
+
+                Show-TaskSpec -Slug $taskSlug
             }
             "start" {
                 $taskSlug = $null

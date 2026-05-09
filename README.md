@@ -38,6 +38,7 @@ Lane v0 supports:
 .\lane.ps1 board
 .\lane.ps1 status [-DevRoot <path>]
 .\lane.ps1 task new <slug> [-DevRoot <path>]
+.\lane.ps1 task spec <slug>
 .\lane.ps1 task start <slug>
 .\lane.ps1 task status
 .\lane.ps1 task merge <slug>
@@ -117,7 +118,11 @@ Open Codex in this repo and paste the backlog planner prompt.
 ```
 
 Lane does not parse planner output, create tasks from the backlog, implement a
-TUI, or launch Codex.
+TUI, or launch Codex. Planned backlog work belongs in Markdown files under:
+
+```text
+<vaultPath>\tasks\
+```
 
 The board command reads:
 
@@ -125,9 +130,19 @@ The board command reads:
 <repo>\.lane\tasks.json
 ```
 
-It groups task metadata by status and prints the task slug, branch, and
-worktree path for each task. It shows status groups when matching tasks are
-present, including:
+`.lane\tasks.json` is runtime state only. It tracks task worktrees, branches,
+prompts, statuses, and cleanup state for task work that Lane has already
+created. It is not the durable planning backlog.
+
+Vault task specs are durable planned work. They live as Markdown files under:
+
+```text
+<vaultPath>\tasks\<slug>.md
+```
+
+The board command groups runtime task metadata by status and prints the task
+slug, branch, and worktree path for each task. It shows status groups when
+matching tasks are present, including:
 
 - `planned`
 - `ready-for-worker`
@@ -174,6 +189,23 @@ and records task metadata in the source repository at:
 
 Each task record includes the slug, branch, worktree path, prompt path, status,
 and creation timestamp. New tasks start with `ready-for-worker` status.
+
+The task spec command reads:
+
+```text
+<repo>\.lane\config.json
+```
+
+It uses `vaultPath` from that config and looks for:
+
+```text
+<vaultPath>\tasks\<slug>.md
+```
+
+When the spec exists, Lane prints the task slug, spec path, and Markdown file
+contents. When the spec is missing, Lane prints a clear not-found message and
+the expected path. This command is read-only; it does not create worktrees,
+parse backlog planner output, or change `.lane\tasks.json`.
 
 The task start command reads the matching record from:
 

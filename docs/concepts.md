@@ -43,7 +43,12 @@ script. `lane init` creates it in the current Git repository and adds:
 - `tasks.json`
 - `config.json`
 
-`tasks.json` starts as an empty array. `config.json` records:
+`tasks.json` starts as an empty array. It is runtime state only: Lane uses it
+to track worktrees, branches, prompts, statuses, and cleanup state for task
+work that Lane has already created. Durable planned work belongs in vault task
+specs, not in `.lane\tasks.json`.
+
+`config.json` records:
 
 - `projectName`
 - `devRoot`
@@ -91,7 +96,12 @@ The backlog prompt tells Codex to keep tasks small and independently executable
 where possible, avoid placeholders, and not implement code. Lane prints the
 backlog prompt path and tells the operator to open Codex in the repo and paste
 the backlog planner prompt. Lane does not parse planner output, create tasks
-from the backlog, implement a TUI, or launch Codex.
+from the backlog, implement a TUI, or launch Codex. Planned backlog work belongs
+in Markdown files under:
+
+```text
+<vaultPath>\tasks\
+```
 
 ## AI-Vault
 
@@ -128,6 +138,18 @@ It also creates these starter Markdown files when missing:
 If `AGENTS.md` is missing in the repository, `lane init` creates one that tells
 Codex to read the project vault memory before doing work. If `AGENTS.md`
 already exists, Lane leaves it unchanged.
+
+Vault task specs are durable planned work. Each planned task can be stored as:
+
+```text
+<vaultPath>\tasks\<slug>.md
+```
+
+`lane task spec <slug>` reads `.lane\config.json`, uses `vaultPath`, and prints
+the matching task spec Markdown file when it exists. If the spec is missing,
+Lane reports the expected path. The command is read-only: it does not create
+worktrees from specs, parse backlog planner output, or change
+`.lane\tasks.json`.
 
 ## Repos
 
@@ -268,6 +290,7 @@ Lane is designed around these commands:
 - `lane onboard` prepares an existing repo and AI-Vault project memory.
 - `lane status` reports repos, worktrees, and vault presence.
 - `lane task new` creates an isolated worktree and task branch.
+- `lane task spec` prints a vault-backed task spec by slug.
 - `lane task start` prints the manual Codex start command for a task worktree.
 - `lane task status` reports task worktree state.
 - `lane task merge` merges a completed task branch back to its base.
