@@ -54,11 +54,27 @@ specs, not in `.lane\tasks.json`.
 - `devRoot`
 - `vaultPath`
 - `worktreesRoot`
+- `codex`
 
 For new configs, `worktreesRoot` points at:
 
 ```text
 <dev-root>\worktrees\active
+```
+
+New configs also include Codex run settings:
+
+```json
+{
+  "codex": {
+    "command": "codex",
+    "mode": "exec",
+    "sandbox": "workspace-write",
+    "model": null,
+    "profile": null,
+    "autoExecute": false
+  }
+}
 ```
 
 Existing files are left unchanged by normal init.
@@ -73,7 +89,8 @@ If `.lane\config.json` is missing, repair mode creates it. If it exists, repair
 mode updates the known Lane fields only when they are wrong and preserves
 unknown or custom fields. It also creates the same missing `.lane` files,
 folders, and vault project memory paths as normal init. Existing vault memory
-files are not overwritten.
+files are not overwritten. Repair also adds missing Codex run settings without
+removing custom config fields.
 
 Repair output reports repaired fields, unchanged fields, created paths, and
 already-existing paths.
@@ -319,14 +336,18 @@ record. It prints:
 - prompt path
 - headless Codex command
 
-The headless Codex command format is:
+The command is built from Codex settings in `.lane\config.json`. The headless
+Codex command format is:
 
 ```text
-codex exec -C <worktreePath> -a never -s workspace-write prompt.md
+codex exec -C <worktreePath> -s <sandbox> prompt.md
 ```
 
-The command also prints that the worker runs non-interactively. It does not
-execute Codex, update task status, record metrics, or run planner automation.
+If `model` is configured, Lane includes `-m <model>`. If `profile` is
+configured, Lane includes `-p <profile>`. By default, Lane prints the command
+only. With `--execute`, Lane runs the generated command. It does not update
+task status, record metrics, run planner automation, or support other AI
+providers yet.
 
 `lane task cleanup <slug> [--force]` reads the same metadata file and finds the
 matching task record.
@@ -365,7 +386,8 @@ Lane is designed around these commands:
 - `lane task activate` creates a task worktree from a vault task spec.
 - `lane task spec` prints a vault-backed task spec by slug.
 - `lane task start` prints the manual Codex start command for a task worktree.
-- `lane task run` prints the headless Codex command for a task worktree.
+- `lane task run` prints or executes the headless Codex command for a task
+  worktree.
 - `lane task status` reports task worktree state.
 - `lane task merge` merges a completed task branch back to its base.
 - `lane task cleanup` removes task worktrees after merge.
@@ -373,4 +395,5 @@ Lane is designed around these commands:
 Lane v0 provides the CLI scaffold, repository initialization, planner prompt
 generation, workspace status, task creation, task status start instructions,
 headless task run instructions, task reporting, task merge, and task cleanup.
-Planner automation is deliberately out of scope.
+Planner automation, metrics, and other AI providers are deliberately out of
+scope.

@@ -42,7 +42,7 @@ Lane v0 supports:
 .\lane.ps1 task activate <slug>
 .\lane.ps1 task spec <slug>
 .\lane.ps1 task start <slug>
-.\lane.ps1 task run <slug>
+.\lane.ps1 task run <slug> [--execute]
 .\lane.ps1 task status
 .\lane.ps1 task merge <slug>
 .\lane.ps1 task cleanup <slug> [--force]
@@ -57,8 +57,9 @@ repo-local Lane state when missing:
 <repo>\.lane\config.json
 ```
 
-`config.json` records the project name, dev root, AI-Vault project path, and
-worktrees root. The project name is the Git repository root folder name.
+`config.json` records the project name, dev root, AI-Vault project path,
+worktrees root, and Codex run settings. The project name is the Git repository
+root folder name.
 
 It also creates project memory under AI-Vault:
 
@@ -89,7 +90,8 @@ recomputes `vaultPath` as
 missing, updates only the known Lane fields when they are wrong, and preserves
 unknown or custom fields. It also creates the same missing `.lane` files,
 folders, and AI-Vault project memory paths as normal init. Existing vault
-memory files are not overwritten.
+memory files are not overwritten. Repair also adds missing Codex run settings
+without removing custom config fields.
 
 Repair mode prints repaired config fields, unchanged config fields, created
 paths, and already-existing paths.
@@ -293,14 +295,23 @@ The task run command reads the matching record from:
 <repo>\.lane\tasks.json
 ```
 
-It prints the task slug, worktree path, prompt path, and headless Codex command:
+It reads Codex settings from `.lane\config.json` and prints the task slug,
+worktree path, prompt path, and headless Codex command:
 
 ```text
-codex exec -C <worktreePath> -a never -s workspace-write prompt.md
+codex exec -C <worktreePath> -s <sandbox> prompt.md
 ```
 
-It also prints `This command runs the worker non-interactively.` Lane does not
-execute Codex, change task status, or record metrics.
+If configured, Lane includes `-m <model>` and `-p <profile>`. By default, this
+is a dry run and does not execute Codex, change task status, or record metrics.
+
+Use `--execute` to run the generated command:
+
+```powershell
+.\lane.ps1 task run <slug> --execute
+```
+
+Lane does not implement metrics or other AI providers yet.
 
 The task status command reads:
 
@@ -392,5 +403,6 @@ Lane keeps orchestration separate from project source:
 - No web app.
 - No planner automation in v0.
 - Planner prompt generation is manual and does not create worktrees.
+- Codex is the only configured worker provider in v0.
 - Markdown remains the durable memory layer.
 - Git remains the source of truth for code.

@@ -162,7 +162,7 @@ function Set-ConfigField {
     param(
         [object]$Config,
         [string]$Name,
-        [string]$Value
+        [object]$Value
     )
 
     $member = Get-Member -InputObject $Config -Name $Name -MemberType NoteProperty -ErrorAction SilentlyContinue
@@ -172,6 +172,17 @@ function Set-ConfigField {
     }
 
     $Config.$Name = $Value
+}
+
+function Get-DefaultCodexConfig {
+    return (New-Object PSObject -Property ([ordered]@{
+        command = "codex"
+        mode = "exec"
+        sandbox = "workspace-write"
+        model = $null
+        profile = $null
+        autoExecute = $false
+    }))
 }
 
 function Repair-ConfigField {
@@ -194,6 +205,68 @@ function Repair-ConfigField {
 
     Set-ConfigField -Config $Config -Name $Name -Value $ExpectedValue
     return Add-RepairFieldResult -Results $Results -Status "repaired" -Name $Name -OldValue $oldValue -NewValue $ExpectedValue
+}
+
+function Repair-ConfigObjectField {
+    param(
+        [object]$Config,
+        [object[]]$Results,
+        [string]$Name
+    )
+
+    $member = Get-Member -InputObject $Config -Name $Name -MemberType NoteProperty -ErrorAction SilentlyContinue
+    $oldValue = $null
+    if ($null -ne $member) {
+        $oldValue = $Config.$Name
+    }
+
+    if ($null -eq $member -or $null -eq $oldValue -or $oldValue -isnot [System.Management.Automation.PSCustomObject]) {
+        Set-ConfigField -Config $Config -Name $Name -Value (New-Object PSObject)
+        return Add-RepairFieldResult -Results $Results -Status "repaired" -Name $Name -OldValue $oldValue -NewValue "[object]"
+    }
+
+    return Add-RepairFieldResult -Results $Results -Status "unchanged" -Name $Name -OldValue $oldValue -NewValue "[object]"
+}
+
+function Repair-CodexConfigField {
+    param(
+        [object]$CodexConfig,
+        [object[]]$Results,
+        [string]$Name,
+        [object]$ExpectedValue
+    )
+
+    $member = Get-Member -InputObject $CodexConfig -Name $Name -MemberType NoteProperty -ErrorAction SilentlyContinue
+    $oldValue = $null
+    if ($null -ne $member) {
+        $oldValue = $CodexConfig.$Name
+    }
+
+    if ($null -ne $member) {
+        return Add-RepairFieldResult -Results $Results -Status "unchanged" -Name "codex.$Name" -OldValue $oldValue -NewValue $oldValue
+    }
+
+    Set-ConfigField -Config $CodexConfig -Name $Name -Value $ExpectedValue
+    return Add-RepairFieldResult -Results $Results -Status "repaired" -Name "codex.$Name" -OldValue $oldValue -NewValue $ExpectedValue
+}
+
+function Repair-CodexConfigDefaults {
+    param(
+        [object]$Config,
+        [object[]]$Results
+    )
+
+    $Results = Repair-ConfigObjectField -Config $Config -Results $Results -Name "codex"
+    $defaults = Get-DefaultCodexConfig
+
+    $Results = Repair-CodexConfigField -CodexConfig $Config.codex -Results $Results -Name "command" -ExpectedValue $defaults.command
+    $Results = Repair-CodexConfigField -CodexConfig $Config.codex -Results $Results -Name "mode" -ExpectedValue $defaults.mode
+    $Results = Repair-CodexConfigField -CodexConfig $Config.codex -Results $Results -Name "sandbox" -ExpectedValue $defaults.sandbox
+    $Results = Repair-CodexConfigField -CodexConfig $Config.codex -Results $Results -Name "model" -ExpectedValue $defaults.model
+    $Results = Repair-CodexConfigField -CodexConfig $Config.codex -Results $Results -Name "profile" -ExpectedValue $defaults.profile
+    $Results = Repair-CodexConfigField -CodexConfig $Config.codex -Results $Results -Name "autoExecute" -ExpectedValue $defaults.autoExecute
+
+    return $Results
 }
 
 function Write-Section {
@@ -242,7 +315,7 @@ function Show-Help {
     Write-Host "  .\lane.ps1 task activate <slug>"
     Write-Host "  .\lane.ps1 task spec <slug>"
     Write-Host "  .\lane.ps1 task start <slug>"
-    Write-Host "  .\lane.ps1 task run <slug>"
+    Write-Host "  .\lane.ps1 task run <slug> [--execute]"
     Write-Host "  .\lane.ps1 task status"
     Write-Host "  .\lane.ps1 task merge <slug>"
     Write-Host "  .\lane.ps1 task cleanup <slug> [--force]"
@@ -613,6 +686,7 @@ function Initialize-LaneRepository {
         $fieldResults = Repair-ConfigField -Config $config -Results $fieldResults -Name "devRoot" -ExpectedValue $rootPath
         $fieldResults = Repair-ConfigField -Config $config -Results $fieldResults -Name "vaultPath" -ExpectedValue $vaultPath
         $fieldResults = Repair-ConfigField -Config $config -Results $fieldResults -Name "worktreesRoot" -ExpectedValue $worktreesRoot
+        $fieldResults = Repair-CodexConfigDefaults -Config $config -Results $fieldResults
 
         $configLines = @(ConvertTo-Json -InputObject $config -Depth 10)
         if (Test-Path -LiteralPath $configPath) {
@@ -630,8 +704,9 @@ function Initialize-LaneRepository {
             devRoot = $rootPath
             vaultPath = $vaultPath
             worktreesRoot = $worktreesRoot
+            codex = Get-DefaultCodexConfig
         })
-        $configLines = @(ConvertTo-Json -InputObject $config -Depth 4)
+        $configLines = @(ConvertTo-Json -InputObject $config -Depth 10)
         $results = Ensure-File -Path $configPath -Lines $configLines -Results $results
     }
 
@@ -833,16 +908,130 @@ function Start-TaskWork {
     Write-Host "Read prompt.md and follow it exactly."
 }
 
+function Get-CodexRunConfig {
+    param([object]$Config)
+
+    $defaults = Get-DefaultCodexConfig
+    $configuredCodex = $null
+
+    if (Get-Member -InputObject $Config -Name "codex" -MemberType NoteProperty -ErrorAction SilentlyContinue) {
+        $configuredCodex = $Config.codex
+    }
+
+    $command = $defaults.command
+    $mode = $defaults.mode
+    $sandbox = $defaults.sandbox
+    $model = $defaults.model
+    $profile = $defaults.profile
+
+    if ($null -ne $configuredCodex) {
+        if (Get-Member -InputObject $configuredCodex -Name "command" -MemberType NoteProperty -ErrorAction SilentlyContinue) {
+            $command = $configuredCodex.command
+        }
+
+        if (Get-Member -InputObject $configuredCodex -Name "mode" -MemberType NoteProperty -ErrorAction SilentlyContinue) {
+            $mode = $configuredCodex.mode
+        }
+
+        if (Get-Member -InputObject $configuredCodex -Name "sandbox" -MemberType NoteProperty -ErrorAction SilentlyContinue) {
+            $sandbox = $configuredCodex.sandbox
+        }
+
+        if (Get-Member -InputObject $configuredCodex -Name "model" -MemberType NoteProperty -ErrorAction SilentlyContinue) {
+            $model = $configuredCodex.model
+        }
+
+        if (Get-Member -InputObject $configuredCodex -Name "profile" -MemberType NoteProperty -ErrorAction SilentlyContinue) {
+            $profile = $configuredCodex.profile
+        }
+    }
+
+    if ([string]::IsNullOrWhiteSpace($command)) {
+        $command = $defaults.command
+    }
+
+    if ([string]::IsNullOrWhiteSpace($mode)) {
+        $mode = $defaults.mode
+    }
+
+    if ([string]::IsNullOrWhiteSpace($sandbox)) {
+        $sandbox = $defaults.sandbox
+    }
+
+    return (New-Object PSObject -Property ([ordered]@{
+        command = $command
+        mode = $mode
+        sandbox = $sandbox
+        model = $model
+        profile = $profile
+    }))
+}
+
+function Format-CommandArgument {
+    param([string]$Value)
+
+    if ($Value -notmatch '[\s"`]') {
+        return $Value
+    }
+
+    return '"' + ($Value -replace '"', '\"') + '"'
+}
+
+function Format-CommandLine {
+    param([string[]]$Parts)
+
+    return (($Parts | ForEach-Object { Format-CommandArgument -Value $_ }) -join " ")
+}
+
+function New-CodexTaskRunCommand {
+    param(
+        [object]$Config,
+        [string]$WorktreePath
+    )
+
+    $codexConfig = Get-CodexRunConfig -Config $Config
+    $arguments = @(
+        [string]$codexConfig.mode,
+        "-C",
+        $WorktreePath,
+        "-s",
+        [string]$codexConfig.sandbox
+    )
+
+    if (-not [string]::IsNullOrWhiteSpace($codexConfig.model)) {
+        $arguments += "-m"
+        $arguments += [string]$codexConfig.model
+    }
+
+    if (-not [string]::IsNullOrWhiteSpace($codexConfig.profile)) {
+        $arguments += "-p"
+        $arguments += [string]$codexConfig.profile
+    }
+
+    $arguments += "prompt.md"
+    $parts = @([string]$codexConfig.command) + $arguments
+
+    return (New-Object PSObject -Property ([ordered]@{
+        command = [string]$codexConfig.command
+        arguments = $arguments
+        display = Format-CommandLine -Parts $parts
+    }))
+}
+
 function Show-TaskRun {
-    param([string]$Slug)
+    param(
+        [string]$Slug,
+        [bool]$Execute = $false
+    )
 
     if ([string]::IsNullOrWhiteSpace($Slug)) {
         Write-Host "Missing task slug." -ForegroundColor Red
-        Write-Host "Usage: .\lane.ps1 task run <slug>"
+        Write-Host "Usage: .\lane.ps1 task run <slug> [--execute]"
         exit 1
     }
 
     $repoRoot = Get-RepositoryRoot
+    $config = Read-LaneConfig
     $tasksPath = Join-Path $repoRoot ".lane\tasks.json"
 
     if (-not (Test-Path -LiteralPath $tasksPath)) {
@@ -878,13 +1067,23 @@ function Show-TaskRun {
         exit 1
     }
 
-    $codexCommand = "codex exec -C $($task.worktreePath) -a never -s workspace-write prompt.md"
+    $codexCommand = New-CodexTaskRunCommand -Config $config -WorktreePath $task.worktreePath
 
     Write-Host "Task: $($task.slug)"
     Write-Host "Worktree: $($task.worktreePath)"
     Write-Host "Prompt: $($task.promptPath)"
-    Write-Host "Codex: $codexCommand"
-    Write-Host "This command runs the worker non-interactively."
+    Write-Host "Codex: $($codexCommand.display)"
+
+    if (-not $Execute) {
+        Write-Host "Dry run. Pass --execute to run the worker non-interactively."
+        return
+    }
+
+    Write-Host "Executing Codex worker..."
+    & $codexCommand.command @($codexCommand.arguments)
+    if ($LASTEXITCODE -ne 0) {
+        exit $LASTEXITCODE
+    }
 }
 
 function Test-GitWorktreeRegistered {
@@ -1318,14 +1517,24 @@ switch ($Command.ToLowerInvariant()) {
             }
             "run" {
                 $taskSlug = $null
+                $executeTask = $false
                 if ($null -ne $RemainingArgs) {
                     foreach ($taskArg in $RemainingArgs) {
-                        $taskSlug = [string]$taskArg
-                        break
+                        if ($taskArg -eq "--execute") {
+                            $executeTask = $true
+                        }
+                        elseif ([string]::IsNullOrWhiteSpace($taskSlug)) {
+                            $taskSlug = [string]$taskArg
+                        }
+                        else {
+                            Write-Host "Unknown argument for lane task run: $taskArg" -ForegroundColor Red
+                            Write-Host "Usage: .\lane.ps1 task run <slug> [--execute]"
+                            exit 1
+                        }
                     }
                 }
 
-                Show-TaskRun -Slug $taskSlug
+                Show-TaskRun -Slug $taskSlug -Execute $executeTask
             }
             "status" { Show-TaskStatus }
             "merge" {
