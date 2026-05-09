@@ -1,0 +1,10 @@
+[
+    {
+        "slug":  "test-metadata",
+        "branch":  "task/test-metadata",
+        "worktreePath":  "C:\\dev\\worktrees\\active\\lane-test-metadata",
+        "promptPath":  "C:\\dev\\worktrees\\active\\lane-test-metadata\\prompt.md",
+        "status":  "ready-for-worker",
+        "createdAt":  "2026-05-09T19:26:58.6876492Z"
+    }
+]
