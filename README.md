@@ -36,7 +36,7 @@ Lane v0 supports:
 .\lane.ps1 task new <slug> [-DevRoot <path>]
 .\lane.ps1 task status
 .\lane.ps1 task merge <slug>
-.\lane.ps1 task cleanup <slug>
+.\lane.ps1 task cleanup <slug> [--force]
 ```
 
 The status command lists the standard Lane workspace locations when they exist:
@@ -102,8 +102,23 @@ The task cleanup command reads the matching record from:
 ```
 
 It removes the recorded Git worktree, deletes the recorded Git branch with
-`git branch -d`, and then removes the task record from metadata. If Git cannot
-remove the worktree or delete the branch, Lane leaves the metadata unchanged.
+`git branch -d`, and then removes the task record from metadata. This is the
+default safe cleanup behavior. If Git cannot remove the worktree or delete the
+branch, Lane leaves the metadata unchanged.
+
+Use `--force` only when you explicitly want Git's forced cleanup behavior:
+
+```powershell
+.\lane.ps1 task cleanup <slug> --force
+```
+
+With `--force`, Lane removes the worktree with
+`git worktree remove --force <worktreePath>` and deletes the branch with
+`git branch -D <branch>`. If the recorded worktree path is missing or is not a
+registered Git worktree, Lane prints a warning and continues to branch removal.
+When branch removal succeeds, or the branch is already missing, Lane removes the
+task metadata record. If branch removal fails for another reason, Lane keeps the
+metadata unchanged.
 
 ## Planned Commands
 

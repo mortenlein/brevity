@@ -84,7 +84,7 @@ function Show-Help {
     Write-Host "  .\lane.ps1 task new <slug> [-DevRoot <path>]"
     Write-Host "  .\lane.ps1 task status"
     Write-Host "  .\lane.ps1 task merge <slug>"
-    Write-Host "  .\lane.ps1 task cleanup <slug>"
+    Write-Host "  .\lane.ps1 task cleanup <slug> [--force]"
     Write-Host ""
     Write-Host "Planned commands:"
     Write-Host "  lane init"
@@ -221,12 +221,81 @@ function Show-TaskStatus {
         Format-List
 }
 
+function Test-GitWorktreeRegistered {
+    param([string]$WorktreePath)
+
+    $resolvedExpectedPath = $WorktreePath
+    if (Test-Path -LiteralPath $WorktreePath) {
+        $resolvedExpectedPath = (Resolve-Path -LiteralPath $WorktreePath).Path
+    }
+
+    $previousErrorActionPreference = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    $worktreeList = (& git worktree list --porcelain 2>$null)
+    $gitExitCode = $LASTEXITCODE
+    $ErrorActionPreference = $previousErrorActionPreference
+
+    if ($gitExitCode -ne 0) {
+        throw "Unable to list Git worktrees."
+    }
+
+    foreach ($line in $worktreeList) {
+        if (-not $line.StartsWith("worktree ")) {
+            continue
+        }
+
+        $registeredPath = $line.Substring("worktree ".Length)
+        if (Test-Path -LiteralPath $registeredPath) {
+            $registeredPath = (Resolve-Path -LiteralPath $registeredPath).Path
+        }
+
+        if ([string]::Equals($registeredPath, $resolvedExpectedPath, [System.StringComparison]::OrdinalIgnoreCase)) {
+            return $true
+        }
+    }
+
+    return $false
+}
+
+function Test-GitBranchExists {
+    param([string]$Branch)
+
+    $previousErrorActionPreference = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    & git show-ref --verify --quiet "refs/heads/$Branch"
+    $gitExitCode = $LASTEXITCODE
+    $ErrorActionPreference = $previousErrorActionPreference
+
+    return ($gitExitCode -eq 0)
+}
+
+function Remove-TaskMetadataRecord {
+    param(
+        [string]$TasksPath,
+        [object[]]$Tasks,
+        [string]$Slug
+    )
+
+    $remainingTasks = @($Tasks | Where-Object { $_.slug -ne $Slug })
+    if ($remainingTasks.Count -eq 0) {
+        Set-Content -LiteralPath $TasksPath -Value "[]" -Encoding ASCII
+    }
+    else {
+        ConvertTo-Json -InputObject $remainingTasks -Depth 4 | Set-Content -LiteralPath $TasksPath -Encoding ASCII
+    }
+
+    Write-Host "Removed task metadata: $Slug"
+}
+
 function Remove-TaskWorktree {
-    param([string]$Slug)
+    param(
+        [string]$Slug,
+        [bool]$Force = $false
+    )
 
     if ([string]::IsNullOrWhiteSpace($Slug)) {
         Write-Host "Missing task slug." -ForegroundColor Red
-        Write-Host "Usage: .\lane.ps1 task cleanup <slug>"
+        Write-Host "Usage: .\lane.ps1 task cleanup <slug> [--force]"
         exit 1
     }
 
@@ -269,28 +338,51 @@ function Remove-TaskWorktree {
     Write-Host "Cleaning up Lane task: $Slug"
     Write-Host "Worktree: $($task.worktreePath)"
     Write-Host "Branch: $($task.branch)"
-
-    git worktree remove $task.worktreePath
-    if ($LASTEXITCODE -ne 0) {
-        Write-Host "Cleanup failed while removing worktree. Metadata was not changed." -ForegroundColor Red
-        exit $LASTEXITCODE
+    if ($Force) {
+        Write-Host "Force: enabled"
     }
 
-    git branch -d $task.branch
+    $worktreeExists = Test-Path -LiteralPath $task.worktreePath
+    $worktreeRegistered = Test-GitWorktreeRegistered -WorktreePath $task.worktreePath
+
+    if ((-not $worktreeExists) -or (-not $worktreeRegistered)) {
+        Write-Host "Warning: recorded worktree is missing or not registered with Git: $($task.worktreePath)" -ForegroundColor Yellow
+        Write-Host "Continuing to branch removal."
+    }
+    elseif ($Force) {
+        git worktree remove --force $task.worktreePath
+        if ($LASTEXITCODE -ne 0) {
+            Write-Host "Cleanup failed while force-removing worktree. Metadata was not changed." -ForegroundColor Red
+            exit $LASTEXITCODE
+        }
+    }
+    else {
+        git worktree remove $task.worktreePath
+        if ($LASTEXITCODE -ne 0) {
+            Write-Host "Cleanup failed while removing worktree. Metadata was not changed." -ForegroundColor Red
+            exit $LASTEXITCODE
+        }
+    }
+
+    if (-not (Test-GitBranchExists -Branch $task.branch)) {
+        Write-Host "Warning: recorded branch is already missing: $($task.branch)" -ForegroundColor Yellow
+        Remove-TaskMetadataRecord -TasksPath $tasksPath -Tasks $tasks -Slug $Slug
+        return
+    }
+
+    if ($Force) {
+        git branch -D $task.branch
+    }
+    else {
+        git branch -d $task.branch
+    }
+
     if ($LASTEXITCODE -ne 0) {
         Write-Host "Cleanup failed while deleting branch. Metadata was not changed." -ForegroundColor Red
         exit $LASTEXITCODE
     }
 
-    $remainingTasks = @($tasks | Where-Object { $_.slug -ne $Slug })
-    if ($remainingTasks.Count -eq 0) {
-        Set-Content -LiteralPath $tasksPath -Value "[]" -Encoding ASCII
-    }
-    else {
-        ConvertTo-Json -InputObject $remainingTasks -Depth 4 | Set-Content -LiteralPath $tasksPath -Encoding ASCII
-    }
-
-    Write-Host "Removed task metadata: $Slug"
+    Remove-TaskMetadataRecord -TasksPath $tasksPath -Tasks $tasks -Slug $Slug
 }
 
 function Merge-TaskBranch {
@@ -443,14 +535,24 @@ switch ($Command.ToLowerInvariant()) {
             }
             "cleanup" {
                 $taskSlug = $null
+                $forceCleanup = $false
                 if ($null -ne $RemainingArgs) {
                     foreach ($taskArg in $RemainingArgs) {
-                        $taskSlug = [string]$taskArg
-                        break
+                        if ($taskArg -eq "--force") {
+                            $forceCleanup = $true
+                        }
+                        elseif ([string]::IsNullOrWhiteSpace($taskSlug)) {
+                            $taskSlug = [string]$taskArg
+                        }
+                        else {
+                            Write-Host "Unknown argument for lane task cleanup: $taskArg" -ForegroundColor Red
+                            Write-Host "Usage: .\lane.ps1 task cleanup <slug> [--force]"
+                            exit 1
+                        }
                     }
                 }
 
-                Remove-TaskWorktree -Slug $taskSlug
+                Remove-TaskWorktree -Slug $taskSlug -Force $forceCleanup
             }
             default {
                 Write-Host "Unknown lane task command: $Subcommand" -ForegroundColor Red

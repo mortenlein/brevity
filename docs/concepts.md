@@ -143,11 +143,20 @@ New task records use `ready-for-worker` status.
 If the metadata file does not exist, Lane reports that no Lane tasks were
 found.
 
-`lane task cleanup <slug>` reads the same metadata file, finds the matching
-task record, removes the recorded Git worktree, and deletes the recorded Git
-branch with `git branch -d`. Lane removes the task record only after both Git
-operations succeed. If either operation fails, the metadata stays in place so
-the task can be inspected or retried explicitly.
+`lane task cleanup <slug> [--force]` reads the same metadata file and finds the
+matching task record.
+
+Without `--force`, Lane keeps the safe cleanup behavior: it removes the
+recorded Git worktree, deletes the recorded Git branch with `git branch -d`,
+and removes the task record only after cleanup succeeds.
+
+With `--force`, Lane removes the worktree with
+`git worktree remove --force <worktreePath>` and deletes the branch with
+`git branch -D <branch>`. If the recorded worktree path is already missing or
+is not registered with Git, Lane prints a warning and continues to branch
+removal. Lane removes the task record when branch removal succeeds or the
+branch is already missing. If branch removal fails for another reason, the
+metadata stays in place so the task can be inspected or retried explicitly.
 
 `lane task merge <slug>` reads the same metadata file, finds the matching task
 record, and merges the recorded branch into the current Git branch with
