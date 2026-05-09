@@ -5,7 +5,10 @@ param(
     [Parameter(Position = 1)]
     [string]$Subcommand,
 
-    [string]$DevRoot = (Get-Location).Path
+    [string]$DevRoot = (Get-Location).Path,
+
+    [Parameter(ValueFromRemainingArguments = $true)]
+    [string[]]$RemainingArgs
 )
 
 Set-StrictMode -Version Latest
@@ -58,11 +61,11 @@ function Show-Help {
     Write-Host "Usage:"
     Write-Host "  .\lane.ps1 help"
     Write-Host "  .\lane.ps1 status [-DevRoot <path>]"
+    Write-Host "  .\lane.ps1 task new <slug> [-DevRoot <path>]"
     Write-Host ""
     Write-Host "Planned commands:"
     Write-Host "  lane init"
     Write-Host "  lane onboard"
-    Write-Host "  lane task new"
     Write-Host "  lane task status"
     Write-Host "  lane task merge"
     Write-Host "  lane task cleanup"
@@ -108,6 +111,43 @@ function Write-NotImplemented {
     Write-Host "See docs\concepts.md for the command design."
 }
 
+function New-TaskWorktree {
+    param(
+        [string]$Root,
+        [string]$Slug
+    )
+
+    if ([string]::IsNullOrWhiteSpace($Slug)) {
+        Write-Host "Missing task slug." -ForegroundColor Red
+        Write-Host "Usage: .\lane.ps1 task new <slug> [-DevRoot <path>]"
+        exit 1
+    }
+
+    $rootPath = Resolve-DevRoot $Root
+    $targetPath = Join-Path $rootPath "worktrees\active\$Slug"
+    $branchName = "task/$Slug"
+
+    if (Test-Path -LiteralPath $targetPath) {
+        Write-Host "Task worktree already exists: $targetPath" -ForegroundColor Red
+        exit 1
+    }
+
+    $activeRoot = Split-Path -Parent $targetPath
+    if (-not (Test-Path -LiteralPath $activeRoot)) {
+        New-Item -ItemType Directory -Path $activeRoot | Out-Null
+    }
+
+    git worktree add $targetPath -b $branchName
+    if ($LASTEXITCODE -ne 0) {
+        exit $LASTEXITCODE
+    }
+
+    Write-Host "Created task worktree"
+    Write-Host "Path: $targetPath"
+    Write-Host "Branch: $branchName"
+    Write-Host "Start worker: codex -C $targetPath"
+}
+
 switch ($Command.ToLowerInvariant()) {
     "help" {
         Show-Help
@@ -128,7 +168,17 @@ switch ($Command.ToLowerInvariant()) {
         }
 
         switch ($Subcommand.ToLowerInvariant()) {
-            "new" { Write-NotImplemented "task new" }
+            "new" {
+                $taskSlug = $null
+                if ($null -ne $RemainingArgs) {
+                    foreach ($taskArg in $RemainingArgs) {
+                        $taskSlug = [string]$taskArg
+                        break
+                    }
+                }
+
+                New-TaskWorktree -Root $DevRoot -Slug $taskSlug
+            }
             "status" { Write-NotImplemented "task status" }
             "merge" { Write-NotImplemented "task merge" }
             "cleanup" { Write-NotImplemented "task cleanup" }

@@ -33,6 +33,7 @@ Lane v0 supports:
 ```powershell
 .\lane.ps1 help
 .\lane.ps1 status [-DevRoot <path>]
+.\lane.ps1 task new <slug> [-DevRoot <path>]
 ```
 
 The status command lists the standard Lane workspace locations when they exist:
@@ -43,6 +44,18 @@ The status command lists the standard Lane workspace locations when they exist:
 - `worktrees\completed`
 - `vaults\AI-Vault`
 
+The task new command creates a Git worktree at:
+
+```text
+<dev-root>\worktrees\active\<slug>
+```
+
+and creates the matching branch:
+
+```text
+task/<slug>
+```
+
 ## Planned Commands
 
 These commands are part of Lane's public design, but are not implemented in v0:
@@ -50,7 +63,6 @@ These commands are part of Lane's public design, but are not implemented in v0:
 ```powershell
 lane init
 lane onboard
-lane task new
 lane task status
 lane task merge
 lane task cleanup

@@ -99,16 +99,16 @@ worktrees\
   completed\
 ```
 
-The original `new-agent-task.ps1` created a branch named:
+`lane task new <slug>` creates a branch named:
 
 ```text
-agent/<project>/<task>
+task/<slug>
 ```
 
 and a worktree named:
 
 ```text
-worktrees\active\<project>-<task>
+worktrees\active\<slug>
 ```
 
 Lane should keep that convention for `lane task new`.
