@@ -149,6 +149,12 @@ branch with `git branch -d`. Lane removes the task record only after both Git
 operations succeed. If either operation fails, the metadata stays in place so
 the task can be inspected or retried explicitly.
 
+`lane task merge <slug>` reads the same metadata file, finds the matching task
+record, and merges the recorded branch into the current Git branch with
+`git merge <branch>`. When the merge succeeds, Lane updates the task status to
+`merged`. It does not clean up the worktree, delete the branch, or remove task
+metadata. If the merge fails, the metadata stays unchanged.
+
 ## Command Model
 
 Lane is designed around these commands:
@@ -162,4 +168,5 @@ Lane is designed around these commands:
 - `lane task cleanup` removes task worktrees after merge.
 
 Lane v0 provides the CLI scaffold, workspace status, task creation, task status
-reporting, and task cleanup. Planner automation is deliberately out of scope.
+reporting, task merge, and task cleanup. Planner automation is deliberately out
+of scope.

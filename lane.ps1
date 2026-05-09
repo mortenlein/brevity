@@ -83,12 +83,12 @@ function Show-Help {
     Write-Host "  .\lane.ps1 status [-DevRoot <path>]"
     Write-Host "  .\lane.ps1 task new <slug> [-DevRoot <path>]"
     Write-Host "  .\lane.ps1 task status"
+    Write-Host "  .\lane.ps1 task merge <slug>"
     Write-Host "  .\lane.ps1 task cleanup <slug>"
     Write-Host ""
     Write-Host "Planned commands:"
     Write-Host "  lane init"
     Write-Host "  lane onboard"
-    Write-Host "  lane task merge"
 }
 
 function Show-Status {
@@ -293,6 +293,66 @@ function Remove-TaskWorktree {
     Write-Host "Removed task metadata: $Slug"
 }
 
+function Merge-TaskBranch {
+    param([string]$Slug)
+
+    if ([string]::IsNullOrWhiteSpace($Slug)) {
+        Write-Host "Missing task slug." -ForegroundColor Red
+        Write-Host "Usage: .\lane.ps1 task merge <slug>"
+        exit 1
+    }
+
+    $repoRoot = Get-RepositoryRoot
+    $tasksPath = Join-Path $repoRoot ".lane\tasks.json"
+
+    if (-not (Test-Path -LiteralPath $tasksPath)) {
+        Write-Host "Task not found: $Slug" -ForegroundColor Red
+        Write-Host "No Lane task metadata exists at: $tasksPath"
+        exit 1
+    }
+
+    $rawTasks = Get-Content -LiteralPath $tasksPath -Raw
+    if ([string]::IsNullOrWhiteSpace($rawTasks)) {
+        Write-Host "Task not found: $Slug" -ForegroundColor Red
+        Write-Host "No Lane task metadata exists at: $tasksPath"
+        exit 1
+    }
+
+    $parsedTasks = $rawTasks | ConvertFrom-Json
+    $tasks = @($parsedTasks)
+    $task = $tasks | Where-Object { $_.slug -eq $Slug } | Select-Object -First 1
+
+    if ($null -eq $task) {
+        Write-Host "Task not found: $Slug" -ForegroundColor Red
+        Write-Host "Use .\lane.ps1 task status to list known tasks."
+        exit 1
+    }
+
+    if ([string]::IsNullOrWhiteSpace($task.branch)) {
+        Write-Host "Task metadata is missing branch for: $Slug" -ForegroundColor Red
+        exit 1
+    }
+
+    Write-Host "Merging Lane task: $Slug"
+    Write-Host "Branch: $($task.branch)"
+    Write-Host "Target: current Git branch"
+
+    git merge $task.branch
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "Merge failed. Task metadata was not changed." -ForegroundColor Red
+        exit $LASTEXITCODE
+    }
+
+    foreach ($taskRecord in $tasks) {
+        if ($taskRecord.slug -eq $Slug) {
+            $taskRecord.status = "merged"
+        }
+    }
+
+    ConvertTo-Json -InputObject $tasks -Depth 4 | Set-Content -LiteralPath $tasksPath -Encoding ASCII
+    Write-Host "Updated task status to merged: $Slug"
+}
+
 function New-TaskWorktree {
     param(
         [string]$Root,
@@ -370,7 +430,17 @@ switch ($Command.ToLowerInvariant()) {
                 New-TaskWorktree -Root $DevRoot -Slug $taskSlug
             }
             "status" { Show-TaskStatus }
-            "merge" { Write-NotImplemented "task merge" }
+            "merge" {
+                $taskSlug = $null
+                if ($null -ne $RemainingArgs) {
+                    foreach ($taskArg in $RemainingArgs) {
+                        $taskSlug = [string]$taskArg
+                        break
+                    }
+                }
+
+                Merge-TaskBranch -Slug $taskSlug
+            }
             "cleanup" {
                 $taskSlug = $null
                 if ($null -ne $RemainingArgs) {

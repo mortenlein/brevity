@@ -35,6 +35,7 @@ Lane v0 supports:
 .\lane.ps1 status [-DevRoot <path>]
 .\lane.ps1 task new <slug> [-DevRoot <path>]
 .\lane.ps1 task status
+.\lane.ps1 task merge <slug>
 .\lane.ps1 task cleanup <slug>
 ```
 
@@ -83,6 +84,17 @@ When task metadata exists, it prints the slug, branch, status, worktree path,
 and prompt path for each task. When no task metadata exists, it prints
 `No Lane tasks found.`
 
+The task merge command reads the matching record from:
+
+```text
+<repo>\.lane\tasks.json
+```
+
+It merges the recorded branch into the current Git branch with
+`git merge <branch>`. When the merge succeeds, Lane updates the task status to
+`merged`. It does not remove the worktree, delete the branch, or remove task
+metadata. If the merge fails, Lane leaves metadata unchanged.
+
 The task cleanup command reads the matching record from:
 
 ```text
@@ -100,7 +112,6 @@ These commands are part of Lane's public design, but are not implemented in v0:
 ```powershell
 lane init
 lane onboard
-lane task merge
 ```
 
 `lane status` is the successor to the bootstrap script's
