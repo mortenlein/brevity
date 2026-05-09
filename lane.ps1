@@ -151,6 +151,7 @@ function Show-Help {
     Write-Host "Usage:"
     Write-Host "  .\lane.ps1 help"
     Write-Host "  .\lane.ps1 init [-DevRoot <path>]"
+    Write-Host "  .\lane.ps1 plan"
     Write-Host "  .\lane.ps1 status [-DevRoot <path>]"
     Write-Host "  .\lane.ps1 task new <slug> [-DevRoot <path>]"
     Write-Host "  .\lane.ps1 task start <slug>"
@@ -200,6 +201,91 @@ function Write-NotImplemented {
 
     Write-Host "lane $Name is planned but not implemented in Lane v0." -ForegroundColor Yellow
     Write-Host "See docs\concepts.md for the command design."
+}
+
+function Read-LaneConfig {
+    $repoRoot = Get-RepositoryRoot
+    $configPath = Join-Path $repoRoot ".lane\config.json"
+
+    if (-not (Test-Path -LiteralPath $configPath)) {
+        Write-Host "Lane config not found: $configPath" -ForegroundColor Red
+        Write-Host "Run .\lane.ps1 init first."
+        exit 1
+    }
+
+    $rawConfig = Get-Content -LiteralPath $configPath -Raw
+    if ([string]::IsNullOrWhiteSpace($rawConfig)) {
+        Write-Host "Lane config is empty: $configPath" -ForegroundColor Red
+        exit 1
+    }
+
+    $config = $rawConfig | ConvertFrom-Json
+    if ($null -eq $config) {
+        Write-Host "Lane config could not be read: $configPath" -ForegroundColor Red
+        exit 1
+    }
+
+    if (-not (Get-Member -InputObject $config -Name "vaultPath" -MemberType NoteProperty)) {
+        Write-Host "Lane config is missing vaultPath: $configPath" -ForegroundColor Red
+        exit 1
+    }
+
+    if ([string]::IsNullOrWhiteSpace($config.vaultPath)) {
+        Write-Host "Lane config vaultPath is empty: $configPath" -ForegroundColor Red
+        exit 1
+    }
+
+    return $config
+}
+
+function New-PlanPrompt {
+    $repoRoot = Get-RepositoryRoot
+    $config = Read-LaneConfig
+    $promptPath = Join-Path $repoRoot ".lane\planner-prompt.md"
+
+    $promptLines = @(
+        "Read AGENTS.md.",
+        "",
+        "You are planning one Lane worker task for this repository.",
+        "",
+        "Project memory:",
+        "",
+        '```text',
+        $config.vaultPath,
+        '```',
+        "",
+        "Read the configured vaultPath project memory before selecting work. Use the Markdown files and task notes there as durable project context.",
+        "",
+        "Select exactly ONE small, high-value task that a worker can complete safely in a focused patch.",
+        "",
+        "Return only these fields:",
+        "",
+        "Task title:",
+        "Task slug:",
+        "Worker prompt:",
+        "",
+        "Worker prompt requirements:",
+        "",
+        "- Tell the worker to read AGENTS.md.",
+        "- Give a concrete, bounded implementation task.",
+        "- Include the relevant context from project memory.",
+        "- Include concise verification steps.",
+        "- End with: Stop after patch + summary.",
+        "",
+        "Constraints:",
+        "",
+        "- Do not implement code.",
+        "- Do not create a worktree.",
+        "- Do not call Codex automatically.",
+        "- Do not propose autonomous planning.",
+        "- Avoid placeholders such as TODO, TBD, <fill in>, or examples that must be replaced.",
+        "- Choose a task that is small enough for one worker turn."
+    )
+
+    Set-Content -LiteralPath $promptPath -Value $promptLines -Encoding ASCII
+
+    Write-Host "Planner prompt: $promptPath"
+    Write-Host "Open Codex in this repo and paste the planner prompt."
 }
 
 function Write-TaskPrompt {
@@ -689,6 +775,9 @@ switch ($Command.ToLowerInvariant()) {
     }
     "init" {
         Initialize-LaneRepository -Root $DevRoot
+    }
+    "plan" {
+        New-PlanPrompt
     }
     "onboard" {
         Write-NotImplemented "onboard"

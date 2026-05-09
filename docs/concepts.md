@@ -52,6 +52,25 @@ script. `lane init` creates it in the current Git repository and adds:
 
 Existing files are left unchanged.
 
+`lane plan` reads `config.json` and writes:
+
+```text
+<repo>\.lane\planner-prompt.md
+```
+
+The planner prompt is a manual handoff prompt for Codex. It tells Codex to read
+`AGENTS.md`, read the configured `vaultPath` project memory, select exactly one
+small high-value task, and return:
+
+- task title
+- task slug
+- worker prompt
+
+The planner prompt also tells Codex not to implement code, create a worktree,
+call Codex automatically, propose autonomous planning, or use placeholders.
+Lane prints the prompt path and tells the operator to open Codex in the repo and
+paste the planner prompt.
+
 ## AI-Vault
 
 AI-Vault remains the durable knowledge store for project memory and global
@@ -201,6 +220,7 @@ metadata. If the merge fails, the metadata stays unchanged.
 Lane is designed around these commands:
 
 - `lane init` creates the repo-local Lane skeleton and AI-Vault project memory.
+- `lane plan` writes a manual Codex planner prompt from repo-local Lane config.
 - `lane onboard` prepares an existing repo and AI-Vault project memory.
 - `lane status` reports repos, worktrees, and vault presence.
 - `lane task new` creates an isolated worktree and task branch.
@@ -209,6 +229,7 @@ Lane is designed around these commands:
 - `lane task merge` merges a completed task branch back to its base.
 - `lane task cleanup` removes task worktrees after merge.
 
-Lane v0 provides the CLI scaffold, repository initialization, workspace status,
-task creation, task status start instructions, task reporting, task merge, and
-task cleanup. Planner automation is deliberately out of scope.
+Lane v0 provides the CLI scaffold, repository initialization, planner prompt
+generation, workspace status, task creation, task status start instructions,
+task reporting, task merge, and task cleanup. Planner automation is deliberately
+out of scope.

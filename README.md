@@ -33,6 +33,7 @@ Lane v0 supports:
 ```powershell
 .\lane.ps1 help
 .\lane.ps1 init [-DevRoot <path>]
+.\lane.ps1 plan
 .\lane.ps1 status [-DevRoot <path>]
 .\lane.ps1 task new <slug> [-DevRoot <path>]
 .\lane.ps1 task start <slug>
@@ -67,6 +68,31 @@ It also creates project memory under AI-Vault:
 If `AGENTS.md` is missing, init creates one that instructs Codex to read the
 project vault memory before doing work. Existing files are never overwritten;
 init prints what it created and what already existed.
+
+The plan command reads:
+
+```text
+<repo>\.lane\config.json
+```
+
+It writes a planner prompt to:
+
+```text
+<repo>\.lane\planner-prompt.md
+```
+
+The generated prompt tells Codex to read `AGENTS.md`, read the configured
+AI-Vault project memory, select exactly one small high-value task, and return a
+task title, task slug, and worker prompt. It also tells Codex not to implement
+code, create a worktree, call Codex automatically, or use placeholders.
+
+After writing the prompt, Lane prints the prompt path and:
+
+```text
+Open Codex in this repo and paste the planner prompt.
+```
+
+Lane does not automatically launch Codex or run autonomous planning.
 
 The status command lists the standard Lane workspace locations when they exist:
 
@@ -208,5 +234,6 @@ Lane keeps orchestration separate from project source:
 - No runtime dependencies beyond PowerShell and Git for future worktree flows.
 - No web app.
 - No planner automation in v0.
+- Planner prompt generation is manual and does not create worktrees.
 - Markdown remains the durable memory layer.
 - Git remains the source of truth for code.
