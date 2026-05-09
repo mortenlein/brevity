@@ -32,6 +32,7 @@ Lane v0 supports:
 
 ```powershell
 .\lane.ps1 help
+.\lane.ps1 init [-DevRoot <path>]
 .\lane.ps1 status [-DevRoot <path>]
 .\lane.ps1 task new <slug> [-DevRoot <path>]
 .\lane.ps1 task start <slug>
@@ -39,6 +40,33 @@ Lane v0 supports:
 .\lane.ps1 task merge <slug>
 .\lane.ps1 task cleanup <slug> [--force]
 ```
+
+The init command prepares the current Git repository for Lane. It creates
+repo-local Lane state when missing:
+
+```text
+<repo>\.lane\
+<repo>\.lane\tasks.json
+<repo>\.lane\config.json
+```
+
+`config.json` records the project name, dev root, AI-Vault project path, and
+worktrees root. The project name is the Git repository root folder name.
+
+It also creates project memory under AI-Vault:
+
+```text
+<dev-root>\vaults\AI-Vault\10-Projects\<project-name>\
+  project.md
+  architecture.md
+  decisions.md
+  session-notes\
+  tasks\
+```
+
+If `AGENTS.md` is missing, init creates one that instructs Codex to read the
+project vault memory before doing work. Existing files are never overwritten;
+init prints what it created and what already existed.
 
 The status command lists the standard Lane workspace locations when they exist:
 
@@ -142,7 +170,6 @@ metadata unchanged.
 These commands are part of Lane's public design, but are not implemented in v0:
 
 ```powershell
-lane init
 lane onboard
 ```
 

@@ -40,8 +40,78 @@ function Get-RepositoryRoot {
         return $repoRoot
     }
 
-    Write-Host "lane task new must be run inside a Git repository." -ForegroundColor Red
+    Write-Host "Lane must be run inside a Git repository." -ForegroundColor Red
     exit 1
+}
+
+function Add-InitResult {
+    param(
+        [object[]]$Results,
+        [string]$Status,
+        [string]$Path
+    )
+
+    return @($Results) + (New-Object PSObject -Property ([ordered]@{
+        status = $Status
+        path = $Path
+    }))
+}
+
+function Ensure-Directory {
+    param(
+        [string]$Path,
+        [object[]]$Results
+    )
+
+    if (Test-Path -LiteralPath $Path) {
+        return Add-InitResult -Results $Results -Status "existing" -Path $Path
+    }
+
+    New-Item -ItemType Directory -Path $Path | Out-Null
+    return Add-InitResult -Results $Results -Status "created" -Path $Path
+}
+
+function Ensure-File {
+    param(
+        [string]$Path,
+        [string[]]$Lines,
+        [object[]]$Results
+    )
+
+    if (Test-Path -LiteralPath $Path) {
+        return Add-InitResult -Results $Results -Status "existing" -Path $Path
+    }
+
+    $parent = Split-Path -Parent $Path
+    if (-not (Test-Path -LiteralPath $parent)) {
+        New-Item -ItemType Directory -Path $parent | Out-Null
+    }
+
+    Set-Content -LiteralPath $Path -Value $Lines -Encoding ASCII
+    return Add-InitResult -Results $Results -Status "created" -Path $Path
+}
+
+function Write-InitResults {
+    param([object[]]$Results)
+
+    $created = @($Results | Where-Object { $_.status -eq "created" })
+    $existing = @($Results | Where-Object { $_.status -eq "existing" })
+
+    Write-Section "Created"
+    if ($created.Count -eq 0) {
+        Write-Host "No files or directories created."
+    }
+    else {
+        $created | ForEach-Object { Write-Host $_.path }
+    }
+
+    Write-Section "Already Existed"
+    if ($existing.Count -eq 0) {
+        Write-Host "No existing files or directories detected."
+    }
+    else {
+        $existing | ForEach-Object { Write-Host $_.path }
+    }
 }
 
 function Write-Section {
@@ -80,6 +150,7 @@ function Show-Help {
     Write-Host ""
     Write-Host "Usage:"
     Write-Host "  .\lane.ps1 help"
+    Write-Host "  .\lane.ps1 init [-DevRoot <path>]"
     Write-Host "  .\lane.ps1 status [-DevRoot <path>]"
     Write-Host "  .\lane.ps1 task new <slug> [-DevRoot <path>]"
     Write-Host "  .\lane.ps1 task start <slug>"
@@ -88,7 +159,6 @@ function Show-Help {
     Write-Host "  .\lane.ps1 task cleanup <slug> [--force]"
     Write-Host ""
     Write-Host "Planned commands:"
-    Write-Host "  lane init"
     Write-Host "  lane onboard"
 }
 
@@ -149,6 +219,71 @@ function Write-TaskPrompt {
     )
 
     Set-Content -LiteralPath $Path -Value $promptLines -Encoding ASCII
+}
+
+function Initialize-LaneRepository {
+    param([string]$Root)
+
+    $rootPath = Resolve-DevRoot $Root
+    $repoRoot = Get-RepositoryRoot
+    $projectName = Split-Path -Leaf $repoRoot
+    $laneRoot = Join-Path $repoRoot ".lane"
+    $tasksPath = Join-Path $laneRoot "tasks.json"
+    $configPath = Join-Path $laneRoot "config.json"
+    $vaultPath = Join-Path $rootPath "vaults\AI-Vault\10-Projects\$projectName"
+    $worktreesRoot = Join-Path $rootPath "worktrees"
+    $agentsPath = Join-Path $repoRoot "AGENTS.md"
+
+    $results = @()
+    $results = Ensure-Directory -Path $laneRoot -Results $results
+    $results = Ensure-File -Path $tasksPath -Lines @("[]") -Results $results
+
+    $config = New-Object PSObject -Property ([ordered]@{
+        projectName = $projectName
+        devRoot = $rootPath
+        vaultPath = $vaultPath
+        worktreesRoot = $worktreesRoot
+    })
+    $configLines = @(ConvertTo-Json -InputObject $config -Depth 4)
+    $results = Ensure-File -Path $configPath -Lines $configLines -Results $results
+
+    $results = Ensure-Directory -Path $vaultPath -Results $results
+    $results = Ensure-Directory -Path (Join-Path $vaultPath "session-notes") -Results $results
+    $results = Ensure-Directory -Path (Join-Path $vaultPath "tasks") -Results $results
+
+    $results = Ensure-File -Path (Join-Path $vaultPath "project.md") -Lines @(
+        "# $projectName",
+        "",
+        "Project memory for Lane-assisted work."
+    ) -Results $results
+    $results = Ensure-File -Path (Join-Path $vaultPath "architecture.md") -Lines @(
+        "# Architecture",
+        "",
+        "Record durable architecture context here."
+    ) -Results $results
+    $results = Ensure-File -Path (Join-Path $vaultPath "decisions.md") -Lines @(
+        "# Decisions",
+        "",
+        "Record durable project decisions here."
+    ) -Results $results
+
+    $results = Ensure-File -Path $agentsPath -Lines @(
+        "# Agent Instructions",
+        "",
+        "Before doing work in this repository, read the project memory in:",
+        "",
+        '```text',
+        $vaultPath,
+        '```',
+        "",
+        "Use the vault memory for durable project context. Do not overwrite existing repository files unless the task explicitly requires it."
+    ) -Results $results
+
+    Write-Host "Initialized Lane project: $projectName"
+    Write-Host "Repo: $repoRoot"
+    Write-Host "DevRoot: $rootPath"
+    Write-Host "Vault: $vaultPath"
+    Write-InitResults -Results $results
 }
 
 function Add-TaskMetadata {
@@ -553,7 +688,7 @@ switch ($Command.ToLowerInvariant()) {
         Show-Status -Root $DevRoot
     }
     "init" {
-        Write-NotImplemented "init"
+        Initialize-LaneRepository -Root $DevRoot
     }
     "onboard" {
         Write-NotImplemented "onboard"

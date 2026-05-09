@@ -38,10 +38,19 @@ default to `C:\dev`.
 ## .lane
 
 `.lane` is the orchestration area. It replaces `.system` from the bootstrap
-script. Future versions may store Lane templates, prompts, workflow documents,
-and local configuration here.
+script. `lane init` creates it in the current Git repository and adds:
 
-Lane v0 documents this directory but does not require it to exist for `status`.
+- `tasks.json`
+- `config.json`
+
+`tasks.json` starts as an empty array. `config.json` records:
+
+- `projectName`
+- `devRoot`
+- `vaultPath`
+- `worktreesRoot`
+
+Existing files are left unchanged.
 
 ## AI-Vault
 
@@ -63,15 +72,21 @@ Project-specific memory belongs under:
 vaults\AI-Vault\10-Projects\<project-name>\
 ```
 
-The original onboarding helper created:
+`lane init` creates the project memory folder and these child directories when
+missing:
 
-- `overview.md`
-- `architecture.md`
-- `tasks.md`
-- `adr\`
 - `session-notes\`
+- `tasks\`
 
-Lane should preserve that model when `lane onboard` is implemented.
+It also creates these starter Markdown files when missing:
+
+- `project.md`
+- `architecture.md`
+- `decisions.md`
+
+If `AGENTS.md` is missing in the repository, `lane init` creates one that tells
+Codex to read the project vault memory before doing work. If `AGENTS.md`
+already exists, Lane leaves it unchanged.
 
 ## Repos
 
@@ -185,7 +200,7 @@ metadata. If the merge fails, the metadata stays unchanged.
 
 Lane is designed around these commands:
 
-- `lane init` creates the workspace skeleton.
+- `lane init` creates the repo-local Lane skeleton and AI-Vault project memory.
 - `lane onboard` prepares an existing repo and AI-Vault project memory.
 - `lane status` reports repos, worktrees, and vault presence.
 - `lane task new` creates an isolated worktree and task branch.
@@ -194,6 +209,6 @@ Lane is designed around these commands:
 - `lane task merge` merges a completed task branch back to its base.
 - `lane task cleanup` removes task worktrees after merge.
 
-Lane v0 provides the CLI scaffold, workspace status, task creation, task status
-start instructions, task reporting, task merge, and task cleanup. Planner
-automation is deliberately out of scope.
+Lane v0 provides the CLI scaffold, repository initialization, workspace status,
+task creation, task status start instructions, task reporting, task merge, and
+task cleanup. Planner automation is deliberately out of scope.
