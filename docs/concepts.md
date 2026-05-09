@@ -161,6 +161,7 @@ Codex to read the project vault memory before doing work. If `AGENTS.md`
 already exists, Lane leaves it unchanged.
 
 Vault task specs are durable planned work. Each planned task can be stored as:
+Lane supports vault-backed task specs for planned task handoff.
 
 ```text
 <vaultPath>\tasks\<slug>.md
