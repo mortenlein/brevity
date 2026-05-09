@@ -1,6 +1,6 @@
 Read AGENTS.md.
 
-Task: implement-task-status
+Task: implement-task-cleanup
 
 Keep changes small.
 

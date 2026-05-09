@@ -35,6 +35,7 @@ Lane v0 supports:
 .\lane.ps1 status [-DevRoot <path>]
 .\lane.ps1 task new <slug> [-DevRoot <path>]
 .\lane.ps1 task status
+.\lane.ps1 task cleanup <slug>
 ```
 
 The status command lists the standard Lane workspace locations when they exist:
@@ -82,6 +83,16 @@ When task metadata exists, it prints the slug, branch, status, worktree path,
 and prompt path for each task. When no task metadata exists, it prints
 `No Lane tasks found.`
 
+The task cleanup command reads the matching record from:
+
+```text
+<repo>\.lane\tasks.json
+```
+
+It removes the recorded Git worktree, deletes the recorded Git branch with
+`git branch -d`, and then removes the task record from metadata. If Git cannot
+remove the worktree or delete the branch, Lane leaves the metadata unchanged.
+
 ## Planned Commands
 
 These commands are part of Lane's public design, but are not implemented in v0:
@@ -90,7 +101,6 @@ These commands are part of Lane's public design, but are not implemented in v0:
 lane init
 lane onboard
 lane task merge
-lane task cleanup
 ```
 
 `lane status` is the successor to the bootstrap script's

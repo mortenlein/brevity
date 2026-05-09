@@ -83,12 +83,12 @@ function Show-Help {
     Write-Host "  .\lane.ps1 status [-DevRoot <path>]"
     Write-Host "  .\lane.ps1 task new <slug> [-DevRoot <path>]"
     Write-Host "  .\lane.ps1 task status"
+    Write-Host "  .\lane.ps1 task cleanup <slug>"
     Write-Host ""
     Write-Host "Planned commands:"
     Write-Host "  lane init"
     Write-Host "  lane onboard"
     Write-Host "  lane task merge"
-    Write-Host "  lane task cleanup"
 }
 
 function Show-Status {
@@ -221,6 +221,78 @@ function Show-TaskStatus {
         Format-List
 }
 
+function Remove-TaskWorktree {
+    param([string]$Slug)
+
+    if ([string]::IsNullOrWhiteSpace($Slug)) {
+        Write-Host "Missing task slug." -ForegroundColor Red
+        Write-Host "Usage: .\lane.ps1 task cleanup <slug>"
+        exit 1
+    }
+
+    $repoRoot = Get-RepositoryRoot
+    $tasksPath = Join-Path $repoRoot ".lane\tasks.json"
+
+    if (-not (Test-Path -LiteralPath $tasksPath)) {
+        Write-Host "Task not found: $Slug" -ForegroundColor Red
+        Write-Host "No Lane task metadata exists at: $tasksPath"
+        exit 1
+    }
+
+    $rawTasks = Get-Content -LiteralPath $tasksPath -Raw
+    if ([string]::IsNullOrWhiteSpace($rawTasks)) {
+        Write-Host "Task not found: $Slug" -ForegroundColor Red
+        Write-Host "No Lane task metadata exists at: $tasksPath"
+        exit 1
+    }
+
+    $parsedTasks = $rawTasks | ConvertFrom-Json
+    $tasks = @($parsedTasks)
+    $task = $tasks | Where-Object { $_.slug -eq $Slug } | Select-Object -First 1
+
+    if ($null -eq $task) {
+        Write-Host "Task not found: $Slug" -ForegroundColor Red
+        Write-Host "Use .\lane.ps1 task status to list known tasks."
+        exit 1
+    }
+
+    if ([string]::IsNullOrWhiteSpace($task.worktreePath)) {
+        Write-Host "Task metadata is missing worktreePath for: $Slug" -ForegroundColor Red
+        exit 1
+    }
+
+    if ([string]::IsNullOrWhiteSpace($task.branch)) {
+        Write-Host "Task metadata is missing branch for: $Slug" -ForegroundColor Red
+        exit 1
+    }
+
+    Write-Host "Cleaning up Lane task: $Slug"
+    Write-Host "Worktree: $($task.worktreePath)"
+    Write-Host "Branch: $($task.branch)"
+
+    git worktree remove $task.worktreePath
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "Cleanup failed while removing worktree. Metadata was not changed." -ForegroundColor Red
+        exit $LASTEXITCODE
+    }
+
+    git branch -d $task.branch
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "Cleanup failed while deleting branch. Metadata was not changed." -ForegroundColor Red
+        exit $LASTEXITCODE
+    }
+
+    $remainingTasks = @($tasks | Where-Object { $_.slug -ne $Slug })
+    if ($remainingTasks.Count -eq 0) {
+        Set-Content -LiteralPath $tasksPath -Value "[]" -Encoding ASCII
+    }
+    else {
+        ConvertTo-Json -InputObject $remainingTasks -Depth 4 | Set-Content -LiteralPath $tasksPath -Encoding ASCII
+    }
+
+    Write-Host "Removed task metadata: $Slug"
+}
+
 function New-TaskWorktree {
     param(
         [string]$Root,
@@ -299,7 +371,17 @@ switch ($Command.ToLowerInvariant()) {
             }
             "status" { Show-TaskStatus }
             "merge" { Write-NotImplemented "task merge" }
-            "cleanup" { Write-NotImplemented "task cleanup" }
+            "cleanup" {
+                $taskSlug = $null
+                if ($null -ne $RemainingArgs) {
+                    foreach ($taskArg in $RemainingArgs) {
+                        $taskSlug = [string]$taskArg
+                        break
+                    }
+                }
+
+                Remove-TaskWorktree -Slug $taskSlug
+            }
             default {
                 Write-Host "Unknown lane task command: $Subcommand" -ForegroundColor Red
                 Show-Help

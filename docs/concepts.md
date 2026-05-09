@@ -143,6 +143,12 @@ New task records use `ready-for-worker` status.
 If the metadata file does not exist, Lane reports that no Lane tasks were
 found.
 
+`lane task cleanup <slug>` reads the same metadata file, finds the matching
+task record, removes the recorded Git worktree, and deletes the recorded Git
+branch with `git branch -d`. Lane removes the task record only after both Git
+operations succeed. If either operation fails, the metadata stays in place so
+the task can be inspected or retried explicitly.
+
 ## Command Model
 
 Lane is designed around these commands:
@@ -155,5 +161,5 @@ Lane is designed around these commands:
 - `lane task merge` merges a completed task branch back to its base.
 - `lane task cleanup` removes task worktrees after merge.
 
-Lane v0 provides the CLI scaffold, workspace status, task creation, and task
-status reporting. Planner automation is deliberately out of scope.
+Lane v0 provides the CLI scaffold, workspace status, task creation, task status
+reporting, and task cleanup. Planner automation is deliberately out of scope.
