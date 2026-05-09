@@ -177,8 +177,8 @@ If `AGENTS.md` is missing in the repository, `lane init` creates one that tells
 Codex to read the project vault memory before doing work. If `AGENTS.md`
 already exists, Lane leaves it unchanged.
 
-Vault task specs are durable planned work. Each planned task can be stored as:
-Lane supports vault-backed task specs for planned task handoff.
+Vault task specs are durable planned work. Lane supports vault-backed task
+specs for planned task handoff. Each planned task can be stored as:
 
 ```text
 <vaultPath>\tasks\<slug>.md
