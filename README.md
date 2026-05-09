@@ -34,6 +34,7 @@ Lane v0 supports:
 .\lane.ps1 help
 .\lane.ps1 init [-DevRoot <path>]
 .\lane.ps1 plan
+.\lane.ps1 plan backlog
 .\lane.ps1 board
 .\lane.ps1 status [-DevRoot <path>]
 .\lane.ps1 task new <slug> [-DevRoot <path>]
@@ -94,6 +95,29 @@ Open Codex in this repo and paste the planner prompt.
 ```
 
 Lane does not automatically launch Codex or run autonomous planning.
+
+The backlog plan mode reads the same config and writes a backlog planner prompt
+to:
+
+```text
+<repo>\.lane\planner-backlog-prompt.md
+```
+
+The generated backlog prompt tells Codex to read `AGENTS.md`, read the
+configured AI-Vault project memory, and plan a larger body of work as 5-10
+small tasks. Each task must include a title, slug, `status: planned`,
+`dependencies: []`, and a concrete `workerPrompt`. The prompt tells Codex to
+keep tasks small and independently executable where possible, avoid
+placeholders, and not implement code.
+
+After writing the backlog prompt, Lane prints the prompt path and:
+
+```text
+Open Codex in this repo and paste the backlog planner prompt.
+```
+
+Lane does not parse planner output, create tasks from the backlog, implement a
+TUI, or launch Codex.
 
 The board command reads:
 

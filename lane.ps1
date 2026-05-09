@@ -152,6 +152,7 @@ function Show-Help {
     Write-Host "  .\lane.ps1 help"
     Write-Host "  .\lane.ps1 init [-DevRoot <path>]"
     Write-Host "  .\lane.ps1 plan"
+    Write-Host "  .\lane.ps1 plan backlog"
     Write-Host "  .\lane.ps1 board"
     Write-Host "  .\lane.ps1 status [-DevRoot <path>]"
     Write-Host "  .\lane.ps1 task new <slug> [-DevRoot <path>]"
@@ -388,6 +389,61 @@ function New-PlanPrompt {
 
     Write-Host "Planner prompt: $promptPath"
     Write-Host "Open Codex in this repo and paste the planner prompt."
+}
+
+function New-BacklogPlanPrompt {
+    $repoRoot = Get-RepositoryRoot
+    $config = Read-LaneConfig
+    $promptPath = Join-Path $repoRoot ".lane\planner-backlog-prompt.md"
+
+    $promptLines = @(
+        "Read AGENTS.md.",
+        "",
+        "You are planning a backlog of Lane worker tasks for this repository.",
+        "",
+        "Project memory:",
+        "",
+        '```text',
+        $config.vaultPath,
+        '```',
+        "",
+        "Read the configured vaultPath project memory before planning. Use the Markdown files and task notes there as durable project context.",
+        "",
+        "Plan a larger body of work as multiple small tasks.",
+        "",
+        "Return 5-10 tasks.",
+        "",
+        "Each task must include exactly these fields:",
+        "",
+        "- title",
+        "- slug",
+        "- status: planned",
+        "- dependencies: []",
+        "- workerPrompt",
+        "",
+        "Task requirements:",
+        "",
+        "- Keep tasks small and independently executable where possible.",
+        "- Make each workerPrompt concrete and bounded.",
+        "- Include relevant context from project memory in each workerPrompt.",
+        "- Include concise verification steps in each workerPrompt.",
+        "- End each workerPrompt with: Stop after patch + summary.",
+        "- Avoid placeholders such as TODO, TBD, <fill in>, or examples that must be replaced.",
+        "",
+        "Constraints:",
+        "",
+        "- Do not implement code.",
+        "- Do not create worktrees.",
+        "- Do not create tasks from the backlog.",
+        "- Do not parse planner output.",
+        "- Do not launch Codex.",
+        "- Do not propose or implement a TUI."
+    )
+
+    Set-Content -LiteralPath $promptPath -Value $promptLines -Encoding ASCII
+
+    Write-Host "Backlog planner prompt: $promptPath"
+    Write-Host "Open Codex in this repo and paste the backlog planner prompt."
 }
 
 function Write-TaskPrompt {
@@ -879,7 +935,17 @@ switch ($Command.ToLowerInvariant()) {
         Initialize-LaneRepository -Root $DevRoot
     }
     "plan" {
-        New-PlanPrompt
+        if ([string]::IsNullOrWhiteSpace($Subcommand)) {
+            New-PlanPrompt
+        }
+        elseif ($Subcommand.ToLowerInvariant() -eq "backlog") {
+            New-BacklogPlanPrompt
+        }
+        else {
+            Write-Host "Unknown lane plan command: $Subcommand" -ForegroundColor Red
+            Show-Help
+            exit 1
+        }
     }
     "board" {
         Show-Board

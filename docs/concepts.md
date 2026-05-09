@@ -71,6 +71,28 @@ call Codex automatically, propose autonomous planning, or use placeholders.
 Lane prints the prompt path and tells the operator to open Codex in the repo and
 paste the planner prompt.
 
+`lane plan backlog` reads the same config and writes:
+
+```text
+<repo>\.lane\planner-backlog-prompt.md
+```
+
+The backlog planner prompt is also a manual handoff prompt for Codex. It tells
+Codex to read `AGENTS.md`, read the configured `vaultPath` project memory, and
+plan a larger body of work as 5-10 small tasks. Each returned task must include:
+
+- `title`
+- `slug`
+- `status: planned`
+- `dependencies: []`
+- `workerPrompt`
+
+The backlog prompt tells Codex to keep tasks small and independently executable
+where possible, avoid placeholders, and not implement code. Lane prints the
+backlog prompt path and tells the operator to open Codex in the repo and paste
+the backlog planner prompt. Lane does not parse planner output, create tasks
+from the backlog, implement a TUI, or launch Codex.
+
 ## AI-Vault
 
 AI-Vault remains the durable knowledge store for project memory and global
@@ -241,6 +263,7 @@ Lane is designed around these commands:
 
 - `lane init` creates the repo-local Lane skeleton and AI-Vault project memory.
 - `lane plan` writes a manual Codex planner prompt from repo-local Lane config.
+- `lane plan backlog` writes a manual Codex backlog planner prompt.
 - `lane board` groups Lane task metadata by status.
 - `lane onboard` prepares an existing repo and AI-Vault project memory.
 - `lane status` reports repos, worktrees, and vault presence.
