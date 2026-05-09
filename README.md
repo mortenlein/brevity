@@ -34,6 +34,7 @@ Lane v0 supports:
 .\lane.ps1 help
 .\lane.ps1 init [-DevRoot <path>]
 .\lane.ps1 plan
+.\lane.ps1 board
 .\lane.ps1 status [-DevRoot <path>]
 .\lane.ps1 task new <slug> [-DevRoot <path>]
 .\lane.ps1 task start <slug>
@@ -93,6 +94,27 @@ Open Codex in this repo and paste the planner prompt.
 ```
 
 Lane does not automatically launch Codex or run autonomous planning.
+
+The board command reads:
+
+```text
+<repo>\.lane\tasks.json
+```
+
+It groups task metadata by status and prints the task slug, branch, and
+worktree path for each task. It shows status groups when matching tasks are
+present, including:
+
+- `planned`
+- `ready-for-worker`
+- `running`
+- `merged`
+- `done`
+- `blocked`
+
+When no task metadata exists, it prints `No Lane tasks found.` The board is
+read-only; it does not start work, run planner automation, merge branches, or
+change task lifecycle state.
 
 The status command lists the standard Lane workspace locations when they exist:
 

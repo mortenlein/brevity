@@ -166,6 +166,26 @@ Each record includes:
 
 New task records use `ready-for-worker` status.
 
+`lane board` reads the same metadata file and groups tasks by status. It shows
+groups when matching tasks are present, including:
+
+- `planned`
+- `ready-for-worker`
+- `running`
+- `merged`
+- `done`
+- `blocked`
+
+For each task, it reports:
+
+- `slug`
+- `branch`
+- `worktreePath`
+
+If no task metadata exists, Lane reports that no Lane tasks were found. The
+board is read-only and does not start task work, run planner automation, merge
+branches, clean up worktrees, or otherwise change task lifecycle state.
+
 `lane task status` reads the same metadata file and reports:
 
 - `slug`
@@ -221,6 +241,7 @@ Lane is designed around these commands:
 
 - `lane init` creates the repo-local Lane skeleton and AI-Vault project memory.
 - `lane plan` writes a manual Codex planner prompt from repo-local Lane config.
+- `lane board` groups Lane task metadata by status.
 - `lane onboard` prepares an existing repo and AI-Vault project memory.
 - `lane status` reports repos, worktrees, and vault presence.
 - `lane task new` creates an isolated worktree and task branch.

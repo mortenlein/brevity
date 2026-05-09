@@ -152,6 +152,7 @@ function Show-Help {
     Write-Host "  .\lane.ps1 help"
     Write-Host "  .\lane.ps1 init [-DevRoot <path>]"
     Write-Host "  .\lane.ps1 plan"
+    Write-Host "  .\lane.ps1 board"
     Write-Host "  .\lane.ps1 status [-DevRoot <path>]"
     Write-Host "  .\lane.ps1 task new <slug> [-DevRoot <path>]"
     Write-Host "  .\lane.ps1 task start <slug>"
@@ -201,6 +202,107 @@ function Write-NotImplemented {
 
     Write-Host "lane $Name is planned but not implemented in Lane v0." -ForegroundColor Yellow
     Write-Host "See docs\concepts.md for the command design."
+}
+
+function Get-TaskField {
+    param(
+        [object]$Task,
+        [string]$Name
+    )
+
+    $member = Get-Member -InputObject $Task -Name $Name -MemberType NoteProperty -ErrorAction SilentlyContinue
+    if ($null -eq $member) {
+        return ""
+    }
+
+    $value = $Task.$Name
+    if ($null -eq $value) {
+        return ""
+    }
+
+    return [string]$value
+}
+
+function Read-LaneTasks {
+    $repoRoot = Get-RepositoryRoot
+    $tasksPath = Join-Path $repoRoot ".lane\tasks.json"
+
+    if (-not (Test-Path -LiteralPath $tasksPath)) {
+        return @()
+    }
+
+    $rawTasks = Get-Content -LiteralPath $tasksPath -Raw
+    if ([string]::IsNullOrWhiteSpace($rawTasks)) {
+        return @()
+    }
+
+    $parsedTasks = $rawTasks | ConvertFrom-Json
+    if ($null -eq $parsedTasks) {
+        return @()
+    }
+
+    return @($parsedTasks)
+}
+
+function Show-Board {
+    $tasks = @(Read-LaneTasks)
+
+    if ($tasks.Count -eq 0) {
+        Write-Host "No Lane tasks found."
+        return
+    }
+
+    $knownStatuses = @(
+        "planned",
+        "ready-for-worker",
+        "running",
+        "merged",
+        "done",
+        "blocked"
+    )
+
+    $statuses = @()
+    foreach ($knownStatus in $knownStatuses) {
+        $matchingTasks = @($tasks | Where-Object { (Get-TaskField -Task $_ -Name "status") -eq $knownStatus })
+        if ($matchingTasks.Count -gt 0) {
+            $statuses += $knownStatus
+        }
+    }
+
+    $otherStatuses = @(
+        $tasks |
+            ForEach-Object { Get-TaskField -Task $_ -Name "status" } |
+            Where-Object { -not [string]::IsNullOrWhiteSpace($_) -and ($knownStatuses -notcontains $_) } |
+            Sort-Object -Unique
+    )
+
+    $statuses += $otherStatuses
+
+    $tasksWithoutStatus = @($tasks | Where-Object { [string]::IsNullOrWhiteSpace((Get-TaskField -Task $_ -Name "status")) })
+    if ($tasksWithoutStatus.Count -gt 0) {
+        $statuses += "unknown"
+    }
+
+    foreach ($status in $statuses) {
+        if ($status -eq "unknown") {
+            $groupTasks = $tasksWithoutStatus
+        }
+        else {
+            $groupTasks = @($tasks | Where-Object { (Get-TaskField -Task $_ -Name "status") -eq $status })
+        }
+
+        if ($groupTasks.Count -eq 0) {
+            continue
+        }
+
+        Write-Section $status
+        foreach ($task in $groupTasks) {
+            Write-Host "slug: $((Get-TaskField -Task $task -Name "slug"))"
+            Write-Host "branch: $((Get-TaskField -Task $task -Name "branch"))"
+            Write-Host "worktreePath: $((Get-TaskField -Task $task -Name "worktreePath"))"
+            Write-Host ""
+        }
+    }
 }
 
 function Read-LaneConfig {
@@ -778,6 +880,9 @@ switch ($Command.ToLowerInvariant()) {
     }
     "plan" {
         New-PlanPrompt
+    }
+    "board" {
+        Show-Board
     }
     "onboard" {
         Write-NotImplemented "onboard"
