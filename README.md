@@ -42,6 +42,7 @@ Lane v0 supports:
 .\lane.ps1 task activate <slug>
 .\lane.ps1 task spec <slug>
 .\lane.ps1 task start <slug>
+.\lane.ps1 task run <slug>
 .\lane.ps1 task status
 .\lane.ps1 task merge <slug>
 .\lane.ps1 task cleanup <slug> [--force]
@@ -285,6 +286,21 @@ codex -C <worktreePath> -a never -s workspace-write
 
 It also prints `Read prompt.md and follow it exactly.` Lane does not
 automatically launch Codex.
+
+The task run command reads the matching record from:
+
+```text
+<repo>\.lane\tasks.json
+```
+
+It prints the task slug, worktree path, prompt path, and headless Codex command:
+
+```text
+codex exec -C <worktreePath> -a never -s workspace-write prompt.md
+```
+
+It also prints `This command runs the worker non-interactively.` Lane does not
+execute Codex, change task status, or record metrics.
 
 The task status command reads:
 

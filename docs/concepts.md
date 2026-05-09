@@ -310,6 +310,23 @@ codex -C <worktreePath> -a never -s workspace-write
 The command also tells the operator to read `prompt.md` and follow it exactly.
 It does not automatically launch Codex or run planner automation.
 
+`lane task run <slug>` reads the same metadata file and finds the matching task
+record. It prints:
+
+- task slug
+- worktree path
+- prompt path
+- headless Codex command
+
+The headless Codex command format is:
+
+```text
+codex exec -C <worktreePath> -a never -s workspace-write prompt.md
+```
+
+The command also prints that the worker runs non-interactively. It does not
+execute Codex, update task status, record metrics, or run planner automation.
+
 `lane task cleanup <slug> [--force]` reads the same metadata file and finds the
 matching task record.
 
@@ -347,11 +364,12 @@ Lane is designed around these commands:
 - `lane task activate` creates a task worktree from a vault task spec.
 - `lane task spec` prints a vault-backed task spec by slug.
 - `lane task start` prints the manual Codex start command for a task worktree.
+- `lane task run` prints the headless Codex command for a task worktree.
 - `lane task status` reports task worktree state.
 - `lane task merge` merges a completed task branch back to its base.
 - `lane task cleanup` removes task worktrees after merge.
 
 Lane v0 provides the CLI scaffold, repository initialization, planner prompt
 generation, workspace status, task creation, task status start instructions,
-task reporting, task merge, and task cleanup. Planner automation is deliberately
-out of scope.
+headless task run instructions, task reporting, task merge, and task cleanup.
+Planner automation is deliberately out of scope.
