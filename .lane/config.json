@@ -1,6 +1,6 @@
 {
-    "projectName": "lane",
+    "projectName":  "lane",
     "devRoot":  "C:\\dev",
-    "vaultPath": "C:\\dev\\vaults\\AI-Vault\\10-Projects\\lane",
-    "worktreesRoot":  "C:\\dev\\worktrees"
+    "vaultPath":  "C:\\dev\\vaults\\AI-Vault\\10-Projects\\lane",
+    "worktreesRoot":  "C:\\dev\\worktrees\\active"
 }
