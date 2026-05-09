@@ -25,25 +25,18 @@ function Resolve-DevRoot {
 }
 
 function Get-RepositoryName {
-    $gitCommonDir = (& git rev-parse --git-common-dir 2>$null)
-    if ($LASTEXITCODE -eq 0 -and -not [string]::IsNullOrWhiteSpace($gitCommonDir)) {
-        $gitCommonPath = $gitCommonDir
-        if (-not [System.IO.Path]::IsPathRooted($gitCommonPath)) {
-            $gitCommonPath = Join-Path (Get-Location).Path $gitCommonPath
-        }
-
-        $gitCommonItem = Get-Item -LiteralPath $gitCommonPath
-        if ($gitCommonItem.Name -eq ".git") {
-            return (Split-Path -Leaf (Split-Path -Parent $gitCommonItem.FullName))
-        }
-    }
-
+    $previousErrorActionPreference = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
     $repoRoot = (& git rev-parse --show-toplevel 2>$null)
-    if ($LASTEXITCODE -eq 0 -and -not [string]::IsNullOrWhiteSpace($repoRoot)) {
+    $gitExitCode = $LASTEXITCODE
+    $ErrorActionPreference = $previousErrorActionPreference
+
+    if ($gitExitCode -eq 0 -and -not [string]::IsNullOrWhiteSpace($repoRoot)) {
         return (Split-Path -Leaf $repoRoot)
     }
 
-    return (Split-Path -Leaf (Get-Location).Path)
+    Write-Host "lane task new must be run inside a Git repository." -ForegroundColor Red
+    exit 1
 }
 
 function Write-Section {
