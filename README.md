@@ -39,6 +39,7 @@ Lane v0 supports:
 .\lane.ps1 board
 .\lane.ps1 status [-DevRoot <path>]
 .\lane.ps1 task new <slug> [-DevRoot <path>]
+.\lane.ps1 task activate <slug>
 .\lane.ps1 task spec <slug>
 .\lane.ps1 task start <slug>
 .\lane.ps1 task status
@@ -209,6 +210,48 @@ and records task metadata in the source repository at:
 
 Each task record includes the slug, branch, worktree path, prompt path, status,
 and creation timestamp. New tasks start with `ready-for-worker` status.
+
+The task activate command reads:
+
+```text
+<repo>\.lane\config.json
+```
+
+It uses `vaultPath`, `worktreesRoot`, and `projectName` from that config. For
+the requested slug, Lane reads the durable vault task spec from:
+
+```text
+<vaultPath>\tasks\<slug>.md
+```
+
+Then it creates a Git worktree at:
+
+```text
+<worktreesRoot>\<projectName>-<slug>
+```
+
+and creates the matching branch:
+
+```text
+task/<slug>
+```
+
+Lane copies the vault task spec contents into:
+
+```text
+<worktreePath>\prompt.md
+```
+
+The original vault task spec is not modified or deleted. Lane records runtime
+metadata in:
+
+```text
+<repo>\.lane\tasks.json
+```
+
+Each activated task record includes the slug, branch, worktree path, prompt
+path, spec path, status, and creation timestamp. Activated tasks start with
+`ready-for-worker` status. This command does not launch Codex or run the task.
 
 The task spec command reads:
 

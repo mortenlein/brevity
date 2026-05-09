@@ -226,10 +226,41 @@ Each record includes:
 - `branch`
 - `worktreePath`
 - `promptPath`
+- `specPath`
 - `status`
 - `createdAt`
 
 New task records use `ready-for-worker` status.
+
+`lane task activate <slug>` is the vault-backed task creation flow. It reads
+`.lane\config.json` and uses:
+
+- `vaultPath`
+- `worktreesRoot`
+- `projectName`
+
+Lane reads the planned task spec from:
+
+```text
+<vaultPath>\tasks\<slug>.md
+```
+
+It creates branch `task/<slug>` and a worktree at:
+
+```text
+<worktreesRoot>\<projectName>-<slug>
+```
+
+The task spec contents are copied into:
+
+```text
+<worktreePath>\prompt.md
+```
+
+The vault task spec remains unchanged. Lane records runtime metadata in
+`.lane\tasks.json`, including `specPath`, and sets the task status to
+`ready-for-worker`. The command does not launch Codex and does not run worker
+automation.
 
 `lane board` reads the same metadata file and groups tasks by status. It shows
 groups when matching tasks are present, including:
@@ -313,6 +344,7 @@ Lane is designed around these commands:
 - `lane onboard` prepares an existing repo and AI-Vault project memory.
 - `lane status` reports repos, worktrees, and vault presence.
 - `lane task new` creates an isolated worktree and task branch.
+- `lane task activate` creates a task worktree from a vault task spec.
 - `lane task spec` prints a vault-backed task spec by slug.
 - `lane task start` prints the manual Codex start command for a task worktree.
 - `lane task status` reports task worktree state.

@@ -239,6 +239,7 @@ function Show-Help {
     Write-Host "  .\lane.ps1 board"
     Write-Host "  .\lane.ps1 status [-DevRoot <path>]"
     Write-Host "  .\lane.ps1 task new <slug> [-DevRoot <path>]"
+    Write-Host "  .\lane.ps1 task activate <slug>"
     Write-Host "  .\lane.ps1 task spec <slug>"
     Write-Host "  .\lane.ps1 task start <slug>"
     Write-Host "  .\lane.ps1 task status"
@@ -419,6 +420,26 @@ function Read-LaneConfig {
 
     if ([string]::IsNullOrWhiteSpace($config.vaultPath)) {
         Write-Host "Lane config vaultPath is empty: $configPath" -ForegroundColor Red
+        exit 1
+    }
+
+    if (-not (Get-Member -InputObject $config -Name "worktreesRoot" -MemberType NoteProperty)) {
+        Write-Host "Lane config is missing worktreesRoot: $configPath" -ForegroundColor Red
+        exit 1
+    }
+
+    if ([string]::IsNullOrWhiteSpace($config.worktreesRoot)) {
+        Write-Host "Lane config worktreesRoot is empty: $configPath" -ForegroundColor Red
+        exit 1
+    }
+
+    if (-not (Get-Member -InputObject $config -Name "projectName" -MemberType NoteProperty)) {
+        Write-Host "Lane config is missing projectName: $configPath" -ForegroundColor Red
+        exit 1
+    }
+
+    if ([string]::IsNullOrWhiteSpace($config.projectName)) {
+        Write-Host "Lane config projectName is empty: $configPath" -ForegroundColor Red
         exit 1
     }
 
@@ -666,7 +687,8 @@ function Add-TaskMetadata {
         [string]$Slug,
         [string]$Branch,
         [string]$WorktreePath,
-        [string]$PromptPath
+        [string]$PromptPath,
+        [string]$SpecPath = ""
     )
 
     $laneRoot = Join-Path $RepoRoot ".lane"
@@ -691,6 +713,7 @@ function Add-TaskMetadata {
         branch = $Branch
         worktreePath = $WorktreePath
         promptPath = $PromptPath
+        specPath = $SpecPath
         status = "ready-for-worker"
         createdAt = (Get-Date).ToUniversalTime().ToString("o")
     })
@@ -1078,6 +1101,61 @@ function New-TaskWorktree {
     Write-Host "Metadata: $(Join-Path $repoRoot ".lane\tasks.json")"
 }
 
+function Activate-TaskWorktree {
+    param([string]$Slug)
+
+    if ([string]::IsNullOrWhiteSpace($Slug)) {
+        Write-Host "Missing task slug." -ForegroundColor Red
+        Write-Host "Usage: .\lane.ps1 task activate <slug>"
+        exit 1
+    }
+
+    $repoRoot = Get-RepositoryRoot
+    $config = Read-LaneConfig
+    $specPath = Join-Path (Join-Path $config.vaultPath "tasks") "$Slug.md"
+
+    if (-not (Test-Path -LiteralPath $specPath)) {
+        Write-Host "Vault task spec not found: $Slug" -ForegroundColor Red
+        Write-Host "Expected path: $specPath"
+        exit 1
+    }
+
+    $worktreePath = Join-Path $config.worktreesRoot "$($config.projectName)-$Slug"
+    $branchName = "task/$Slug"
+    $promptPath = Join-Path $worktreePath "prompt.md"
+
+    if (Test-Path -LiteralPath $worktreePath) {
+        Write-Host "Task worktree already exists: $worktreePath" -ForegroundColor Red
+        exit 1
+    }
+
+    if (Test-GitBranchExists -Branch $branchName) {
+        Write-Host "Task branch already exists: $branchName" -ForegroundColor Red
+        exit 1
+    }
+
+    if (-not (Test-Path -LiteralPath $config.worktreesRoot)) {
+        New-Item -ItemType Directory -Path $config.worktreesRoot -Force | Out-Null
+    }
+
+    git worktree add $worktreePath -b $branchName
+    if ($LASTEXITCODE -ne 0) {
+        exit $LASTEXITCODE
+    }
+
+    $specContents = Get-Content -LiteralPath $specPath -Raw
+    Set-Content -LiteralPath $promptPath -Value $specContents -Encoding ASCII
+    Add-TaskMetadata -RepoRoot $repoRoot -Slug $Slug -Branch $branchName -WorktreePath $worktreePath -PromptPath $promptPath -SpecPath $specPath
+
+    Write-Host "Activated task worktree"
+    Write-Host "Slug: $Slug"
+    Write-Host "Path: $worktreePath"
+    Write-Host "Branch: $branchName"
+    Write-Host "Prompt: $promptPath"
+    Write-Host "Spec: $specPath"
+    Write-Host "Metadata: $(Join-Path $repoRoot ".lane\tasks.json")"
+}
+
 switch ($Command.ToLowerInvariant()) {
     "help" {
         Show-Help
@@ -1149,6 +1227,17 @@ switch ($Command.ToLowerInvariant()) {
                 }
 
                 New-TaskWorktree -Root $DevRoot -Slug $taskSlug
+            }
+            "activate" {
+                $taskSlug = $null
+                if ($null -ne $RemainingArgs) {
+                    foreach ($taskArg in $RemainingArgs) {
+                        $taskSlug = [string]$taskArg
+                        break
+                    }
+                }
+
+                Activate-TaskWorktree -Slug $taskSlug
             }
             "spec" {
                 $taskSlug = $null
