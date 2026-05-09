@@ -309,6 +309,7 @@ function Show-Help {
     Write-Host "  .\lane.ps1 init --repair [-DevRoot <path>]"
     Write-Host "  .\lane.ps1 plan"
     Write-Host "  .\lane.ps1 plan backlog"
+    Write-Host "  .\lane.ps1 plan apply <file>"
     Write-Host "  .\lane.ps1 board"
     Write-Host "  .\lane.ps1 status [-DevRoot <path>]"
     Write-Host "  .\lane.ps1 task new <slug> [-DevRoot <path>]"
@@ -623,6 +624,214 @@ function New-BacklogPlanPrompt {
 
     Write-Host "Backlog planner prompt: $promptPath"
     Write-Host "Open Codex in this repo and paste the backlog planner prompt."
+}
+
+function Get-PlannerFieldValue {
+    param(
+        [object]$Task,
+        [string]$Name
+    )
+
+    $member = Get-Member -InputObject $Task -Name $Name -MemberType NoteProperty -ErrorAction SilentlyContinue
+    if ($null -eq $member) {
+        return ""
+    }
+
+    $value = $Task.$Name
+    if ($null -eq $value) {
+        return ""
+    }
+
+    return ([string]$value).Trim()
+}
+
+function Test-PlannerFieldLine {
+    param(
+        [string]$Line,
+        [ref]$Name,
+        [ref]$Value
+    )
+
+    if ($Line -match '^\s*(?:[-*]\s*)?(title|slug|status|dependencies|workerPrompt)\s*:\s*(.*)$') {
+        $Name.Value = $matches[1]
+        $Value.Value = $matches[2]
+        return $true
+    }
+
+    return $false
+}
+
+function Add-PlannerTask {
+    param(
+        [object[]]$Tasks,
+        [object]$CurrentTask,
+        [string]$CurrentField,
+        [string[]]$FieldLines
+    )
+
+    if ($null -eq $CurrentTask) {
+        return @($Tasks)
+    }
+
+    if (-not [string]::IsNullOrWhiteSpace($CurrentField)) {
+        Set-ConfigField -Config $CurrentTask -Name $CurrentField -Value (($FieldLines -join "`r`n").Trim())
+    }
+
+    return @($Tasks) + $CurrentTask
+}
+
+function Read-PlannerOutputTasks {
+    param([string]$Path)
+
+    if ([string]::IsNullOrWhiteSpace($Path)) {
+        Write-Host "Missing planner output file." -ForegroundColor Red
+        Write-Host "Usage: .\lane.ps1 plan apply <file>"
+        exit 1
+    }
+
+    if (-not (Test-Path -LiteralPath $Path)) {
+        Write-Host "Planner output file not found: $Path" -ForegroundColor Red
+        exit 1
+    }
+
+    $lines = Get-Content -LiteralPath $Path
+    $tasks = @()
+    $currentTask = $null
+    $currentField = ""
+    $fieldLines = @()
+
+    foreach ($line in $lines) {
+        $fieldName = ""
+        $fieldValue = ""
+        if (Test-PlannerFieldLine -Line $line -Name ([ref]$fieldName) -Value ([ref]$fieldValue)) {
+            if ($fieldName -eq "title") {
+                $tasks = Add-PlannerTask -Tasks $tasks -CurrentTask $currentTask -CurrentField $currentField -FieldLines $fieldLines
+                $currentTask = New-Object PSObject -Property ([ordered]@{
+                    title = ""
+                    slug = ""
+                    status = ""
+                    dependencies = ""
+                    workerPrompt = ""
+                })
+            }
+            elseif ($null -eq $currentTask) {
+                Write-Host "Planner output has field before title: $fieldName" -ForegroundColor Red
+                exit 1
+            }
+            elseif (-not [string]::IsNullOrWhiteSpace($currentField)) {
+                Set-ConfigField -Config $currentTask -Name $currentField -Value (($fieldLines -join "`r`n").Trim())
+            }
+
+            $currentField = $fieldName
+            $fieldLines = @($fieldValue)
+        }
+        elseif ($null -ne $currentTask -and -not [string]::IsNullOrWhiteSpace($currentField)) {
+            $fieldLines += $line
+        }
+    }
+
+    $tasks = Add-PlannerTask -Tasks $tasks -CurrentTask $currentTask -CurrentField $currentField -FieldLines $fieldLines
+    return @($tasks)
+}
+
+function Write-VaultTaskSpec {
+    param(
+        [string]$TasksRoot,
+        [object]$Task
+    )
+
+    $title = Get-PlannerFieldValue -Task $Task -Name "title"
+    $slug = Get-PlannerFieldValue -Task $Task -Name "slug"
+    $status = Get-PlannerFieldValue -Task $Task -Name "status"
+    $dependencies = Get-PlannerFieldValue -Task $Task -Name "dependencies"
+    $workerPrompt = Get-PlannerFieldValue -Task $Task -Name "workerPrompt"
+
+    if ([string]::IsNullOrWhiteSpace($title)) {
+        throw "Planner task is missing title."
+    }
+
+    if ([string]::IsNullOrWhiteSpace($slug)) {
+        throw "Planner task '$title' is missing slug."
+    }
+
+    if ($slug -notmatch '^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$') {
+        throw "Planner task '$title' has invalid slug '$slug'. Use lowercase letters, numbers, and hyphens."
+    }
+
+    if ($status -ne "planned") {
+        throw "Planner task '$slug' must have status: planned."
+    }
+
+    if ([string]::IsNullOrWhiteSpace($dependencies)) {
+        throw "Planner task '$slug' is missing dependencies."
+    }
+
+    if ([string]::IsNullOrWhiteSpace($workerPrompt)) {
+        throw "Planner task '$slug' is missing workerPrompt."
+    }
+
+    if ($workerPrompt.StartsWith("|")) {
+        $workerPrompt = $workerPrompt.Substring(1).Trim()
+    }
+
+    if (-not (Test-Path -LiteralPath $TasksRoot)) {
+        New-Item -ItemType Directory -Path $TasksRoot -Force | Out-Null
+    }
+
+    $specPath = Join-Path $TasksRoot "$slug.md"
+    if (Test-Path -LiteralPath $specPath) {
+        throw "Vault task spec already exists: $specPath"
+    }
+
+    $specLines = @(
+        "# Task: $title",
+        "",
+        "## Slug",
+        "",
+        $slug,
+        "",
+        "## Status",
+        "",
+        $status,
+        "",
+        "## Dependencies",
+        "",
+        $dependencies,
+        "",
+        "## Worker Prompt",
+        "",
+        $workerPrompt.Trim()
+    )
+
+    Set-Content -LiteralPath $specPath -Value $specLines -Encoding ASCII
+    return $specPath
+}
+
+function Apply-PlannerOutput {
+    param([string]$Path)
+
+    $config = Read-LaneConfig
+    $tasksRoot = Join-Path $config.vaultPath "tasks"
+    $tasks = @(Read-PlannerOutputTasks -Path $Path)
+
+    if ($tasks.Count -eq 0) {
+        Write-Host "Planner output did not contain any tasks." -ForegroundColor Red
+        exit 1
+    }
+
+    $written = @()
+    try {
+        foreach ($task in $tasks) {
+            $written += Write-VaultTaskSpec -TasksRoot $tasksRoot -Task $task
+        }
+    }
+    catch {
+        Write-Host $_.Exception.Message -ForegroundColor Red
+        exit 1
+    }
+
+    Write-Host "Created vault task specs:"
+    $written | ForEach-Object { Write-Host $_ }
 }
 
 function Write-TaskPrompt {
@@ -1451,6 +1660,17 @@ switch ($Command.ToLowerInvariant()) {
         }
         elseif ($Subcommand.ToLowerInvariant() -eq "backlog") {
             New-BacklogPlanPrompt
+        }
+        elseif ($Subcommand.ToLowerInvariant() -eq "apply") {
+            $plannerOutputPath = $null
+            if ($null -ne $RemainingArgs) {
+                foreach ($planArg in $RemainingArgs) {
+                    $plannerOutputPath = [string]$planArg
+                    break
+                }
+            }
+
+            Apply-PlannerOutput -Path $plannerOutputPath
         }
         else {
             Write-Host "Unknown lane plan command: $Subcommand" -ForegroundColor Red

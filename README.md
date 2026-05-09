@@ -36,6 +36,7 @@ Lane v0 supports:
 .\lane.ps1 init --repair [-DevRoot <path>]
 .\lane.ps1 plan
 .\lane.ps1 plan backlog
+.\lane.ps1 plan apply <file>
 .\lane.ps1 board
 .\lane.ps1 status [-DevRoot <path>]
 .\lane.ps1 task new <slug> [-DevRoot <path>]
@@ -141,12 +142,36 @@ After writing the backlog prompt, Lane prints the prompt path and:
 Open Codex in this repo and paste the backlog planner prompt.
 ```
 
-Lane does not parse planner output, create tasks from the backlog, implement a
+The backlog prompt command does not create tasks from the backlog, implement a
 TUI, or launch Codex. Planned backlog work belongs in Markdown files under:
 
 ```text
 <vaultPath>\tasks\
 ```
+
+The plan apply command reads a structured planner output Markdown file and
+creates durable task specs under:
+
+```text
+<vaultPath>\tasks\
+```
+
+Planner output tasks must use these fields:
+
+```text
+- title: Example task
+- slug: example-task
+- status: planned
+- dependencies: []
+- workerPrompt: Read AGENTS.md.
+  Do one small bounded task.
+  Stop after patch + summary.
+```
+
+Lane validates required fields, requires `status: planned`, writes readable
+Markdown task specs, and refuses to overwrite existing task specs. It does not
+activate worktrees, launch Codex, merge branches, or change runtime task
+metadata.
 
 The board command reads:
 
