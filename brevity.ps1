@@ -219,10 +219,12 @@ function Get-DefaultCodexConfig {
 function Get-DefaultGeminiConfig {
     return (New-Object PSObject -Property ([ordered]@{
         command = "gemini"
-        model = $null
-        approvalMode = $null
-        skipTrust = $false
-        env = New-Object PSObject
+        model = "gemini-2.5-pro"
+        approvalMode = "yolo"
+        skipTrust = $true
+        env = New-Object PSObject -Property ([ordered]@{
+            GEMINI_API_KEY = "GEMINI_API_KEY"
+        })
     }))
 }
 
@@ -305,7 +307,7 @@ function Repair-ProviderConfigDefaults {
         [object[]]$Results
     )
 
-    $defaultProvider = "codex"
+    $defaultProvider = "gemini"
     if (Get-Member -InputObject $Config -Name "codex" -MemberType NoteProperty -ErrorAction SilentlyContinue) {
         $legacyCodexForProvider = $Config.codex
         if ($null -ne $legacyCodexForProvider -and (Get-Member -InputObject $legacyCodexForProvider -Name "provider" -MemberType NoteProperty -ErrorAction SilentlyContinue)) {
@@ -999,7 +1001,7 @@ function Initialize-BrevityRepository {
             devRoot = $rootPath
             vaultPath = $vaultPath
             worktreesRoot = $worktreesRoot
-            defaultProvider = "codex"
+            defaultProvider = "gemini"
             providers = Get-DefaultProvidersConfig
         })
         $configLines = @(ConvertTo-Json -InputObject $config -Depth 10)
@@ -2129,6 +2131,8 @@ switch ($Command.ToLowerInvariant()) {
         exit 1
     }
 }
+
+
 
 
 
