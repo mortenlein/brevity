@@ -176,7 +176,6 @@ function Set-ConfigField {
 
 function Get-DefaultCodexConfig {
     return (New-Object PSObject -Property ([ordered]@{
-        provider = "codex"
         command = "codex"
         mode = "exec"
         sandbox = "workspace-write"
@@ -189,14 +188,15 @@ function Get-DefaultCodexConfig {
 
 function Get-DefaultGeminiConfig {
     return (New-Object PSObject -Property ([ordered]@{
-        provider = "gemini"
         command = "gemini"
-        mode = $null
-        sandbox = "workspace-write"
         model = $null
-        profile = $null
-        executionPolicy = "Bypass"
-        autoExecute = $false
+    }))
+}
+
+function Get-DefaultProvidersConfig {
+    return (New-Object PSObject -Property ([ordered]@{
+        codex = Get-DefaultCodexConfig
+        gemini = Get-DefaultGeminiConfig
     }))
 }
 
@@ -243,45 +243,78 @@ function Repair-ConfigObjectField {
     return Add-RepairFieldResult -Results $Results -Status "unchanged" -Name $Name -OldValue $oldValue -NewValue "[object]"
 }
 
-function Repair-CodexConfigField {
+function Repair-ProviderConfigField {
     param(
-        [object]$CodexConfig,
+        [object]$ProviderConfig,
         [object[]]$Results,
+        [string]$ProviderName,
         [string]$Name,
         [object]$ExpectedValue
     )
 
-    $member = Get-Member -InputObject $CodexConfig -Name $Name -MemberType NoteProperty -ErrorAction SilentlyContinue
+    $member = Get-Member -InputObject $ProviderConfig -Name $Name -MemberType NoteProperty -ErrorAction SilentlyContinue
     $oldValue = $null
     if ($null -ne $member) {
-        $oldValue = $CodexConfig.$Name
+        $oldValue = $ProviderConfig.$Name
     }
 
     if ($null -ne $member) {
-        return Add-RepairFieldResult -Results $Results -Status "unchanged" -Name "codex.$Name" -OldValue $oldValue -NewValue $oldValue
+        return Add-RepairFieldResult -Results $Results -Status "unchanged" -Name "providers.$ProviderName.$Name" -OldValue $oldValue -NewValue $oldValue
     }
 
-    Set-ConfigField -Config $CodexConfig -Name $Name -Value $ExpectedValue
-    return Add-RepairFieldResult -Results $Results -Status "repaired" -Name "codex.$Name" -OldValue $oldValue -NewValue $ExpectedValue
+    Set-ConfigField -Config $ProviderConfig -Name $Name -Value $ExpectedValue
+    return Add-RepairFieldResult -Results $Results -Status "repaired" -Name "providers.$ProviderName.$Name" -OldValue $oldValue -NewValue $ExpectedValue
 }
 
-function Repair-CodexConfigDefaults {
+function Repair-ProviderConfigDefaults {
     param(
         [object]$Config,
         [object[]]$Results
     )
 
-    $Results = Repair-ConfigObjectField -Config $Config -Results $Results -Name "codex"
-    $defaults = Get-DefaultCodexConfig
+    $defaultProvider = "codex"
+    if (Get-Member -InputObject $Config -Name "codex" -MemberType NoteProperty -ErrorAction SilentlyContinue) {
+        $legacyCodexForProvider = $Config.codex
+        if ($null -ne $legacyCodexForProvider -and (Get-Member -InputObject $legacyCodexForProvider -Name "provider" -MemberType NoteProperty -ErrorAction SilentlyContinue)) {
+            $legacyProvider = ([string]$legacyCodexForProvider.provider).ToLowerInvariant()
+            if ($legacyProvider -eq "codex" -or $legacyProvider -eq "gemini") {
+                $defaultProvider = $legacyProvider
+            }
+        }
+    }
 
-    $Results = Repair-CodexConfigField -CodexConfig $Config.codex -Results $Results -Name "provider" -ExpectedValue $defaults.provider
-    $Results = Repair-CodexConfigField -CodexConfig $Config.codex -Results $Results -Name "command" -ExpectedValue $defaults.command
-    $Results = Repair-CodexConfigField -CodexConfig $Config.codex -Results $Results -Name "mode" -ExpectedValue $defaults.mode
-    $Results = Repair-CodexConfigField -CodexConfig $Config.codex -Results $Results -Name "sandbox" -ExpectedValue $defaults.sandbox
-    $Results = Repair-CodexConfigField -CodexConfig $Config.codex -Results $Results -Name "model" -ExpectedValue $defaults.model
-    $Results = Repair-CodexConfigField -CodexConfig $Config.codex -Results $Results -Name "profile" -ExpectedValue $defaults.profile
-    $Results = Repair-CodexConfigField -CodexConfig $Config.codex -Results $Results -Name "executionPolicy" -ExpectedValue $defaults.executionPolicy
-    $Results = Repair-CodexConfigField -CodexConfig $Config.codex -Results $Results -Name "autoExecute" -ExpectedValue $defaults.autoExecute
+    $Results = Repair-ConfigField -Config $Config -Results $Results -Name "defaultProvider" -ExpectedValue $defaultProvider
+    $Results = Repair-ConfigObjectField -Config $Config -Results $Results -Name "providers"
+    $Results = Repair-ConfigObjectField -Config $Config.providers -Results $Results -Name "codex"
+    $Results = Repair-ConfigObjectField -Config $Config.providers -Results $Results -Name "gemini"
+
+    if (Get-Member -InputObject $Config -Name "codex" -MemberType NoteProperty -ErrorAction SilentlyContinue) {
+        $legacyCodex = $Config.codex
+        if ($null -ne $legacyCodex -and $legacyCodex -is [System.Management.Automation.PSCustomObject]) {
+            foreach ($legacyField in @($legacyCodex.PSObject.Properties.Name)) {
+                if ($legacyField -eq "provider") {
+                    continue
+                }
+
+                if (-not (Get-Member -InputObject $Config.providers.codex -Name $legacyField -MemberType NoteProperty -ErrorAction SilentlyContinue)) {
+                    Set-ConfigField -Config $Config.providers.codex -Name $legacyField -Value $legacyCodex.$legacyField
+                }
+            }
+        }
+    }
+
+    $codexDefaults = Get-DefaultCodexConfig
+    $geminiDefaults = Get-DefaultGeminiConfig
+
+    $Results = Repair-ProviderConfigField -ProviderConfig $Config.providers.codex -Results $Results -ProviderName "codex" -Name "command" -ExpectedValue $codexDefaults.command
+    $Results = Repair-ProviderConfigField -ProviderConfig $Config.providers.codex -Results $Results -ProviderName "codex" -Name "mode" -ExpectedValue $codexDefaults.mode
+    $Results = Repair-ProviderConfigField -ProviderConfig $Config.providers.codex -Results $Results -ProviderName "codex" -Name "sandbox" -ExpectedValue $codexDefaults.sandbox
+    $Results = Repair-ProviderConfigField -ProviderConfig $Config.providers.codex -Results $Results -ProviderName "codex" -Name "model" -ExpectedValue $codexDefaults.model
+    $Results = Repair-ProviderConfigField -ProviderConfig $Config.providers.codex -Results $Results -ProviderName "codex" -Name "profile" -ExpectedValue $codexDefaults.profile
+    $Results = Repair-ProviderConfigField -ProviderConfig $Config.providers.codex -Results $Results -ProviderName "codex" -Name "executionPolicy" -ExpectedValue $codexDefaults.executionPolicy
+    $Results = Repair-ProviderConfigField -ProviderConfig $Config.providers.codex -Results $Results -ProviderName "codex" -Name "autoExecute" -ExpectedValue $codexDefaults.autoExecute
+    $Results = Repair-ProviderConfigField -ProviderConfig $Config.providers.gemini -Results $Results -ProviderName "gemini" -Name "command" -ExpectedValue $geminiDefaults.command
+    $Results = Repair-ProviderConfigField -ProviderConfig $Config.providers.gemini -Results $Results -ProviderName "gemini" -Name "model" -ExpectedValue $geminiDefaults.model
 
     return $Results
 }
@@ -912,7 +945,7 @@ function Initialize-LaneRepository {
         $fieldResults = Repair-ConfigField -Config $config -Results $fieldResults -Name "devRoot" -ExpectedValue $rootPath
         $fieldResults = Repair-ConfigField -Config $config -Results $fieldResults -Name "vaultPath" -ExpectedValue $vaultPath
         $fieldResults = Repair-ConfigField -Config $config -Results $fieldResults -Name "worktreesRoot" -ExpectedValue $worktreesRoot
-        $fieldResults = Repair-CodexConfigDefaults -Config $config -Results $fieldResults
+        $fieldResults = Repair-ProviderConfigDefaults -Config $config -Results $fieldResults
 
         $configLines = @(ConvertTo-Json -InputObject $config -Depth 10)
         if (Test-Path -LiteralPath $configPath) {
@@ -930,7 +963,8 @@ function Initialize-LaneRepository {
             devRoot = $rootPath
             vaultPath = $vaultPath
             worktreesRoot = $worktreesRoot
-            codex = Get-DefaultCodexConfig
+            defaultProvider = "codex"
+            providers = Get-DefaultProvidersConfig
         })
         $configLines = @(ConvertTo-Json -InputObject $config -Depth 10)
         $results = Ensure-File -Path $configPath -Lines $configLines -Results $results
@@ -1137,77 +1171,94 @@ function Start-TaskWork {
 function Get-CodexRunConfig {
     param([object]$Config)
 
-    $defaults = Get-DefaultCodexConfig
-    $configuredCodex = $null
-
-    if (Get-Member -InputObject $Config -Name "codex" -MemberType NoteProperty -ErrorAction SilentlyContinue) {
-        $configuredCodex = $Config.codex
+    $provider = "codex"
+    if (Get-Member -InputObject $Config -Name "defaultProvider" -MemberType NoteProperty -ErrorAction SilentlyContinue) {
+        $provider = $Config.defaultProvider
     }
-
-    $provider = $defaults.provider
-    $command = $defaults.command
-    $mode = $defaults.mode
-    $sandbox = $defaults.sandbox
-    $model = $defaults.model
-    $profile = $defaults.profile
-    $executionPolicy = $defaults.executionPolicy
-
-    if ($null -ne $configuredCodex) {
-        if (Get-Member -InputObject $configuredCodex -Name "provider" -MemberType NoteProperty -ErrorAction SilentlyContinue) {
-            $provider = $configuredCodex.provider
-        }
-
-        if (Get-Member -InputObject $configuredCodex -Name "command" -MemberType NoteProperty -ErrorAction SilentlyContinue) {
-            $command = $configuredCodex.command
-        }
-
-        if (Get-Member -InputObject $configuredCodex -Name "mode" -MemberType NoteProperty -ErrorAction SilentlyContinue) {
-            $mode = $configuredCodex.mode
-        }
-
-        if (Get-Member -InputObject $configuredCodex -Name "sandbox" -MemberType NoteProperty -ErrorAction SilentlyContinue) {
-            $sandbox = $configuredCodex.sandbox
-        }
-
-        if (Get-Member -InputObject $configuredCodex -Name "model" -MemberType NoteProperty -ErrorAction SilentlyContinue) {
-            $model = $configuredCodex.model
-        }
-
-        if (Get-Member -InputObject $configuredCodex -Name "profile" -MemberType NoteProperty -ErrorAction SilentlyContinue) {
-            $profile = $configuredCodex.profile
-        }
-
-        if (Get-Member -InputObject $configuredCodex -Name "executionPolicy" -MemberType NoteProperty -ErrorAction SilentlyContinue) {
-            $executionPolicy = $configuredCodex.executionPolicy
+    elseif (Get-Member -InputObject $Config -Name "codex" -MemberType NoteProperty -ErrorAction SilentlyContinue) {
+        $legacyCodex = $Config.codex
+        if ($null -ne $legacyCodex -and (Get-Member -InputObject $legacyCodex -Name "provider" -MemberType NoteProperty -ErrorAction SilentlyContinue)) {
+            $provider = $legacyCodex.provider
         }
     }
 
     if ([string]::IsNullOrWhiteSpace($provider)) {
-        $provider = $defaults.provider
+        $provider = "codex"
     }
 
     $normalizedProvider = ([string]$provider).ToLowerInvariant()
+    $providerDefaults = $null
     if ($normalizedProvider -eq "gemini") {
-        $defaults = Get-DefaultGeminiConfig
+        $providerDefaults = Get-DefaultGeminiConfig
     }
-    elseif ($normalizedProvider -ne "codex") {
+    elseif ($normalizedProvider -eq "codex") {
+        $providerDefaults = Get-DefaultCodexConfig
+    }
+    else {
         throw "Unsupported worker provider: $provider. Lane v0 supports providers 'codex' and 'gemini'."
     }
 
+    $providerConfig = $null
+    if (Get-Member -InputObject $Config -Name "providers" -MemberType NoteProperty -ErrorAction SilentlyContinue) {
+        if ($null -ne $Config.providers -and (Get-Member -InputObject $Config.providers -Name $normalizedProvider -MemberType NoteProperty -ErrorAction SilentlyContinue)) {
+            $providerConfig = $Config.providers.$normalizedProvider
+        }
+    }
+
+    if ($null -eq $providerConfig -and $normalizedProvider -eq "codex" -and (Get-Member -InputObject $Config -Name "codex" -MemberType NoteProperty -ErrorAction SilentlyContinue)) {
+        $providerConfig = $Config.codex
+    }
+
+    if ($null -eq $providerConfig) {
+        $providerConfig = New-Object PSObject
+    }
+
+    $command = $providerDefaults.command
+    $mode = $null
+    $sandbox = $null
+    $model = $null
+    $profile = $null
+    $executionPolicy = $null
+
+    if (Get-Member -InputObject $providerDefaults -Name "mode" -MemberType NoteProperty -ErrorAction SilentlyContinue) {
+        $mode = $providerDefaults.mode
+    }
+    if (Get-Member -InputObject $providerDefaults -Name "sandbox" -MemberType NoteProperty -ErrorAction SilentlyContinue) {
+        $sandbox = $providerDefaults.sandbox
+    }
+    if (Get-Member -InputObject $providerDefaults -Name "profile" -MemberType NoteProperty -ErrorAction SilentlyContinue) {
+        $profile = $providerDefaults.profile
+    }
+    if (Get-Member -InputObject $providerDefaults -Name "executionPolicy" -MemberType NoteProperty -ErrorAction SilentlyContinue) {
+        $executionPolicy = $providerDefaults.executionPolicy
+    }
+
+    foreach ($fieldName in @("command", "mode", "sandbox", "model", "profile", "executionPolicy")) {
+        if (Get-Member -InputObject $providerConfig -Name $fieldName -MemberType NoteProperty -ErrorAction SilentlyContinue) {
+            Set-Variable -Name $fieldName -Value $providerConfig.$fieldName
+        }
+    }
+
     if ([string]::IsNullOrWhiteSpace($command)) {
-        $command = $defaults.command
+        $command = $providerDefaults.command
     }
 
     if ([string]::IsNullOrWhiteSpace($mode)) {
-        $mode = $defaults.mode
+        if (Get-Member -InputObject $providerDefaults -Name "mode" -MemberType NoteProperty -ErrorAction SilentlyContinue) {
+            $mode = $providerDefaults.mode
+        }
     }
 
     if ([string]::IsNullOrWhiteSpace($sandbox)) {
-        $sandbox = $defaults.sandbox
+        if (Get-Member -InputObject $providerDefaults -Name "sandbox" -MemberType NoteProperty -ErrorAction SilentlyContinue) {
+            $sandbox = $providerDefaults.sandbox
+        }
     }
 
     if ([string]::IsNullOrWhiteSpace($executionPolicy)) {
-        $executionPolicy = $defaults.executionPolicy
+        if (Get-Member -InputObject $providerDefaults -Name "executionPolicy" -MemberType NoteProperty -ErrorAction SilentlyContinue) {
+            $executionPolicy = $providerDefaults.executionPolicy
+        }
     }
 
     return (New-Object PSObject -Property ([ordered]@{
@@ -1376,6 +1427,7 @@ function Show-TaskRun {
     Write-Host "Task: $($task.slug)"
     Write-Host "Worktree: $($task.worktreePath)"
     Write-Host "Prompt: $($task.promptPath)"
+    Write-Host "Provider: $($codexCommand.provider)"
     Write-Host "Worker: $($codexCommand.display)"
     if (-not [string]::IsNullOrWhiteSpace($codexCommand.executionPolicy)) {
         Write-Host "ExecutionPolicy (worker process): $($codexCommand.executionPolicy)"

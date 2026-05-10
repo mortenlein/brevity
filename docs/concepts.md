@@ -54,7 +54,8 @@ specs, not in `.lane\tasks.json`.
 - `devRoot`
 - `vaultPath`
 - `worktreesRoot`
-- `codex`
+- `defaultProvider`
+- `providers`
 
 For new configs, `worktreesRoot` points at:
 
@@ -66,25 +67,31 @@ New configs also include worker run settings:
 
 ```json
 {
-  "codex": {
-    "provider": "codex",
-    "command": "codex",
-    "mode": "exec",
-    "sandbox": "workspace-write",
-    "model": null,
-    "profile": null,
-    "executionPolicy": "Bypass",
-    "autoExecute": false
+  "defaultProvider": "codex",
+  "providers": {
+    "codex": {
+      "command": "codex",
+      "mode": "exec",
+      "sandbox": "workspace-write",
+      "model": null,
+      "profile": null,
+      "executionPolicy": "Bypass",
+      "autoExecute": false
+    },
+    "gemini": {
+      "command": "gemini",
+      "model": null
+    }
   }
 }
 ```
 
 Existing files are left unchanged by normal init.
 
-Set `codex.provider` to `gemini` to run Gemini CLI instead of Codex. Lane keeps
-the existing config object name for compatibility. With Gemini, Lane passes the
-task prompt text with `-p`, passes `-m <model>` when configured, and passes `-s`
-when sandbox is not blank or `none`.
+Set top-level `defaultProvider` to `gemini` to run Gemini CLI instead of Codex.
+Lane reads settings from `providers.<name>`. With Gemini, Lane passes the task
+prompt text with `-p`, passes `-m <model>` when configured, and passes `-s`
+when sandbox is configured and not `none`.
 
 `lane init --repair [-DevRoot <path>]` is the corrective init mode. It
 re-detects `projectName` from the Git repository root folder and recomputes:
@@ -96,8 +103,8 @@ If `.lane\config.json` is missing, repair mode creates it. If it exists, repair
 mode updates the known Lane fields only when they are wrong and preserves
 unknown or custom fields. It also creates the same missing `.lane` files,
 folders, and vault project memory paths as normal init. Existing vault memory
-files are not overwritten. Repair also adds missing Codex run settings without
-removing custom config fields.
+files are not overwritten. Repair also adds missing provider run settings
+without removing custom config fields.
 
 Repair output reports repaired fields, unchanged fields, created paths, and
 already-existing paths.
@@ -343,8 +350,10 @@ record. It prints:
 - prompt path
 - headless worker command
 
-The command is built from worker settings in `.lane\config.json`. The configured
-provider may be `codex` or `gemini`. The headless Codex command format is:
+The command is built from worker settings in `.lane\config.json`. Lane resolves
+the worker from top-level `defaultProvider`, then reads settings from
+`providers.<name>`. The configured provider may be `codex` or `gemini`. The
+headless Codex command format is:
 
 ```text
 codex exec -C <worktreePath> -s <sandbox> prompt.md
@@ -360,10 +369,10 @@ gemini -s -p <prompt text>
 ```
 
 If `model` is configured, Lane includes `-m <model>`. Set `sandbox` to `none` or
-blank to omit `-s`. With `--execute`, Lane applies
+blank to omit `-s`. With `--execute`, Lane applies the selected provider's
 `executionPolicy` to the worker process only before running the generated
-command. The default `Bypass` value is scoped to the child process and does not
-change the user's machine policy. By default, Lane prints the command only.
+command. The default Codex `Bypass` value is scoped to the child process and
+does not change the user's machine policy. By default, Lane prints the command only.
 With `--execute`, Lane runs the generated command. It does not update task
 status, record metrics, run planner automation, or support other AI providers
 yet. Setting another provider returns a clear unsupported-provider error.

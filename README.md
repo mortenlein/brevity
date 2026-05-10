@@ -59,8 +59,8 @@ repo-local Lane state when missing:
 ```
 
 `config.json` records the project name, dev root, AI-Vault project path,
-worktrees root, and Codex run settings. The project name is the Git repository
-root folder name.
+worktrees root, default worker provider, and provider run settings. The project
+name is the Git repository root folder name.
 
 It also creates project memory under AI-Vault:
 
@@ -91,8 +91,8 @@ recomputes `vaultPath` as
 missing, updates only the known Lane fields when they are wrong, and preserves
 unknown or custom fields. It also creates the same missing `.lane` files,
 folders, and AI-Vault project memory paths as normal init. Existing vault
-memory files are not overwritten. Repair also adds missing Codex run settings
-without removing custom config fields.
+memory files are not overwritten. Repair also adds missing provider run
+settings without removing custom config fields.
 
 Repair mode prints repaired config fields, unchanged config fields, created
 paths, and already-existing paths.
@@ -320,25 +320,26 @@ The task run command reads the matching record from:
 <repo>\.lane\tasks.json
 ```
 
-It reads Codex settings from `.lane\config.json` and prints the task slug,
-worktree path, prompt path, and headless Codex command:
+It reads provider settings from `.lane\config.json` and prints the task slug,
+worktree path, prompt path, resolved provider, and worker command:
 
 ```text
 codex exec -C <worktreePath> -s <sandbox> prompt.md
 ```
 
-The configured provider may be `codex` or `gemini`. For `codex`, Lane includes
-`-m <model>` and `-p <profile>` when configured. For `gemini`, Lane builds a
-non-interactive command with `-p <prompt text>`, includes `-m <model>` when
-configured, and includes `-s` when sandbox is not blank or `none`. By default,
-this is a dry run and does not execute the worker, change task status, or record
-metrics.
-When `--execute` is used, Lane applies `codex.executionPolicy` from
-`.lane\config.json` to the worker process only. The default is `Bypass`, which
-helps PowerShell run script shims such as globally installed npm commands
-without changing the user's machine policy.
-Set `codex.executionPolicy` to another PowerShell execution policy name, such
-as `RemoteSigned`, if a repository needs a stricter worker process policy.
+Lane resolves the worker from top-level `defaultProvider`, then reads settings
+from `providers.<name>`. The configured provider may be `codex` or `gemini`.
+For `codex`, Lane includes `-m <model>` and `-p <profile>` when configured. For
+`gemini`, Lane builds a non-interactive command with `-p <prompt text>`,
+includes `-m <model>` when configured, and includes `-s` when sandbox is not
+blank or `none`. By default, this is a dry run and does not execute the worker,
+change task status, or record metrics.
+When `--execute` is used, Lane applies `providers.codex.executionPolicy` from
+`.lane\config.json` to the worker process only when Codex is selected. The
+default is `Bypass`, which helps PowerShell run script shims such as globally
+installed npm commands without changing the user's machine policy. Set
+`providers.codex.executionPolicy` to another PowerShell execution policy name,
+such as `RemoteSigned`, if a repository needs a stricter worker process policy.
 
 Use `--execute` to run the generated command:
 
@@ -439,6 +440,6 @@ Lane keeps orchestration separate from project source:
 - No web app.
 - No planner automation in v0.
 - Planner prompt generation is manual and does not create worktrees.
-- Codex is the only configured worker provider in v0.
+- Codex and Gemini are the configured worker providers in v0.
 - Markdown remains the durable memory layer.
 - Git remains the source of truth for code.
