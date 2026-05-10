@@ -44,6 +44,22 @@ function Get-RepositoryRoot {
     exit 1
 }
 
+function Get-MainRepositoryRoot {
+    $previousErrorActionPreference = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    $repoRoot = (& git rev-parse --main-worktree 2>$null)
+    $gitExitCode = $LASTEXITCODE
+    $ErrorActionPreference = $previousErrorActionPreference
+
+    if ($gitExitCode -eq 0 -and -not [string]::IsNullOrWhiteSpace($repoRoot)) {
+        return $repoRoot
+    }
+
+    # Fallback for older git versions
+    return Get-RepositoryRoot
+}
+
+
 function Add-InitResult {
     param(
         [object[]]$Results,
@@ -538,7 +554,7 @@ function Show-Board {
 }
 
 function Read-BrevityConfig {
-    $repoRoot = Get-RepositoryRoot
+    $repoRoot = Get-MainRepositoryRoot
     $configPath = Join-Path $repoRoot ".brevity\config.json"
 
     if (-not (Test-Path -LiteralPath $configPath)) {
@@ -1378,7 +1394,11 @@ function ConvertTo-WorkerEnvironmentMap {
 
         $sourceValue = [Environment]::GetEnvironmentVariable($sourceName, "Process")
         if ([string]::IsNullOrWhiteSpace($sourceValue)) {
-            throw "Worker environment variable '$($property.Name)' maps to '$sourceName', but '$sourceName' is not set in the current process environment."
+            $errorMessage = "Worker environment variable '$($property.Name)' maps to '$sourceName', but '$sourceName' is not set in the current process environment."
+            if ([string]::Equals($sourceName, "GEMINI_API_KEY", [System.StringComparison]::OrdinalIgnoreCase)) {
+                $errorMessage += "`nPlease set it using the command: `n`$env:GEMINI_API_KEY='your-key-here'`nOr configure it in Brevity's credential manager."
+            }
+            throw $errorMessage
         }
 
         $environment[$property.Name] = $sourceValue
