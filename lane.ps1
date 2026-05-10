@@ -174,6 +174,21 @@ function Set-ConfigField {
     $Config.$Name = $Value
 }
 
+function ConvertTo-LaneBoolean {
+    param([object]$Value)
+
+    if ($null -eq $Value) {
+        return $false
+    }
+
+    if ($Value -is [bool]) {
+        return $Value
+    }
+
+    $text = ([string]$Value).Trim()
+    return [string]::Equals($text, "true", [System.StringComparison]::OrdinalIgnoreCase)
+}
+
 function Get-DefaultCodexConfig {
     return (New-Object PSObject -Property ([ordered]@{
         command = "codex"
@@ -190,6 +205,7 @@ function Get-DefaultGeminiConfig {
     return (New-Object PSObject -Property ([ordered]@{
         command = "gemini"
         model = $null
+        approvalMode = $false
     }))
 }
 
@@ -315,6 +331,7 @@ function Repair-ProviderConfigDefaults {
     $Results = Repair-ProviderConfigField -ProviderConfig $Config.providers.codex -Results $Results -ProviderName "codex" -Name "autoExecute" -ExpectedValue $codexDefaults.autoExecute
     $Results = Repair-ProviderConfigField -ProviderConfig $Config.providers.gemini -Results $Results -ProviderName "gemini" -Name "command" -ExpectedValue $geminiDefaults.command
     $Results = Repair-ProviderConfigField -ProviderConfig $Config.providers.gemini -Results $Results -ProviderName "gemini" -Name "model" -ExpectedValue $geminiDefaults.model
+    $Results = Repair-ProviderConfigField -ProviderConfig $Config.providers.gemini -Results $Results -ProviderName "gemini" -Name "approvalMode" -ExpectedValue $geminiDefaults.approvalMode
 
     return $Results
 }
@@ -1219,6 +1236,7 @@ function Get-CodexRunConfig {
     $model = $null
     $profile = $null
     $executionPolicy = $null
+    $approvalMode = $false
 
     if (Get-Member -InputObject $providerDefaults -Name "mode" -MemberType NoteProperty -ErrorAction SilentlyContinue) {
         $mode = $providerDefaults.mode
@@ -1232,8 +1250,11 @@ function Get-CodexRunConfig {
     if (Get-Member -InputObject $providerDefaults -Name "executionPolicy" -MemberType NoteProperty -ErrorAction SilentlyContinue) {
         $executionPolicy = $providerDefaults.executionPolicy
     }
+    if (Get-Member -InputObject $providerDefaults -Name "approvalMode" -MemberType NoteProperty -ErrorAction SilentlyContinue) {
+        $approvalMode = ConvertTo-LaneBoolean -Value $providerDefaults.approvalMode
+    }
 
-    foreach ($fieldName in @("command", "mode", "sandbox", "model", "profile", "executionPolicy")) {
+    foreach ($fieldName in @("command", "mode", "sandbox", "model", "profile", "executionPolicy", "approvalMode")) {
         if (Get-Member -InputObject $providerConfig -Name $fieldName -MemberType NoteProperty -ErrorAction SilentlyContinue) {
             Set-Variable -Name $fieldName -Value $providerConfig.$fieldName
         }
@@ -1269,6 +1290,7 @@ function Get-CodexRunConfig {
         model = $model
         profile = $profile
         executionPolicy = $executionPolicy
+        approvalMode = ConvertTo-LaneBoolean -Value $approvalMode
     }))
 }
 
@@ -1332,6 +1354,13 @@ function New-CodexTaskRunCommand {
             $arguments += [string]$codexConfig.model
             $displayArguments += "-m"
             $displayArguments += [string]$codexConfig.model
+        }
+
+        if (-not [string]::IsNullOrWhiteSpace($codexConfig.approvalMode)) {
+            $arguments += "--approval-mode"
+            $arguments += [string]$codexConfig.approvalMode
+            $displayArguments += "--approval-mode"
+            $displayArguments += [string]$codexConfig.approvalMode
         }
 
         $arguments += "-p"

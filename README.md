@@ -331,8 +331,10 @@ The configured provider may be `codex` or `gemini`. For `codex`, Brevity include
 `-m <model>` and `-p <profile>` when configured. For `gemini`, Brevity builds a
 non-interactive command that runs from the task worktree and passes the
 `prompt.md` contents to `-p`. It includes `-m <model>` when configured, and
-includes `-s` when sandbox is not blank or `none`. By default, this is a dry run
-and does not execute the worker, change task status, or record metrics.
+includes `-s` when sandbox is not blank or `none`. Set
+`providers.gemini.skipTrust` to `true` to pass `--approval-mode yolo` to Gemini.
+By default, this is a dry run and does not execute the worker, change task
+status, or record metrics.
 When `--execute` is used, Brevity applies `codex.executionPolicy` from
 `.lane\config.json` to the worker process only. The default is `Bypass`, which
 helps PowerShell run script shims such as globally installed npm commands

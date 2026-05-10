@@ -84,7 +84,8 @@ Existing files are left unchanged by normal init.
 Set `codex.provider` to `gemini` to run Gemini CLI instead of Codex. Brevity keeps
 the existing config object name for compatibility. With Gemini, Brevity passes the
 task prompt text with `-p`, passes `-m <model>` when configured, and passes `-s`
-when sandbox is not blank or `none`.
+when sandbox is not blank or `none`. Set `providers.gemini.skipTrust` to `true`
+to pass `--approval-mode yolo`.
 
 `Brevity init --repair [-DevRoot <path>]` is the corrective init mode. It
 re-detects `projectName` from the Git repository root folder and recomputes:
@@ -360,7 +361,8 @@ Set-Location -LiteralPath <worktreePath>; gemini -s -p (Get-Content -LiteralPath
 ```
 
 If `model` is configured, Brevity includes `-m <model>`. Set `sandbox` to `none` or
-blank to omit `-s`. With `--execute`, Brevity applies
+blank to omit `-s`. Set `skipTrust` to `true` to include
+`--approval-mode yolo`. With `--execute`, Brevity applies
 `executionPolicy` to the worker process only before running the generated
 command. The default `Bypass` value is scoped to the child process and does not
 change the user's machine policy. By default, Brevity prints the command only.
