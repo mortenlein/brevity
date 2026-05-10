@@ -400,6 +400,60 @@ When branch removal succeeds, or the branch is already missing, Brevity removes 
 task metadata record. If branch removal fails for another reason, Brevity keeps the
 metadata unchanged.
 
+## Gemini Worker Setup
+
+To use Gemini as a worker, you need to configure trust and authentication.
+
+### Trust Root
+
+Gemini CLI uses a parent-folder trust model. It looks for a `.gemini` folder in
+the parent directory of the script it's running. For Brevity, this means your
+dev root must contain a `.gemini` folder.
+
+```text
+<dev-root>\
+  .gemini\
+  repos\
+  worktrees\
+```
+
+Create this folder manually if it doesn't exist.
+
+### API Key
+
+Gemini requires a `GEMINI_API_KEY`. For security, this key should not be stored
+in repository configuration. Brevity loads it from an environment variable.
+
+You can set this in your PowerShell profile:
+
+```powershell
+[System.Environment]::SetEnvironmentVariable('GEMINI_API_KEY', 'your-api-key', 'User')
+```
+
+Or you can configure Brevity to pass it to the worker process. In your
+repository's `.brevity\config.json`, set the `env` property under `gemini`:
+
+```json
+{
+  "codex": {
+    "provider": "gemini",
+    "command": "gemini",
+    "env": {
+      "GEMINI_API_KEY": "$env:GEMINI_API_KEY"
+    }
+  }
+}
+```
+
+Brevity will expand `$env:GEMINI_API_KEY` to its value when running the worker.
+This keeps the secret out of the repository.
+
+### Troubleshooting
+
+- **`ripgrep` not found:** Gemini may warn that `rg.exe` is not in your path.
+  This is a non-blocking warning. Gemini will fall back to its internal search
+  if ripgrep is not available.
+
 ## Planned Commands
 
 These commands are part of Brevity's public design, but are not implemented in v0:
