@@ -517,9 +517,30 @@ This keeps the secret out of the repository.
 
 ### Troubleshooting
 
-- **`ripgrep` not found:** Gemini may warn that `rg.exe` is not in your path.
-  This is a non-blocking warning. Gemini will fall back to its internal search
-  if ripgrep is not available.
+- **`ripgrep` not found:** Gemini may warn that `rg.exe` (ripgrep) is not in your path. This is a non-blocking warning. Gemini will fall back to its internal search tool if ripgrep is not available, which may be slower.
+
+  For better performance, we recommend installing ripgrep.
+
+  - **Windows:**
+    ```powershell
+    winget install BurntSushi.ripgrep.MSVC
+    ```
+    Or install with Chocolatey:
+    ```powershell
+    choco install ripgrep
+    ```
+
+  - **macOS:**
+    ```bash
+    brew install ripgrep
+    ```
+
+  - **Linux (Debian/Ubuntu):**
+    ```bash
+    sudo apt-get install ripgrep
+    ```
+
+  After installation, ensure `rg` is available in your system's PATH.
 
 ## Planned Commands
 
