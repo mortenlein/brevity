@@ -28,18 +28,72 @@ From this repository:
 .\brevity.ps1 help
 ```
 
-## Fast Iteration Loop
+## Planning Workflow
 
-The recommended fast iteration loop for a Gemini worker is:
+Brevity is designed for an AI-assisted planning workflow. This allows you to use a planner (like an AI agent) to break down a large goal into smaller, runnable tasks that can be stored durably in the project vault.
+
+The workflow is:
+
+1.  **Generate a Plan:** Use `plan backlog` to generate a prompt for your AI planner.
+
+    ```powershell
+    .\brevity.ps1 plan backlog
+    ```
+
+    Paste the generated prompt into your AI agent.
+
+2.  **Save the Planner Output:** The planner will return a list of tasks in a specific Markdown format. Save this output to a file, for example, `C:\temp\my-plan.md`.
+
+    *Example Planner Output (`my-plan.md`):*
+    ```markdown
+    - title: Add execution policy support
+      slug: execution-policy
+      status: planned
+      dependencies: []
+      workerPrompt: |
+        Read AGENTS.md.
+        Implement execution policy configuration support.
+        Ensure the new config field is documented in README.md.
+        Stop after patch + summary.
+
+    - title: Improve board command output
+      slug: improve-board-output
+      status: planned
+      dependencies: [execution-policy]
+      workerPrompt: |
+        Read AGENTS.md.
+        Refactor the `Show-Board` function in `brevity.ps1`.
+        The output should be a table instead of a list.
+        Columns: Slug, Status, Branch, Worktree.
+        Stop after patch + summary.
+    ```
+
+3.  **Apply the Plan:** Use `plan apply` to create durable task specs in your AI-Vault from the planner's output file.
+
+    ```powershell
+    .\brevity.ps1 plan apply C:\temp\my-plan.md
+    ```
+
+    Brevity will parse the file and create:
+    - `<vaultPath>\tasks\execution-policy.md`
+    - `<vaultPath>\tasks\improve-board-output.md`
+
+4.  **Activate a Task:** Now that the task specs exist in the vault, you can activate one to create a worktree and prepare it for the worker.
+
+    ```powershell
+    .\brevity.ps1 task activate execution-policy
+    ```
+
+This process bridges the planning phase with the worker loop. Once a task is activated, you can use the fast loop below to execute it.
+
+## Worker Fast Loop
+
+The recommended fast iteration loop for a Gemini worker on an **activated** task is:
 
 1.  `.\brevity.ps1 task spec <slug>` - review the task spec.
-2.  `.\brevity.ps1 task activate <slug>` - create the worktree.
-3.  `.\brevity.ps1 task run <slug> --execute` - run the worker.
-4.  `.\brevity.ps1 task merge <slug>` - merge the completed work.
-5.  `.\brevity.ps1 task cleanup <slug>` - remove the worktree and branch.
-
-This loop assumes a planned task spec already exists in the vault. To create
-one, use the `plan` and `plan apply` commands.
+2.  `.\brevity.ps1 task run <slug> --execute` - run the worker.
+3.  `.\brevity.ps1 task merge <slug>` - merge the completed work.
+4.  `.\brevity.ps1 task cleanup <slug>` - remove the worktree and branch.
 
 Brevity v0 supports:
 
