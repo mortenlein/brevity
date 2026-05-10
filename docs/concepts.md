@@ -25,7 +25,7 @@ vaults, scratch files, and Brevity orchestration state.
 
 ```text
 <dev-root>\
-  .lane\
+  .brevity\
   repos\
   worktrees\
   vaults\
@@ -46,7 +46,7 @@ script. `Brevity init` creates it in the current Git repository and adds:
 `tasks.json` starts as an empty array. It is runtime state only: Brevity uses it
 to track worktrees, branches, prompts, statuses, and cleanup state for task
 work that Brevity has already created. Durable planned work belongs in vault task
-specs, not in `.lane\tasks.json`.
+specs, not in `.brevity\tasks.json`.
 
 `config.json` records:
 
@@ -96,7 +96,7 @@ re-detects `projectName` from the Git repository root folder and recomputes:
 - `vaultPath` as `<dev-root>\vaults\AI-Vault\10-Projects\<project-name>`
 - `worktreesRoot` as `<dev-root>\worktrees\active`
 
-If `.lane\config.json` is missing, repair mode creates it. If it exists, repair
+If `.brevity\config.json` is missing, repair mode creates it. If it exists, repair
 mode updates the known Brevity fields only when they are wrong and preserves
 unknown or custom fields. It also creates the same missing `.Brevity` files,
 folders, and vault project memory paths as normal init. Existing vault memory
@@ -109,7 +109,7 @@ already-existing paths.
 `Brevity plan` reads `config.json` and writes:
 
 ```text
-<repo>\.lane\planner-prompt.md
+<repo>\.brevity\planner-prompt.md
 ```
 
 The planner prompt is a manual handoff prompt for Codex. It tells Codex to read
@@ -128,7 +128,7 @@ paste the planner prompt.
 `Brevity plan backlog` reads the same config and writes:
 
 ```text
-<repo>\.lane\planner-backlog-prompt.md
+<repo>\.brevity\planner-backlog-prompt.md
 ```
 
 The backlog planner prompt is also a manual handoff prompt for Codex. It tells
@@ -195,11 +195,11 @@ specs for planned task handoff. Each planned task can be stored as:
 <vaultPath>\tasks\<slug>.md
 ```
 
-`Brevity task spec <slug>` reads `.lane\config.json`, uses `vaultPath`, and prints
+`Brevity task spec <slug>` reads `.brevity\config.json`, uses `vaultPath`, and prints
 the matching task spec Markdown file when it exists. If the spec is missing,
 Brevity reports the expected path. The command is read-only: it does not create
 worktrees from specs, parse backlog planner output, or change
-`.lane\tasks.json`.
+`.brevity\tasks.json`.
 
 ## Repos
 
@@ -246,7 +246,7 @@ starting point without launching any automation.
 Task metadata lives in the source repository:
 
 ```text
-<repo>\.lane\tasks.json
+<repo>\.brevity\tasks.json
 ```
 
 Each record includes:
@@ -262,7 +262,7 @@ Each record includes:
 New task records use `ready-for-worker` status.
 
 `Brevity task activate <slug>` is the vault-backed task creation flow. It reads
-`.lane\config.json` and uses:
+`.brevity\config.json` and uses:
 
 - `vaultPath`
 - `worktreesRoot`
@@ -287,7 +287,7 @@ The task spec contents are copied into:
 ```
 
 The vault task spec remains unchanged. Brevity records runtime metadata in
-`.lane\tasks.json`, including `specPath`, and sets the task status to
+`.brevity\tasks.json`, including `specPath`, and sets the task status to
 `ready-for-worker`. The command does not launch Codex and does not run worker
 automation.
 
@@ -347,7 +347,7 @@ record. It prints:
 - prompt path
 - headless worker command
 
-The command is built from worker settings in `.lane\config.json`. The configured
+The command is built from worker settings in `.brevity\config.json`. The configured
 provider may be `codex` or `gemini`. The headless Codex command format is:
 
 ```text

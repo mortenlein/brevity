@@ -16,7 +16,7 @@ PowerShell CLI surface, but it does not implement planner automation.
 
 ## Files
 
-- `lane.ps1` - Windows PowerShell CLI entry point.
+- `brevity.ps1` - Windows PowerShell CLI entry point.
 - `AGENTS.md` - working instructions for agents modifying Brevity.
 - `docs/concepts.md` - concepts carried forward from the bootstrap script.
 
@@ -25,37 +25,37 @@ PowerShell CLI surface, but it does not implement planner automation.
 From this repository:
 
 ```powershell
-.\lane.ps1 help
+.\brevity.ps1 help
 ```
 
 Brevity v0 supports:
 
 ```powershell
-.\lane.ps1 help
-.\lane.ps1 init [-DevRoot <path>]
-.\lane.ps1 init --repair [-DevRoot <path>]
-.\lane.ps1 plan
-.\lane.ps1 plan backlog
-.\lane.ps1 plan apply <file>
-.\lane.ps1 board
-.\lane.ps1 status [-DevRoot <path>]
-.\lane.ps1 task new <slug> [-DevRoot <path>]
-.\lane.ps1 task activate <slug>
-.\lane.ps1 task spec <slug>
-.\lane.ps1 task start <slug>
-.\lane.ps1 task run <slug> [--execute]
-.\lane.ps1 task status
-.\lane.ps1 task merge <slug>
-.\lane.ps1 task cleanup <slug> [--force]
+.\brevity.ps1 help
+.\brevity.ps1 init [-DevRoot <path>]
+.\brevity.ps1 init --repair [-DevRoot <path>]
+.\brevity.ps1 plan
+.\brevity.ps1 plan backlog
+.\brevity.ps1 plan apply <file>
+.\brevity.ps1 board
+.\brevity.ps1 status [-DevRoot <path>]
+.\brevity.ps1 task new <slug> [-DevRoot <path>]
+.\brevity.ps1 task activate <slug>
+.\brevity.ps1 task spec <slug>
+.\brevity.ps1 task start <slug>
+.\brevity.ps1 task run <slug> [--execute]
+.\brevity.ps1 task status
+.\brevity.ps1 task merge <slug>
+.\brevity.ps1 task cleanup <slug> [--force]
 ```
 
 The init command prepares the current Git repository for Brevity. It creates
 repo-local Brevity state when missing:
 
 ```text
-<repo>\.lane\
-<repo>\.lane\tasks.json
-<repo>\.lane\config.json
+<repo>\.brevity\
+<repo>\.brevity\tasks.json
+<repo>\.brevity\config.json
 ```
 
 `config.json` records the project name, dev root, AI-Vault project path,
@@ -77,11 +77,11 @@ If `AGENTS.md` is missing, init creates one that instructs Codex to read the
 project vault memory before doing work. Existing files are never overwritten;
 init prints what it created and what already existed.
 
-Use repair mode when an existing `.lane\config.json` points at the wrong
+Use repair mode when an existing `.brevity\config.json` points at the wrong
 project, vault, or worktree location:
 
 ```powershell
-.\lane.ps1 init --repair [-DevRoot <path>]
+.\brevity.ps1 init --repair [-DevRoot <path>]
 ```
 
 Repair mode re-detects the project name from the Git repository root folder,
@@ -100,13 +100,13 @@ paths, and already-existing paths.
 The plan command reads:
 
 ```text
-<repo>\.lane\config.json
+<repo>\.brevity\config.json
 ```
 
 It writes a planner prompt to:
 
 ```text
-<repo>\.lane\planner-prompt.md
+<repo>\.brevity\planner-prompt.md
 ```
 
 The generated prompt tells Codex to read `AGENTS.md`, read the configured
@@ -126,7 +126,7 @@ The backlog plan mode reads the same config and writes a backlog planner prompt
 to:
 
 ```text
-<repo>\.lane\planner-backlog-prompt.md
+<repo>\.brevity\planner-backlog-prompt.md
 ```
 
 The generated backlog prompt tells Codex to read `AGENTS.md`, read the
@@ -176,10 +176,10 @@ metadata.
 The board command reads:
 
 ```text
-<repo>\.lane\tasks.json
+<repo>\.brevity\tasks.json
 ```
 
-`.lane\tasks.json` is runtime state only. It tracks task worktrees, branches,
+`.brevity\tasks.json` is runtime state only. It tracks task worktrees, branches,
 prompts, statuses, and cleanup state for task work that Brevity has already
 created. It is not the durable planning backlog.
 
@@ -233,7 +233,7 @@ It also writes a placeholder worker prompt to:
 and records task metadata in the source repository at:
 
 ```text
-<repo>\.lane\tasks.json
+<repo>\.brevity\tasks.json
 ```
 
 Each task record includes the slug, branch, worktree path, prompt path, status,
@@ -242,7 +242,7 @@ and creation timestamp. New tasks start with `ready-for-worker` status.
 The task activate command reads:
 
 ```text
-<repo>\.lane\config.json
+<repo>\.brevity\config.json
 ```
 
 It uses `vaultPath`, `worktreesRoot`, and `projectName` from that config. For
@@ -274,7 +274,7 @@ The original vault task spec is not modified or deleted. Brevity records runtime
 metadata in:
 
 ```text
-<repo>\.lane\tasks.json
+<repo>\.brevity\tasks.json
 ```
 
 Each activated task record includes the slug, branch, worktree path, prompt
@@ -284,7 +284,7 @@ path, spec path, status, and creation timestamp. Activated tasks start with
 The task spec command reads:
 
 ```text
-<repo>\.lane\config.json
+<repo>\.brevity\config.json
 ```
 
 It uses `vaultPath` from that config and looks for:
@@ -296,12 +296,12 @@ It uses `vaultPath` from that config and looks for:
 When the spec exists, Brevity prints the task slug, spec path, and Markdown file
 contents. When the spec is missing, Brevity prints a clear not-found message and
 the expected path. This command is read-only; it does not create worktrees,
-parse backlog planner output, or change `.lane\tasks.json`.
+parse backlog planner output, or change `.brevity\tasks.json`.
 
 The task start command reads the matching record from:
 
 ```text
-<repo>\.lane\tasks.json
+<repo>\.brevity\tasks.json
 ```
 
 It prints the task slug, worktree path, prompt path, and exact Codex command to
@@ -317,10 +317,10 @@ automatically launch Codex.
 The task run command reads the matching record from:
 
 ```text
-<repo>\.lane\tasks.json
+<repo>\.brevity\tasks.json
 ```
 
-It reads Codex settings from `.lane\config.json` and prints the task slug,
+It reads Codex settings from `.brevity\config.json` and prints the task slug,
 worktree path, prompt path, and headless Codex command:
 
 ```text
@@ -339,7 +339,7 @@ process. Dry runs print configured variable names but mask values.
 By default, this is a dry run and does not execute the worker, change task
 status, or record metrics.
 When `--execute` is used, Brevity applies `codex.executionPolicy` from
-`.lane\config.json` to the worker process only. The default is `Bypass`, which
+`.brevity\config.json` to the worker process only. The default is `Bypass`, which
 helps PowerShell run script shims such as globally installed npm commands
 without changing the user's machine policy.
 Set `codex.executionPolicy` to another PowerShell execution policy name, such
@@ -348,7 +348,7 @@ as `RemoteSigned`, if a repository needs a stricter worker process policy.
 Use `--execute` to run the generated command:
 
 ```powershell
-.\lane.ps1 task run <slug> --execute
+.\brevity.ps1 task run <slug> --execute
 ```
 
 Brevity does not implement metrics or other AI providers yet. Setting another
@@ -357,7 +357,7 @@ provider returns a clear unsupported-provider error.
 The task status command reads:
 
 ```text
-<repo>\.lane\tasks.json
+<repo>\.brevity\tasks.json
 ```
 
 When task metadata exists, it prints the slug, branch, status, worktree path,
@@ -367,7 +367,7 @@ and prompt path for each task. When no task metadata exists, it prints
 The task merge command reads the matching record from:
 
 ```text
-<repo>\.lane\tasks.json
+<repo>\.brevity\tasks.json
 ```
 
 It merges the recorded branch into the current Git branch with
@@ -378,7 +378,7 @@ metadata. If the merge fails, Brevity leaves metadata unchanged.
 The task cleanup command reads the matching record from:
 
 ```text
-<repo>\.lane\tasks.json
+<repo>\.brevity\tasks.json
 ```
 
 It removes the recorded Git worktree, deletes the recorded Git branch with
@@ -389,7 +389,7 @@ branch, Brevity leaves the metadata unchanged.
 Use `--force` only when you explicitly want Git's forced cleanup behavior:
 
 ```powershell
-.\lane.ps1 task cleanup <slug> --force
+.\brevity.ps1 task cleanup <slug> --force
 ```
 
 With `--force`, Brevity removes the worktree with
@@ -417,7 +417,7 @@ Brevity keeps orchestration separate from project source:
 
 ```text
 <dev-root>\
-  .lane\
+  .brevity\
   repos\
     active\
     experiments\

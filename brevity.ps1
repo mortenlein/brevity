@@ -1,4 +1,4 @@
-﻿param(
+param(
     [Parameter(Position = 0)]
     [string]$Command = "help",
 
@@ -40,7 +40,7 @@ function Get-RepositoryRoot {
         return $repoRoot
     }
 
-    Write-Host "Lane must be run inside a Git repository." -ForegroundColor Red
+    Write-Host "Brevity must be run inside a Git repository." -ForegroundColor Red
     exit 1
 }
 
@@ -174,7 +174,7 @@ function Set-ConfigField {
     $Config.$Name = $Value
 }
 
-function ConvertTo-LaneBoolean {
+function ConvertTo-BrevityBoolean {
     param([object]$Value)
 
     if ($null -eq $Value) {
@@ -372,28 +372,28 @@ function Write-DirectoryChildren {
 }
 
 function Show-Help {
-    Write-Host "Lane v0"
+    Write-Host "Brevity v0"
     Write-Host ""
     Write-Host "Usage:"
-    Write-Host "  .\lane.ps1 help"
-    Write-Host "  .\lane.ps1 init [-DevRoot <path>]"
-    Write-Host "  .\lane.ps1 init --repair [-DevRoot <path>]"
-    Write-Host "  .\lane.ps1 plan"
-    Write-Host "  .\lane.ps1 plan backlog"
-    Write-Host "  .\lane.ps1 plan apply <file>"
-    Write-Host "  .\lane.ps1 board"
-    Write-Host "  .\lane.ps1 status [-DevRoot <path>]"
-    Write-Host "  .\lane.ps1 task new <slug> [-DevRoot <path>]"
-    Write-Host "  .\lane.ps1 task activate <slug>"
-    Write-Host "  .\lane.ps1 task spec <slug>"
-    Write-Host "  .\lane.ps1 task start <slug>"
-    Write-Host "  .\lane.ps1 task run <slug> [--execute]"
-    Write-Host "  .\lane.ps1 task status"
-    Write-Host "  .\lane.ps1 task merge <slug>"
-    Write-Host "  .\lane.ps1 task cleanup <slug> [--force]"
+    Write-Host "  .\brevity.ps1 help"
+    Write-Host "  .\brevity.ps1 init [-DevRoot <path>]"
+    Write-Host "  .\brevity.ps1 init --repair [-DevRoot <path>]"
+    Write-Host "  .\brevity.ps1 plan"
+    Write-Host "  .\brevity.ps1 plan backlog"
+    Write-Host "  .\brevity.ps1 plan apply <file>"
+    Write-Host "  .\brevity.ps1 board"
+    Write-Host "  .\brevity.ps1 status [-DevRoot <path>]"
+    Write-Host "  .\brevity.ps1 task new <slug> [-DevRoot <path>]"
+    Write-Host "  .\brevity.ps1 task activate <slug>"
+    Write-Host "  .\brevity.ps1 task spec <slug>"
+    Write-Host "  .\brevity.ps1 task start <slug>"
+    Write-Host "  .\brevity.ps1 task run <slug> [--execute]"
+    Write-Host "  .\brevity.ps1 task status"
+    Write-Host "  .\brevity.ps1 task merge <slug>"
+    Write-Host "  .\brevity.ps1 task cleanup <slug> [--force]"
     Write-Host ""
     Write-Host "Planned commands:"
-    Write-Host "  lane onboard"
+    Write-Host "  brevity onboard"
 }
 
 function Show-Status {
@@ -401,18 +401,18 @@ function Show-Status {
 
     $rootPath = Resolve-DevRoot $Root
 
-    Write-Host "Lane workspace status"
+    Write-Host "Brevity workspace status"
     Write-Host "DevRoot: $rootPath"
 
-    $laneRoot = Join-Path $rootPath ".lane"
+    $brevityRoot = Join-Path $rootPath ".brevity"
     $vaultRoot = Join-Path $rootPath "vaults\AI-Vault"
 
     Write-Section "LANE"
-    if (Test-Path -LiteralPath $laneRoot) {
-        Write-Host $laneRoot -ForegroundColor Green
+    if (Test-Path -LiteralPath $brevityRoot) {
+        Write-Host $brevityRoot -ForegroundColor Green
     }
     else {
-        Write-Host "Missing: $laneRoot" -ForegroundColor DarkYellow
+        Write-Host "Missing: $brevityRoot" -ForegroundColor DarkYellow
     }
 
     Write-Section "AI-VAULT"
@@ -432,7 +432,7 @@ function Show-Status {
 function Write-NotImplemented {
     param([string]$Name)
 
-    Write-Host "lane $Name is planned but not implemented in Lane v0." -ForegroundColor Yellow
+    Write-Host "brevity $Name is planned but not implemented in Brevity v0." -ForegroundColor Yellow
     Write-Host "See docs\concepts.md for the command design."
 }
 
@@ -455,9 +455,9 @@ function Get-TaskField {
     return [string]$value
 }
 
-function Read-LaneTasks {
+function Read-BrevityTasks {
     $repoRoot = Get-RepositoryRoot
-    $tasksPath = Join-Path $repoRoot ".lane\tasks.json"
+    $tasksPath = Join-Path $repoRoot ".brevity\tasks.json"
 
     if (-not (Test-Path -LiteralPath $tasksPath)) {
         return @()
@@ -477,10 +477,10 @@ function Read-LaneTasks {
 }
 
 function Show-Board {
-    $tasks = @(Read-LaneTasks)
+    $tasks = @(Read-BrevityTasks)
 
     if ($tasks.Count -eq 0) {
-        Write-Host "No Lane tasks found."
+        Write-Host "No Brevity tasks found."
         return
     }
 
@@ -537,55 +537,55 @@ function Show-Board {
     }
 }
 
-function Read-LaneConfig {
+function Read-BrevityConfig {
     $repoRoot = Get-RepositoryRoot
-    $configPath = Join-Path $repoRoot ".lane\config.json"
+    $configPath = Join-Path $repoRoot ".brevity\config.json"
 
     if (-not (Test-Path -LiteralPath $configPath)) {
-        Write-Host "Lane config not found: $configPath" -ForegroundColor Red
-        Write-Host "Run .\lane.ps1 init first."
+        Write-Host "Brevity config not found: $configPath" -ForegroundColor Red
+        Write-Host "Run .\brevity.ps1 init first."
         exit 1
     }
 
     $rawConfig = Get-Content -LiteralPath $configPath -Raw
     if ([string]::IsNullOrWhiteSpace($rawConfig)) {
-        Write-Host "Lane config is empty: $configPath" -ForegroundColor Red
+        Write-Host "Brevity config is empty: $configPath" -ForegroundColor Red
         exit 1
     }
 
     $config = $rawConfig | ConvertFrom-Json
     if ($null -eq $config) {
-        Write-Host "Lane config could not be read: $configPath" -ForegroundColor Red
+        Write-Host "Brevity config could not be read: $configPath" -ForegroundColor Red
         exit 1
     }
 
     if (-not (Get-Member -InputObject $config -Name "vaultPath" -MemberType NoteProperty)) {
-        Write-Host "Lane config is missing vaultPath: $configPath" -ForegroundColor Red
+        Write-Host "Brevity config is missing vaultPath: $configPath" -ForegroundColor Red
         exit 1
     }
 
     if ([string]::IsNullOrWhiteSpace($config.vaultPath)) {
-        Write-Host "Lane config vaultPath is empty: $configPath" -ForegroundColor Red
+        Write-Host "Brevity config vaultPath is empty: $configPath" -ForegroundColor Red
         exit 1
     }
 
     if (-not (Get-Member -InputObject $config -Name "worktreesRoot" -MemberType NoteProperty)) {
-        Write-Host "Lane config is missing worktreesRoot: $configPath" -ForegroundColor Red
+        Write-Host "Brevity config is missing worktreesRoot: $configPath" -ForegroundColor Red
         exit 1
     }
 
     if ([string]::IsNullOrWhiteSpace($config.worktreesRoot)) {
-        Write-Host "Lane config worktreesRoot is empty: $configPath" -ForegroundColor Red
+        Write-Host "Brevity config worktreesRoot is empty: $configPath" -ForegroundColor Red
         exit 1
     }
 
     if (-not (Get-Member -InputObject $config -Name "projectName" -MemberType NoteProperty)) {
-        Write-Host "Lane config is missing projectName: $configPath" -ForegroundColor Red
+        Write-Host "Brevity config is missing projectName: $configPath" -ForegroundColor Red
         exit 1
     }
 
     if ([string]::IsNullOrWhiteSpace($config.projectName)) {
-        Write-Host "Lane config projectName is empty: $configPath" -ForegroundColor Red
+        Write-Host "Brevity config projectName is empty: $configPath" -ForegroundColor Red
         exit 1
     }
 
@@ -594,13 +594,13 @@ function Read-LaneConfig {
 
 function New-PlanPrompt {
     $repoRoot = Get-RepositoryRoot
-    $config = Read-LaneConfig
-    $promptPath = Join-Path $repoRoot ".lane\planner-prompt.md"
+    $config = Read-BrevityConfig
+    $promptPath = Join-Path $repoRoot ".brevity\planner-prompt.md"
 
     $promptLines = @(
         "Read AGENTS.md.",
         "",
-        "You are planning one Lane worker task for this repository.",
+        "You are planning one Brevity worker task for this repository.",
         "",
         "Project memory:",
         "",
@@ -644,13 +644,13 @@ function New-PlanPrompt {
 
 function New-BacklogPlanPrompt {
     $repoRoot = Get-RepositoryRoot
-    $config = Read-LaneConfig
-    $promptPath = Join-Path $repoRoot ".lane\planner-backlog-prompt.md"
+    $config = Read-BrevityConfig
+    $promptPath = Join-Path $repoRoot ".brevity\planner-backlog-prompt.md"
 
     $promptLines = @(
         "Read AGENTS.md.",
         "",
-        "You are planning a backlog of Lane worker tasks for this repository.",
+        "You are planning a backlog of Brevity worker tasks for this repository.",
         "",
         "Project memory:",
         "",
@@ -756,7 +756,7 @@ function Read-PlannerOutputTasks {
 
     if ([string]::IsNullOrWhiteSpace($Path)) {
         Write-Host "Missing planner output file." -ForegroundColor Red
-        Write-Host "Usage: .\lane.ps1 plan apply <file>"
+        Write-Host "Usage: .\brevity.ps1 plan apply <file>"
         exit 1
     }
 
@@ -881,7 +881,7 @@ function Write-VaultTaskSpec {
 function Apply-PlannerOutput {
     param([string]$Path)
 
-    $config = Read-LaneConfig
+    $config = Read-BrevityConfig
     $tasksRoot = Join-Path $config.vaultPath "tasks"
     $tasks = @(Read-PlannerOutputTasks -Path $Path)
 
@@ -924,7 +924,7 @@ function Write-TaskPrompt {
     Set-Content -LiteralPath $Path -Value $promptLines -Encoding ASCII
 }
 
-function Initialize-LaneRepository {
+function Initialize-BrevityRepository {
     param(
         [string]$Root,
         [bool]$Repair = $false
@@ -933,15 +933,15 @@ function Initialize-LaneRepository {
     $rootPath = Resolve-DevRoot $Root
     $repoRoot = Get-RepositoryRoot
     $projectName = Split-Path -Leaf $repoRoot
-    $laneRoot = Join-Path $repoRoot ".lane"
-    $tasksPath = Join-Path $laneRoot "tasks.json"
-    $configPath = Join-Path $laneRoot "config.json"
+    $brevityRoot = Join-Path $repoRoot ".brevity"
+    $tasksPath = Join-Path $brevityRoot "tasks.json"
+    $configPath = Join-Path $brevityRoot "config.json"
     $vaultPath = Join-Path $rootPath "vaults\AI-Vault\10-Projects\$projectName"
     $worktreesRoot = Join-Path $rootPath "worktrees\active"
     $agentsPath = Join-Path $repoRoot "AGENTS.md"
 
     $results = @()
-    $results = Ensure-Directory -Path $laneRoot -Results $results
+    $results = Ensure-Directory -Path $brevityRoot -Results $results
     $results = Ensure-File -Path $tasksPath -Lines @("[]") -Results $results
 
     $fieldResults = @()
@@ -998,7 +998,7 @@ function Initialize-LaneRepository {
     $results = Ensure-File -Path (Join-Path $vaultPath "project.md") -Lines @(
         "# $projectName",
         "",
-        "Project memory for Lane-assisted work."
+        "Project memory for Brevity-assisted work."
     ) -Results $results
     $results = Ensure-File -Path (Join-Path $vaultPath "architecture.md") -Lines @(
         "# Architecture",
@@ -1024,10 +1024,10 @@ function Initialize-LaneRepository {
     ) -Results $results
 
     if ($Repair) {
-        Write-Host "Repaired Lane project: $projectName"
+        Write-Host "Repaired Brevity project: $projectName"
     }
     else {
-        Write-Host "Initialized Lane project: $projectName"
+        Write-Host "Initialized Brevity project: $projectName"
     }
     Write-Host "Repo: $repoRoot"
     Write-Host "DevRoot: $rootPath"
@@ -1048,12 +1048,12 @@ function Add-TaskMetadata {
         [string]$SpecPath = ""
     )
 
-    $laneRoot = Join-Path $RepoRoot ".lane"
-    if (-not (Test-Path -LiteralPath $laneRoot)) {
-        New-Item -ItemType Directory -Path $laneRoot | Out-Null
+    $brevityRoot = Join-Path $RepoRoot ".brevity"
+    if (-not (Test-Path -LiteralPath $brevityRoot)) {
+        New-Item -ItemType Directory -Path $brevityRoot | Out-Null
     }
 
-    $tasksPath = Join-Path $laneRoot "tasks.json"
+    $tasksPath = Join-Path $brevityRoot "tasks.json"
     $tasks = @()
     if (Test-Path -LiteralPath $tasksPath) {
         $rawTasks = Get-Content -LiteralPath $tasksPath -Raw
@@ -1081,28 +1081,28 @@ function Add-TaskMetadata {
 
 function Show-TaskStatus {
     $repoRoot = Get-RepositoryRoot
-    $tasksPath = Join-Path $repoRoot ".lane\tasks.json"
+    $tasksPath = Join-Path $repoRoot ".brevity\tasks.json"
 
     if (-not (Test-Path -LiteralPath $tasksPath)) {
-        Write-Host "No Lane tasks found."
+        Write-Host "No Brevity tasks found."
         return
     }
 
     $rawTasks = Get-Content -LiteralPath $tasksPath -Raw
     if ([string]::IsNullOrWhiteSpace($rawTasks)) {
-        Write-Host "No Lane tasks found."
+        Write-Host "No Brevity tasks found."
         return
     }
 
     $parsedTasks = $rawTasks | ConvertFrom-Json
     if ($null -eq $parsedTasks) {
-        Write-Host "No Lane tasks found."
+        Write-Host "No Brevity tasks found."
         return
     }
 
     $tasks = @($parsedTasks)
     if ($tasks.Count -eq 0) {
-        Write-Host "No Lane tasks found."
+        Write-Host "No Brevity tasks found."
         return
     }
 
@@ -1116,11 +1116,11 @@ function Show-TaskSpec {
 
     if ([string]::IsNullOrWhiteSpace($Slug)) {
         Write-Host "Missing task slug." -ForegroundColor Red
-        Write-Host "Usage: .\lane.ps1 task spec <slug>"
+        Write-Host "Usage: .\brevity.ps1 task spec <slug>"
         exit 1
     }
 
-    $config = Read-LaneConfig
+    $config = Read-BrevityConfig
     $specPath = Join-Path (Join-Path $config.vaultPath "tasks") "$Slug.md"
 
     if (-not (Test-Path -LiteralPath $specPath)) {
@@ -1140,23 +1140,23 @@ function Start-TaskWork {
 
     if ([string]::IsNullOrWhiteSpace($Slug)) {
         Write-Host "Missing task slug." -ForegroundColor Red
-        Write-Host "Usage: .\lane.ps1 task start <slug>"
+        Write-Host "Usage: .\brevity.ps1 task start <slug>"
         exit 1
     }
 
     $repoRoot = Get-RepositoryRoot
-    $tasksPath = Join-Path $repoRoot ".lane\tasks.json"
+    $tasksPath = Join-Path $repoRoot ".brevity\tasks.json"
 
     if (-not (Test-Path -LiteralPath $tasksPath)) {
         Write-Host "Task not found: $Slug" -ForegroundColor Red
-        Write-Host "No Lane task metadata exists at: $tasksPath"
+        Write-Host "No Brevity task metadata exists at: $tasksPath"
         exit 1
     }
 
     $rawTasks = Get-Content -LiteralPath $tasksPath -Raw
     if ([string]::IsNullOrWhiteSpace($rawTasks)) {
         Write-Host "Task not found: $Slug" -ForegroundColor Red
-        Write-Host "No Lane task metadata exists at: $tasksPath"
+        Write-Host "No Brevity task metadata exists at: $tasksPath"
         exit 1
     }
 
@@ -1166,7 +1166,7 @@ function Start-TaskWork {
 
     if ($null -eq $task) {
         Write-Host "Task not found: $Slug" -ForegroundColor Red
-        Write-Host "Use .\lane.ps1 task status to list known tasks."
+        Write-Host "Use .\brevity.ps1 task status to list known tasks."
         exit 1
     }
 
@@ -1216,7 +1216,7 @@ function Get-CodexRunConfig {
         $providerDefaults = Get-DefaultCodexConfig
     }
     else {
-        throw "Unsupported worker provider: $provider. Lane v0 supports providers 'codex' and 'gemini'."
+        throw "Unsupported worker provider: $provider. Brevity v0 supports providers 'codex' and 'gemini'."
     }
 
     $providerConfig = $null
@@ -1260,7 +1260,7 @@ function Get-CodexRunConfig {
         $approvalMode = $providerDefaults.approvalMode
     }
     if (Get-Member -InputObject $providerDefaults -Name "skipTrust" -MemberType NoteProperty -ErrorAction SilentlyContinue) {
-        $skipTrust = ConvertTo-LaneBoolean -Value $providerDefaults.skipTrust
+        $skipTrust = ConvertTo-BrevityBoolean -Value $providerDefaults.skipTrust
     }
     if (Get-Member -InputObject $providerDefaults -Name "env" -MemberType NoteProperty -ErrorAction SilentlyContinue) {
         $env = $providerDefaults.env
@@ -1272,7 +1272,7 @@ function Get-CodexRunConfig {
         }
     }
     if (Get-Member -InputObject $providerConfig -Name "skipTrust" -MemberType NoteProperty -ErrorAction SilentlyContinue) {
-        $skipTrust = ConvertTo-LaneBoolean -Value $providerConfig.skipTrust
+        $skipTrust = ConvertTo-BrevityBoolean -Value $providerConfig.skipTrust
     }
     if (Get-Member -InputObject $providerConfig -Name "env" -MemberType NoteProperty -ErrorAction SilentlyContinue) {
         if ($null -ne $providerConfig.env -and $providerConfig.env -is [System.Management.Automation.PSCustomObject]) {
@@ -1501,24 +1501,24 @@ function Show-TaskRun {
 
     if ([string]::IsNullOrWhiteSpace($Slug)) {
         Write-Host "Missing task slug." -ForegroundColor Red
-        Write-Host "Usage: .\lane.ps1 task run <slug> [--execute]"
+        Write-Host "Usage: .\brevity.ps1 task run <slug> [--execute]"
         exit 1
     }
 
     $repoRoot = Get-RepositoryRoot
-    $config = Read-LaneConfig
-    $tasksPath = Join-Path $repoRoot ".lane\tasks.json"
+    $config = Read-BrevityConfig
+    $tasksPath = Join-Path $repoRoot ".brevity\tasks.json"
 
     if (-not (Test-Path -LiteralPath $tasksPath)) {
         Write-Host "Task not found: $Slug" -ForegroundColor Red
-        Write-Host "No Lane task metadata exists at: $tasksPath"
+        Write-Host "No Brevity task metadata exists at: $tasksPath"
         exit 1
     }
 
     $rawTasks = Get-Content -LiteralPath $tasksPath -Raw
     if ([string]::IsNullOrWhiteSpace($rawTasks)) {
         Write-Host "Task not found: $Slug" -ForegroundColor Red
-        Write-Host "No Lane task metadata exists at: $tasksPath"
+        Write-Host "No Brevity task metadata exists at: $tasksPath"
         exit 1
     }
 
@@ -1528,7 +1528,7 @@ function Show-TaskRun {
 
     if ($null -eq $task) {
         Write-Host "Task not found: $Slug" -ForegroundColor Red
-        Write-Host "Use .\lane.ps1 task status to list known tasks."
+        Write-Host "Use .\brevity.ps1 task status to list known tasks."
         exit 1
     }
 
@@ -1677,23 +1677,23 @@ function Remove-TaskWorktree {
 
     if ([string]::IsNullOrWhiteSpace($Slug)) {
         Write-Host "Missing task slug." -ForegroundColor Red
-        Write-Host "Usage: .\lane.ps1 task cleanup <slug> [--force]"
+        Write-Host "Usage: .\brevity.ps1 task cleanup <slug> [--force]"
         exit 1
     }
 
     $repoRoot = Get-RepositoryRoot
-    $tasksPath = Join-Path $repoRoot ".lane\tasks.json"
+    $tasksPath = Join-Path $repoRoot ".brevity\tasks.json"
 
     if (-not (Test-Path -LiteralPath $tasksPath)) {
         Write-Host "Task not found: $Slug" -ForegroundColor Red
-        Write-Host "No Lane task metadata exists at: $tasksPath"
+        Write-Host "No Brevity task metadata exists at: $tasksPath"
         exit 1
     }
 
     $rawTasks = Get-Content -LiteralPath $tasksPath -Raw
     if ([string]::IsNullOrWhiteSpace($rawTasks)) {
         Write-Host "Task not found: $Slug" -ForegroundColor Red
-        Write-Host "No Lane task metadata exists at: $tasksPath"
+        Write-Host "No Brevity task metadata exists at: $tasksPath"
         exit 1
     }
 
@@ -1703,7 +1703,7 @@ function Remove-TaskWorktree {
 
     if ($null -eq $task) {
         Write-Host "Task not found: $Slug" -ForegroundColor Red
-        Write-Host "Use .\lane.ps1 task status to list known tasks."
+        Write-Host "Use .\brevity.ps1 task status to list known tasks."
         exit 1
     }
 
@@ -1717,7 +1717,7 @@ function Remove-TaskWorktree {
         exit 1
     }
 
-    Write-Host "Cleaning up Lane task: $Slug"
+    Write-Host "Cleaning up Brevity task: $Slug"
     Write-Host "Worktree: $($task.worktreePath)"
     Write-Host "Branch: $($task.branch)"
     if ($Force) {
@@ -1772,23 +1772,23 @@ function Merge-TaskBranch {
 
     if ([string]::IsNullOrWhiteSpace($Slug)) {
         Write-Host "Missing task slug." -ForegroundColor Red
-        Write-Host "Usage: .\lane.ps1 task merge <slug>"
+        Write-Host "Usage: .\brevity.ps1 task merge <slug>"
         exit 1
     }
 
     $repoRoot = Get-RepositoryRoot
-    $tasksPath = Join-Path $repoRoot ".lane\tasks.json"
+    $tasksPath = Join-Path $repoRoot ".brevity\tasks.json"
 
     if (-not (Test-Path -LiteralPath $tasksPath)) {
         Write-Host "Task not found: $Slug" -ForegroundColor Red
-        Write-Host "No Lane task metadata exists at: $tasksPath"
+        Write-Host "No Brevity task metadata exists at: $tasksPath"
         exit 1
     }
 
     $rawTasks = Get-Content -LiteralPath $tasksPath -Raw
     if ([string]::IsNullOrWhiteSpace($rawTasks)) {
         Write-Host "Task not found: $Slug" -ForegroundColor Red
-        Write-Host "No Lane task metadata exists at: $tasksPath"
+        Write-Host "No Brevity task metadata exists at: $tasksPath"
         exit 1
     }
 
@@ -1798,7 +1798,7 @@ function Merge-TaskBranch {
 
     if ($null -eq $task) {
         Write-Host "Task not found: $Slug" -ForegroundColor Red
-        Write-Host "Use .\lane.ps1 task status to list known tasks."
+        Write-Host "Use .\brevity.ps1 task status to list known tasks."
         exit 1
     }
 
@@ -1807,7 +1807,7 @@ function Merge-TaskBranch {
         exit 1
     }
 
-    Write-Host "Merging Lane task: $Slug"
+    Write-Host "Merging Brevity task: $Slug"
     Write-Host "Branch: $($task.branch)"
     Write-Host "Target: current Git branch"
 
@@ -1835,7 +1835,7 @@ function New-TaskWorktree {
 
     if ([string]::IsNullOrWhiteSpace($Slug)) {
         Write-Host "Missing task slug." -ForegroundColor Red
-        Write-Host "Usage: .\lane.ps1 task new <slug> [-DevRoot <path>]"
+        Write-Host "Usage: .\brevity.ps1 task new <slug> [-DevRoot <path>]"
         exit 1
     }
 
@@ -1869,7 +1869,7 @@ function New-TaskWorktree {
     Write-Host "Path: $targetPath"
     Write-Host "Branch: $branchName"
     Write-Host "Prompt: $promptPath"
-    Write-Host "Metadata: $(Join-Path $repoRoot ".lane\tasks.json")"
+    Write-Host "Metadata: $(Join-Path $repoRoot ".brevity\tasks.json")"
 }
 
 function Activate-TaskWorktree {
@@ -1877,12 +1877,12 @@ function Activate-TaskWorktree {
 
     if ([string]::IsNullOrWhiteSpace($Slug)) {
         Write-Host "Missing task slug." -ForegroundColor Red
-        Write-Host "Usage: .\lane.ps1 task activate <slug>"
+        Write-Host "Usage: .\brevity.ps1 task activate <slug>"
         exit 1
     }
 
     $repoRoot = Get-RepositoryRoot
-    $config = Read-LaneConfig
+    $config = Read-BrevityConfig
     $specPath = Join-Path (Join-Path $config.vaultPath "tasks") "$Slug.md"
 
     if (-not (Test-Path -LiteralPath $specPath)) {
@@ -1924,7 +1924,7 @@ function Activate-TaskWorktree {
     Write-Host "Branch: $branchName"
     Write-Host "Prompt: $promptPath"
     Write-Host "Spec: $specPath"
-    Write-Host "Metadata: $(Join-Path $repoRoot ".lane\tasks.json")"
+    Write-Host "Metadata: $(Join-Path $repoRoot ".brevity\tasks.json")"
 }
 
 switch ($Command.ToLowerInvariant()) {
@@ -1941,7 +1941,7 @@ switch ($Command.ToLowerInvariant()) {
                 $repair = $true
             }
             else {
-                Write-Host "Unknown lane init argument: $Subcommand" -ForegroundColor Red
+                Write-Host "Unknown brevity init argument: $Subcommand" -ForegroundColor Red
                 Show-Help
                 exit 1
             }
@@ -1953,14 +1953,14 @@ switch ($Command.ToLowerInvariant()) {
                     $repair = $true
                 }
                 else {
-                    Write-Host "Unknown lane init argument: $initArg" -ForegroundColor Red
+                    Write-Host "Unknown brevity init argument: $initArg" -ForegroundColor Red
                     Show-Help
                     exit 1
                 }
             }
         }
 
-        Initialize-LaneRepository -Root $DevRoot -Repair $repair
+        Initialize-BrevityRepository -Root $DevRoot -Repair $repair
     }
     "plan" {
         if ([string]::IsNullOrWhiteSpace($Subcommand)) {
@@ -1981,7 +1981,7 @@ switch ($Command.ToLowerInvariant()) {
             Apply-PlannerOutput -Path $plannerOutputPath
         }
         else {
-            Write-Host "Unknown lane plan command: $Subcommand" -ForegroundColor Red
+            Write-Host "Unknown brevity plan command: $Subcommand" -ForegroundColor Red
             Show-Help
             exit 1
         }
@@ -2055,8 +2055,8 @@ switch ($Command.ToLowerInvariant()) {
                             $taskSlug = [string]$taskArg
                         }
                         else {
-                            Write-Host "Unknown argument for lane task run: $taskArg" -ForegroundColor Red
-                            Write-Host "Usage: .\lane.ps1 task run <slug> [--execute]"
+                            Write-Host "Unknown argument for brevity task run: $taskArg" -ForegroundColor Red
+                            Write-Host "Usage: .\brevity.ps1 task run <slug> [--execute]"
                             exit 1
                         }
                     }
@@ -2088,8 +2088,8 @@ switch ($Command.ToLowerInvariant()) {
                             $taskSlug = [string]$taskArg
                         }
                         else {
-                            Write-Host "Unknown argument for lane task cleanup: $taskArg" -ForegroundColor Red
-                            Write-Host "Usage: .\lane.ps1 task cleanup <slug> [--force]"
+                            Write-Host "Unknown argument for brevity task cleanup: $taskArg" -ForegroundColor Red
+                            Write-Host "Usage: .\brevity.ps1 task cleanup <slug> [--force]"
                             exit 1
                         }
                     }
@@ -2098,14 +2098,14 @@ switch ($Command.ToLowerInvariant()) {
                 Remove-TaskWorktree -Slug $taskSlug -Force $forceCleanup
             }
             default {
-                Write-Host "Unknown lane task command: $Subcommand" -ForegroundColor Red
+                Write-Host "Unknown brevity task command: $Subcommand" -ForegroundColor Red
                 Show-Help
                 exit 1
             }
         }
     }
     default {
-        Write-Host "Unknown lane command: $Command" -ForegroundColor Red
+        Write-Host "Unknown brevity command: $Command" -ForegroundColor Red
         Show-Help
         exit 1
     }
