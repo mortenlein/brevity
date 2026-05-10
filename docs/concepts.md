@@ -356,7 +356,7 @@ configured, Brevity includes `-p <profile>`.
 The headless Gemini command format is:
 
 ```text
-gemini -s -p <prompt text>
+Set-Location -LiteralPath <worktreePath>; gemini -s -p (Get-Content -LiteralPath 'prompt.md' -Raw)
 ```
 
 If `model` is configured, Brevity includes `-m <model>`. Set `sandbox` to `none` or

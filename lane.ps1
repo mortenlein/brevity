@@ -1304,6 +1304,12 @@ function Format-CommandLine {
     return (($Parts | ForEach-Object { Format-CommandArgument -Value $_ }) -join " ")
 }
 
+function Format-PowerShellLiteral {
+    param([string]$Value)
+
+    return "'" + ($Value -replace "'", "''") + "'"
+}
+
 function New-CodexTaskRunCommand {
     param(
         [object]$Config,
@@ -1314,26 +1320,33 @@ function New-CodexTaskRunCommand {
 
     if ([string]::Equals([string]$codexConfig.provider, "gemini", [System.StringComparison]::OrdinalIgnoreCase)) {
         $arguments = @()
+        $displayArguments = @()
 
         if (-not [string]::IsNullOrWhiteSpace($codexConfig.sandbox) -and -not [string]::Equals([string]$codexConfig.sandbox, "none", [System.StringComparison]::OrdinalIgnoreCase)) {
             $arguments += "-s"
+            $displayArguments += "-s"
         }
 
         if (-not [string]::IsNullOrWhiteSpace($codexConfig.model)) {
             $arguments += "-m"
             $arguments += [string]$codexConfig.model
+            $displayArguments += "-m"
+            $displayArguments += [string]$codexConfig.model
         }
 
         $arguments += "-p"
         $arguments += Get-TaskPromptText -WorktreePath $WorktreePath
-        $displayParts = @([string]$codexConfig.command) + ($arguments[0..($arguments.Count - 2)] + "prompt.md")
+        $displayArguments += "-p"
+        $displayCommand = Format-CommandLine -Parts (@([string]$codexConfig.command) + $displayArguments)
+        $display = "Set-Location -LiteralPath $(Format-PowerShellLiteral -Value $WorktreePath); $displayCommand (Get-Content -LiteralPath 'prompt.md' -Raw)"
 
         return (New-Object PSObject -Property ([ordered]@{
             provider = [string]$codexConfig.provider
             command = [string]$codexConfig.command
             arguments = $arguments
             executionPolicy = [string]$codexConfig.executionPolicy
-            display = Format-CommandLine -Parts $displayParts
+            workingDirectory = $WorktreePath
+            display = $display
         }))
     }
 
@@ -1363,6 +1376,7 @@ function New-CodexTaskRunCommand {
         command = [string]$codexConfig.command
         arguments = $arguments
         executionPolicy = [string]$codexConfig.executionPolicy
+        workingDirectory = $WorktreePath
         display = Format-CommandLine -Parts $parts
     }))
 }
@@ -1445,9 +1459,15 @@ function Show-TaskRun {
     }
 
     try {
-        & $codexCommand.command @($codexCommand.arguments)
-        if ($LASTEXITCODE -ne 0) {
-            exit $LASTEXITCODE
+        Push-Location -LiteralPath $codexCommand.workingDirectory
+        try {
+            & $codexCommand.command @($codexCommand.arguments)
+            if ($LASTEXITCODE -ne 0) {
+                exit $LASTEXITCODE
+            }
+        }
+        finally {
+            Pop-Location
         }
     }
     finally {
