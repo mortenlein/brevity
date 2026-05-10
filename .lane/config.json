@@ -10,5 +10,22 @@
                   "model":  null,
                   "profile":  null,
                   "autoExecute":  false
-              }
+              },
+    "defaultProvider":  "gemini",
+    "providers":  {
+                      "codex":  {
+                                    "command":  "codex",
+                                    "mode":  "exec",
+                                    "sandbox":  "workspace-write",
+                                    "model":  null,
+                                    "profile":  null,
+                                    "autoExecute":  false,
+                                    "executionPolicy":  "Bypass"
+                                },
+                      "gemini":  {
+                                     "command":  "gemini",
+                                     "model":  "gemini-2.5-pro",
+                                     "skipTrust": true
+                                 }
+                  }
 }
