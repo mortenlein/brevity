@@ -1,4 +1,4 @@
-param(
+﻿param(
     [Parameter(Position = 0)]
     [string]$Command = "help",
 
@@ -2110,6 +2110,7 @@ switch ($Command.ToLowerInvariant()) {
         exit 1
     }
 }
+
 
 
 

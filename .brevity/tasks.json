@@ -1,0 +1,11 @@
+[
+    {
+        "slug":  "gemini-trust-docs",
+        "branch":  "task/gemini-trust-docs",
+        "worktreePath":  "C:\\dev\\worktrees\\active\\brevity-gemini-trust-docs",
+        "promptPath":  "C:\\dev\\worktrees\\active\\brevity-gemini-trust-docs\\prompt.md",
+        "specPath":  "C:\\dev\\vaults\\AI-Vault\\10-Projects\\brevity\\tasks\\gemini-trust-docs.md",
+        "status":  "ready-for-worker",
+        "createdAt":  "2026-05-10T19:00:50.7394322Z"
+    }
+]

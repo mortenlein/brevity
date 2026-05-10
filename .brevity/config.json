@@ -1,0 +1,27 @@
+﻿{
+    "projectName":  "brevity",
+    "devRoot":  "C:\\dev",
+    "vaultPath":  "C:\\dev\\vaults\\AI-Vault\\10-Projects\\brevity",
+    "worktreesRoot":  "C:\\dev\\worktrees\\active",
+    "defaultProvider":  "gemini",
+    "providers":  {
+                      "codex":  {
+                                    "command":  "codex",
+                                    "mode":  "exec",
+                                    "sandbox":  "workspace-write",
+                                    "model":  null,
+                                    "profile":  null,
+                                    "executionPolicy":  "Bypass",
+                                    "autoExecute":  false
+                                },
+                      "gemini":  {
+                                     "command":  "gemini",
+                                     "model":  null,
+                                     "approvalMode":  null,
+                                     "skipTrust":  false,
+                                     "env":  {
+
+                                             }
+                                 }
+                  }
+}

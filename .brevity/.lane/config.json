@@ -9,7 +9,8 @@
                   "sandbox":  "workspace-write",
                   "model":  null,
                   "profile":  null,
-                  "autoExecute":  false
+                  "autoExecute":  false,
+                  "provider":  "gemini"
               },
     "defaultProvider":  "gemini",
     "providers":  {
