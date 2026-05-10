@@ -51,12 +51,11 @@ function Get-MainRepositoryRoot {
     $gitExitCode = $LASTEXITCODE
     $ErrorActionPreference = $previousErrorActionPreference
 
-    if ($gitExitCode -eq 0 -and -not [string]::IsNullOrWhiteSpace($repoRoot)) {
-        return $repoRoot
+    if ($gitExitCode -ne 0 -or [string]::IsNullOrWhiteSpace($repoRoot) -or ([string]$repoRoot).Trim().StartsWith("-")) {
+        return Get-RepositoryRoot
     }
 
-    # Fallback for older git versions
-    return Get-RepositoryRoot
+    return ([string]$repoRoot).Trim()
 }
 
 
@@ -2130,6 +2129,7 @@ switch ($Command.ToLowerInvariant()) {
         exit 1
     }
 }
+
 
 
 
