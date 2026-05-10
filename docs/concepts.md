@@ -67,6 +67,7 @@ New configs also include Codex run settings:
 ```json
 {
   "codex": {
+    "provider": "codex",
     "command": "codex",
     "mode": "exec",
     "sandbox": "workspace-write",
@@ -337,8 +338,8 @@ record. It prints:
 - prompt path
 - headless Codex command
 
-The command is built from Codex settings in `.lane\config.json`. The headless
-Codex command format is:
+The command is built from Codex settings in `.lane\config.json`. The configured
+provider must be `codex`. The headless Codex command format is:
 
 ```text
 codex exec -C <worktreePath> -s <sandbox> prompt.md
@@ -351,7 +352,7 @@ command. The default `Bypass` value is scoped to the child process and does not
 change the user's machine policy. By default, Lane prints the command only.
 With `--execute`, Lane runs the generated command. It does not update task
 status, record metrics, run planner automation, or support other AI providers
-yet.
+yet. Setting another provider returns a clear unsupported-provider error.
 
 `lane task cleanup <slug> [--force]` reads the same metadata file and finds the
 matching task record.

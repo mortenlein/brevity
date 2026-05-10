@@ -176,6 +176,7 @@ function Set-ConfigField {
 
 function Get-DefaultCodexConfig {
     return (New-Object PSObject -Property ([ordered]@{
+        provider = "codex"
         command = "codex"
         mode = "exec"
         sandbox = "workspace-write"
@@ -260,6 +261,7 @@ function Repair-CodexConfigDefaults {
     $Results = Repair-ConfigObjectField -Config $Config -Results $Results -Name "codex"
     $defaults = Get-DefaultCodexConfig
 
+    $Results = Repair-CodexConfigField -CodexConfig $Config.codex -Results $Results -Name "provider" -ExpectedValue $defaults.provider
     $Results = Repair-CodexConfigField -CodexConfig $Config.codex -Results $Results -Name "command" -ExpectedValue $defaults.command
     $Results = Repair-CodexConfigField -CodexConfig $Config.codex -Results $Results -Name "mode" -ExpectedValue $defaults.mode
     $Results = Repair-CodexConfigField -CodexConfig $Config.codex -Results $Results -Name "sandbox" -ExpectedValue $defaults.sandbox
@@ -1129,6 +1131,7 @@ function Get-CodexRunConfig {
         $configuredCodex = $Config.codex
     }
 
+    $provider = $defaults.provider
     $command = $defaults.command
     $mode = $defaults.mode
     $sandbox = $defaults.sandbox
@@ -1137,6 +1140,10 @@ function Get-CodexRunConfig {
     $executionPolicy = $defaults.executionPolicy
 
     if ($null -ne $configuredCodex) {
+        if (Get-Member -InputObject $configuredCodex -Name "provider" -MemberType NoteProperty -ErrorAction SilentlyContinue) {
+            $provider = $configuredCodex.provider
+        }
+
         if (Get-Member -InputObject $configuredCodex -Name "command" -MemberType NoteProperty -ErrorAction SilentlyContinue) {
             $command = $configuredCodex.command
         }
@@ -1162,6 +1169,14 @@ function Get-CodexRunConfig {
         }
     }
 
+    if ([string]::IsNullOrWhiteSpace($provider)) {
+        $provider = $defaults.provider
+    }
+
+    if (-not [string]::Equals([string]$provider, "codex", [System.StringComparison]::OrdinalIgnoreCase)) {
+        throw "Unsupported worker provider: $provider. Lane v0 only supports provider 'codex'."
+    }
+
     if ([string]::IsNullOrWhiteSpace($command)) {
         $command = $defaults.command
     }
@@ -1179,6 +1194,7 @@ function Get-CodexRunConfig {
     }
 
     return (New-Object PSObject -Property ([ordered]@{
+        provider = $provider
         command = $command
         mode = $mode
         sandbox = $sandbox
@@ -1289,7 +1305,13 @@ function Show-TaskRun {
         exit 1
     }
 
-    $codexCommand = New-CodexTaskRunCommand -Config $config -WorktreePath $task.worktreePath
+    try {
+        $codexCommand = New-CodexTaskRunCommand -Config $config -WorktreePath $task.worktreePath
+    }
+    catch {
+        Write-Host $_.Exception.Message -ForegroundColor Red
+        exit 1
+    }
 
     Write-Host "Task: $($task.slug)"
     Write-Host "Worktree: $($task.worktreePath)"
