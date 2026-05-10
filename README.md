@@ -329,6 +329,12 @@ codex exec -C <worktreePath> -s <sandbox> prompt.md
 
 If configured, Lane includes `-m <model>` and `-p <profile>`. By default, this
 is a dry run and does not execute Codex, change task status, or record metrics.
+When `--execute` is used, Lane applies `codex.executionPolicy` from
+`.lane\config.json` to the worker process only. The default is `Bypass`, which
+helps PowerShell run script shims such as globally installed npm commands
+without changing the user's machine policy.
+Set `codex.executionPolicy` to another PowerShell execution policy name, such
+as `RemoteSigned`, if a repository needs a stricter worker process policy.
 
 Use `--execute` to run the generated command:
 

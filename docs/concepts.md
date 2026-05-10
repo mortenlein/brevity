@@ -72,6 +72,7 @@ New configs also include Codex run settings:
     "sandbox": "workspace-write",
     "model": null,
     "profile": null,
+    "executionPolicy": "Bypass",
     "autoExecute": false
   }
 }
@@ -344,10 +345,13 @@ codex exec -C <worktreePath> -s <sandbox> prompt.md
 ```
 
 If `model` is configured, Lane includes `-m <model>`. If `profile` is
-configured, Lane includes `-p <profile>`. By default, Lane prints the command
-only. With `--execute`, Lane runs the generated command. It does not update
-task status, record metrics, run planner automation, or support other AI
-providers yet.
+configured, Lane includes `-p <profile>`. With `--execute`, Lane applies
+`executionPolicy` to the worker process only before running the generated
+command. The default `Bypass` value is scoped to the child process and does not
+change the user's machine policy. By default, Lane prints the command only.
+With `--execute`, Lane runs the generated command. It does not update task
+status, record metrics, run planner automation, or support other AI providers
+yet.
 
 `lane task cleanup <slug> [--force]` reads the same metadata file and finds the
 matching task record.

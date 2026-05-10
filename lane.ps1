@@ -181,6 +181,7 @@ function Get-DefaultCodexConfig {
         sandbox = "workspace-write"
         model = $null
         profile = $null
+        executionPolicy = "Bypass"
         autoExecute = $false
     }))
 }
@@ -264,6 +265,7 @@ function Repair-CodexConfigDefaults {
     $Results = Repair-CodexConfigField -CodexConfig $Config.codex -Results $Results -Name "sandbox" -ExpectedValue $defaults.sandbox
     $Results = Repair-CodexConfigField -CodexConfig $Config.codex -Results $Results -Name "model" -ExpectedValue $defaults.model
     $Results = Repair-CodexConfigField -CodexConfig $Config.codex -Results $Results -Name "profile" -ExpectedValue $defaults.profile
+    $Results = Repair-CodexConfigField -CodexConfig $Config.codex -Results $Results -Name "executionPolicy" -ExpectedValue $defaults.executionPolicy
     $Results = Repair-CodexConfigField -CodexConfig $Config.codex -Results $Results -Name "autoExecute" -ExpectedValue $defaults.autoExecute
 
     return $Results
@@ -1132,6 +1134,7 @@ function Get-CodexRunConfig {
     $sandbox = $defaults.sandbox
     $model = $defaults.model
     $profile = $defaults.profile
+    $executionPolicy = $defaults.executionPolicy
 
     if ($null -ne $configuredCodex) {
         if (Get-Member -InputObject $configuredCodex -Name "command" -MemberType NoteProperty -ErrorAction SilentlyContinue) {
@@ -1153,6 +1156,10 @@ function Get-CodexRunConfig {
         if (Get-Member -InputObject $configuredCodex -Name "profile" -MemberType NoteProperty -ErrorAction SilentlyContinue) {
             $profile = $configuredCodex.profile
         }
+
+        if (Get-Member -InputObject $configuredCodex -Name "executionPolicy" -MemberType NoteProperty -ErrorAction SilentlyContinue) {
+            $executionPolicy = $configuredCodex.executionPolicy
+        }
     }
 
     if ([string]::IsNullOrWhiteSpace($command)) {
@@ -1167,12 +1174,17 @@ function Get-CodexRunConfig {
         $sandbox = $defaults.sandbox
     }
 
+    if ([string]::IsNullOrWhiteSpace($executionPolicy)) {
+        $executionPolicy = $defaults.executionPolicy
+    }
+
     return (New-Object PSObject -Property ([ordered]@{
         command = $command
         mode = $mode
         sandbox = $sandbox
         model = $model
         profile = $profile
+        executionPolicy = $executionPolicy
     }))
 }
 
@@ -1223,6 +1235,7 @@ function New-CodexTaskRunCommand {
     return (New-Object PSObject -Property ([ordered]@{
         command = [string]$codexConfig.command
         arguments = $arguments
+        executionPolicy = [string]$codexConfig.executionPolicy
         display = Format-CommandLine -Parts $parts
     }))
 }
@@ -1282,6 +1295,9 @@ function Show-TaskRun {
     Write-Host "Worktree: $($task.worktreePath)"
     Write-Host "Prompt: $($task.promptPath)"
     Write-Host "Codex: $($codexCommand.display)"
+    if (-not [string]::IsNullOrWhiteSpace($codexCommand.executionPolicy)) {
+        Write-Host "ExecutionPolicy (worker process): $($codexCommand.executionPolicy)"
+    }
 
     if (-not $Execute) {
         Write-Host "Dry run. Pass --execute to run the worker non-interactively."
@@ -1289,9 +1305,19 @@ function Show-TaskRun {
     }
 
     Write-Host "Executing Codex worker..."
-    & $codexCommand.command @($codexCommand.arguments)
-    if ($LASTEXITCODE -ne 0) {
-        exit $LASTEXITCODE
+    $previousExecutionPolicyPreference = $env:PSExecutionPolicyPreference
+    if (-not [string]::IsNullOrWhiteSpace($codexCommand.executionPolicy)) {
+        $env:PSExecutionPolicyPreference = $codexCommand.executionPolicy
+    }
+
+    try {
+        & $codexCommand.command @($codexCommand.arguments)
+        if ($LASTEXITCODE -ne 0) {
+            exit $LASTEXITCODE
+        }
+    }
+    finally {
+        $env:PSExecutionPolicyPreference = $previousExecutionPolicyPreference
     }
 }
 
