@@ -1,4 +1,4 @@
-param(
+﻿param(
     [Parameter(Position = 0)]
     [string]$Command = "help",
 
@@ -1371,12 +1371,21 @@ function ConvertTo-WorkerEnvironmentMap {
             continue
         }
 
-        $environment[$property.Name] = [string]$property.Value
+        $sourceName = [string]$property.Value
+        if ([string]::IsNullOrWhiteSpace($sourceName) -or $sourceName -match '=') {
+            throw "Invalid source environment variable name for $($property.Name): $sourceName"
+        }
+
+        $sourceValue = [Environment]::GetEnvironmentVariable($sourceName, "Process")
+        if ([string]::IsNullOrWhiteSpace($sourceValue)) {
+            throw "Worker environment variable '$($property.Name)' maps to '$sourceName', but '$sourceName' is not set in the current process environment."
+        }
+
+        $environment[$property.Name] = $sourceValue
     }
 
     return $environment
 }
-
 function Format-EnvironmentDisplay {
     param([System.Collections.IDictionary]$Environment)
 
@@ -1570,7 +1579,8 @@ function Show-TaskRun {
 
         Push-Location -LiteralPath $codexCommand.workingDirectory
         try {
-            & $codexCommand.command @($codexCommand.arguments)
+            $argsForWorker = [string[]]@($codexCommand.arguments)
+            & $codexCommand.command @argsForWorker
             if ($LASTEXITCODE -ne 0) {
                 exit $LASTEXITCODE
             }
@@ -2100,3 +2110,7 @@ switch ($Command.ToLowerInvariant()) {
         exit 1
     }
 }
+
+
+
+
