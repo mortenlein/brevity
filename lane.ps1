@@ -205,7 +205,7 @@ function Get-DefaultGeminiConfig {
     return (New-Object PSObject -Property ([ordered]@{
         command = "gemini"
         model = $null
-        approvalMode = $false
+        approvalMode = $null
     }))
 }
 
@@ -1236,7 +1236,7 @@ function Get-CodexRunConfig {
     $model = $null
     $profile = $null
     $executionPolicy = $null
-    $approvalMode = $false
+    $approvalMode = $null
 
     if (Get-Member -InputObject $providerDefaults -Name "mode" -MemberType NoteProperty -ErrorAction SilentlyContinue) {
         $mode = $providerDefaults.mode
@@ -1251,7 +1251,7 @@ function Get-CodexRunConfig {
         $executionPolicy = $providerDefaults.executionPolicy
     }
     if (Get-Member -InputObject $providerDefaults -Name "approvalMode" -MemberType NoteProperty -ErrorAction SilentlyContinue) {
-        $approvalMode = ConvertTo-LaneBoolean -Value $providerDefaults.approvalMode
+        $approvalMode = $providerDefaults.approvalMode
     }
 
     foreach ($fieldName in @("command", "mode", "sandbox", "model", "profile", "executionPolicy", "approvalMode")) {
@@ -1290,7 +1290,7 @@ function Get-CodexRunConfig {
         model = $model
         profile = $profile
         executionPolicy = $executionPolicy
-        approvalMode = ConvertTo-LaneBoolean -Value $approvalMode
+        approvalMode = $approvalMode
     }))
 }
 

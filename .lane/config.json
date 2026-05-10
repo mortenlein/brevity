@@ -25,7 +25,7 @@
                       "gemini":  {
                                      "command":  "gemini",
                                      "model":  "gemini-2.5-pro",
-                                     "skipTrust": true
+                                     "approvalMode": "yolo"
                                  }
                   }
 }
