@@ -373,6 +373,30 @@ With `--execute`, Brevity runs the generated command. It does not update task
 status, record metrics, run planner automation, or support other AI providers
 yet. Setting another provider returns a clear unsupported-provider error.
 
+## Gemini Trust
+
+Gemini CLI uses a parent-folder trust model. When you run `gemini` from a
+worktree, it checks for a `.gemini` folder in the parent directory. If found,
+Gemini trusts the worktree and its contents.
+
+This is necessary for Brevity's dynamic worktree workflow. Each task gets a
+fresh worktree, but the trust root remains the same.
+
+The dev root is the trust root:
+
+```text
+<dev-root>\
+  .gemini\
+  repos\
+  worktrees\
+```
+
+To set this up, create a `.gemini` folder in your dev root.
+
+Gemini also requires an API key, sourced from `GEMINI_API_KEY`. Brevity can
+pass this to the worker process from its own secure configuration. See the main
+README for details.
+
 `Brevity task cleanup <slug> [--force]` reads the same metadata file and finds the
 matching task record.
 
