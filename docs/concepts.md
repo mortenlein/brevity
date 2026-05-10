@@ -62,7 +62,7 @@ For new configs, `worktreesRoot` points at:
 <dev-root>\worktrees\active
 ```
 
-New configs also include Codex run settings:
+New configs also include worker run settings:
 
 ```json
 {
@@ -80,6 +80,11 @@ New configs also include Codex run settings:
 ```
 
 Existing files are left unchanged by normal init.
+
+Set `codex.provider` to `gemini` to run Gemini CLI instead of Codex. Lane keeps
+the existing config object name for compatibility. With Gemini, Lane passes the
+task prompt text with `-p`, passes `-m <model>` when configured, and passes `-s`
+when sandbox is not blank or `none`.
 
 `lane init --repair [-DevRoot <path>]` is the corrective init mode. It
 re-detects `projectName` from the Git repository root folder and recomputes:
@@ -336,17 +341,26 @@ record. It prints:
 - task slug
 - worktree path
 - prompt path
-- headless Codex command
+- headless worker command
 
-The command is built from Codex settings in `.lane\config.json`. The configured
-provider must be `codex`. The headless Codex command format is:
+The command is built from worker settings in `.lane\config.json`. The configured
+provider may be `codex` or `gemini`. The headless Codex command format is:
 
 ```text
 codex exec -C <worktreePath> -s <sandbox> prompt.md
 ```
 
 If `model` is configured, Lane includes `-m <model>`. If `profile` is
-configured, Lane includes `-p <profile>`. With `--execute`, Lane applies
+configured, Lane includes `-p <profile>`.
+
+The headless Gemini command format is:
+
+```text
+gemini -s -p <prompt text>
+```
+
+If `model` is configured, Lane includes `-m <model>`. Set `sandbox` to `none` or
+blank to omit `-s`. With `--execute`, Lane applies
 `executionPolicy` to the worker process only before running the generated
 command. The default `Bypass` value is scoped to the child process and does not
 change the user's machine policy. By default, Lane prints the command only.

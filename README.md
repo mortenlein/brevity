@@ -327,9 +327,12 @@ worktree path, prompt path, and headless Codex command:
 codex exec -C <worktreePath> -s <sandbox> prompt.md
 ```
 
-The configured provider must be `codex`. If configured, Lane includes
-`-m <model>` and `-p <profile>`. By default, this is a dry run and does not
-execute Codex, change task status, or record metrics.
+The configured provider may be `codex` or `gemini`. For `codex`, Lane includes
+`-m <model>` and `-p <profile>` when configured. For `gemini`, Lane builds a
+non-interactive command with `-p <prompt text>`, includes `-m <model>` when
+configured, and includes `-s` when sandbox is not blank or `none`. By default,
+this is a dry run and does not execute the worker, change task status, or record
+metrics.
 When `--execute` is used, Lane applies `codex.executionPolicy` from
 `.lane\config.json` to the worker process only. The default is `Bypass`, which
 helps PowerShell run script shims such as globally installed npm commands

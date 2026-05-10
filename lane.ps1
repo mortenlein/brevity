@@ -187,6 +187,19 @@ function Get-DefaultCodexConfig {
     }))
 }
 
+function Get-DefaultGeminiConfig {
+    return (New-Object PSObject -Property ([ordered]@{
+        provider = "gemini"
+        command = "gemini"
+        mode = $null
+        sandbox = "workspace-write"
+        model = $null
+        profile = $null
+        executionPolicy = "Bypass"
+        autoExecute = $false
+    }))
+}
+
 function Repair-ConfigField {
     param(
         [object]$Config,
@@ -1173,8 +1186,12 @@ function Get-CodexRunConfig {
         $provider = $defaults.provider
     }
 
-    if (-not [string]::Equals([string]$provider, "codex", [System.StringComparison]::OrdinalIgnoreCase)) {
-        throw "Unsupported worker provider: $provider. Lane v0 only supports provider 'codex'."
+    $normalizedProvider = ([string]$provider).ToLowerInvariant()
+    if ($normalizedProvider -eq "gemini") {
+        $defaults = Get-DefaultGeminiConfig
+    }
+    elseif ($normalizedProvider -ne "codex") {
+        throw "Unsupported worker provider: $provider. Lane v0 supports providers 'codex' and 'gemini'."
     }
 
     if ([string]::IsNullOrWhiteSpace($command)) {
@@ -1194,7 +1211,7 @@ function Get-CodexRunConfig {
     }
 
     return (New-Object PSObject -Property ([ordered]@{
-        provider = $provider
+        provider = $normalizedProvider
         command = $command
         mode = $mode
         sandbox = $sandbox
@@ -1202,6 +1219,22 @@ function Get-CodexRunConfig {
         profile = $profile
         executionPolicy = $executionPolicy
     }))
+}
+
+function Get-TaskPromptText {
+    param([string]$WorktreePath)
+
+    $promptPath = Join-Path $WorktreePath "prompt.md"
+    if (-not (Test-Path -LiteralPath $promptPath)) {
+        throw "Prompt file not found: $promptPath"
+    }
+
+    $promptText = Get-Content -LiteralPath $promptPath -Raw
+    if ([string]::IsNullOrWhiteSpace($promptText)) {
+        throw "Prompt file is empty: $promptPath"
+    }
+
+    return $promptText
 }
 
 function Format-CommandArgument {
@@ -1227,6 +1260,32 @@ function New-CodexTaskRunCommand {
     )
 
     $codexConfig = Get-CodexRunConfig -Config $Config
+
+    if ([string]::Equals([string]$codexConfig.provider, "gemini", [System.StringComparison]::OrdinalIgnoreCase)) {
+        $arguments = @()
+
+        if (-not [string]::IsNullOrWhiteSpace($codexConfig.sandbox) -and -not [string]::Equals([string]$codexConfig.sandbox, "none", [System.StringComparison]::OrdinalIgnoreCase)) {
+            $arguments += "-s"
+        }
+
+        if (-not [string]::IsNullOrWhiteSpace($codexConfig.model)) {
+            $arguments += "-m"
+            $arguments += [string]$codexConfig.model
+        }
+
+        $arguments += "-p"
+        $arguments += Get-TaskPromptText -WorktreePath $WorktreePath
+        $displayParts = @([string]$codexConfig.command) + ($arguments[0..($arguments.Count - 2)] + "prompt.md")
+
+        return (New-Object PSObject -Property ([ordered]@{
+            provider = [string]$codexConfig.provider
+            command = [string]$codexConfig.command
+            arguments = $arguments
+            executionPolicy = [string]$codexConfig.executionPolicy
+            display = Format-CommandLine -Parts $displayParts
+        }))
+    }
+
     $arguments = @(
         [string]$codexConfig.mode,
         "-C",
@@ -1249,6 +1308,7 @@ function New-CodexTaskRunCommand {
     $parts = @([string]$codexConfig.command) + $arguments
 
     return (New-Object PSObject -Property ([ordered]@{
+        provider = [string]$codexConfig.provider
         command = [string]$codexConfig.command
         arguments = $arguments
         executionPolicy = [string]$codexConfig.executionPolicy
@@ -1316,7 +1376,7 @@ function Show-TaskRun {
     Write-Host "Task: $($task.slug)"
     Write-Host "Worktree: $($task.worktreePath)"
     Write-Host "Prompt: $($task.promptPath)"
-    Write-Host "Codex: $($codexCommand.display)"
+    Write-Host "Worker: $($codexCommand.display)"
     if (-not [string]::IsNullOrWhiteSpace($codexCommand.executionPolicy)) {
         Write-Host "ExecutionPolicy (worker process): $($codexCommand.executionPolicy)"
     }
@@ -1326,7 +1386,7 @@ function Show-TaskRun {
         return
     }
 
-    Write-Host "Executing Codex worker..."
+    Write-Host "Executing $($codexCommand.provider) worker..."
     $previousExecutionPolicyPreference = $env:PSExecutionPolicyPreference
     if (-not [string]::IsNullOrWhiteSpace($codexCommand.executionPolicy)) {
         $env:PSExecutionPolicyPreference = $codexCommand.executionPolicy
