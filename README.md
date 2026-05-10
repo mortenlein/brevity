@@ -28,6 +28,19 @@ From this repository:
 .\brevity.ps1 help
 ```
 
+## Fast Iteration Loop
+
+The recommended fast iteration loop for a Gemini worker is:
+
+1.  `.\brevity.ps1 task spec <slug>` - review the task spec.
+2.  `.\brevity.ps1 task activate <slug>` - create the worktree.
+3.  `.\brevity.ps1 task run <slug> --execute` - run the worker.
+4.  `.\brevity.ps1 task merge <slug>` - merge the completed work.
+5.  `.\brevity.ps1 task cleanup <slug>` - remove the worktree and branch.
+
+This loop assumes a planned task spec already exists in the vault. To create
+one, use the `plan` and `plan apply` commands.
+
 Brevity v0 supports:
 
 ```powershell
