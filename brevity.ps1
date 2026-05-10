@@ -407,7 +407,7 @@ function Show-Status {
     $brevityRoot = Join-Path $rootPath ".brevity"
     $vaultRoot = Join-Path $rootPath "vaults\AI-Vault"
 
-    Write-Section "LANE"
+    Write-Section "BREVITY"
     if (Test-Path -LiteralPath $brevityRoot) {
         Write-Host $brevityRoot -ForegroundColor Green
     }

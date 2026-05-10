@@ -1,11 +1,11 @@
-Read AGENTS.md.
+﻿Read AGENTS.md.
 
-You are planning one Lane worker task for this repository.
+You are planning one Brevity worker task for this repository.
 
 Project memory:
 
 ```text
-C:\dev\vaults\AI-Vault\10-Projects\lane-implement-lane-init-vault
+C:\dev\vaults\AI-Vault\10-Projects\brevity-implement-brevity-init-vault
 ```
 
 Read the configured vaultPath project memory before selecting work. Use the Markdown files and task notes there as durable project context.
@@ -34,3 +34,5 @@ Constraints:
 - Do not propose autonomous planning.
 - Avoid placeholders such as TODO, TBD, <fill in>, or examples that must be replaced.
 - Choose a task that is small enough for one worker turn.
+
+
