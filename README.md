@@ -1,23 +1,23 @@
-# Lane
+# Brevity
 
-Lane is a Windows-first command line scaffold for AI-assisted repository work.
+Brevity is a Windows-first command line scaffold for AI-assisted repository work.
 It extracts the useful shape of `bootstrap-ai-system-complete-v4.ps1` into a
 small repo-owned tool:
 
-- `.system` becomes `.lane`
-- `onboard-ai-repo.ps1` becomes `lane onboard`
-- `new-agent-task.ps1` becomes `lane task new`
-- `workspace-status.ps1` becomes `lane status`
+- `.system` becomes `.Brevity`
+- `onboard-ai-repo.ps1` becomes `Brevity onboard`
+- `new-agent-task.ps1` becomes `Brevity task new`
+- `workspace-status.ps1` becomes `Brevity status`
 - AI-Vault remains supported
 - Git worktrees remain first-class
 
-Lane v0 is intentionally small. It documents the workflow and provides a thin
+Brevity v0 is intentionally small. It documents the workflow and provides a thin
 PowerShell CLI surface, but it does not implement planner automation.
 
 ## Files
 
 - `lane.ps1` - Windows PowerShell CLI entry point.
-- `AGENTS.md` - working instructions for agents modifying Lane.
+- `AGENTS.md` - working instructions for agents modifying Brevity.
 - `docs/concepts.md` - concepts carried forward from the bootstrap script.
 
 ## Usage
@@ -28,7 +28,7 @@ From this repository:
 .\lane.ps1 help
 ```
 
-Lane v0 supports:
+Brevity v0 supports:
 
 ```powershell
 .\lane.ps1 help
@@ -49,8 +49,8 @@ Lane v0 supports:
 .\lane.ps1 task cleanup <slug> [--force]
 ```
 
-The init command prepares the current Git repository for Lane. It creates
-repo-local Lane state when missing:
+The init command prepares the current Git repository for Brevity. It creates
+repo-local Brevity state when missing:
 
 ```text
 <repo>\.lane\
@@ -59,8 +59,8 @@ repo-local Lane state when missing:
 ```
 
 `config.json` records the project name, dev root, AI-Vault project path,
-worktrees root, default worker provider, and provider run settings. The project
-name is the Git repository root folder name.
+worktrees root, and Codex run settings. The project name is the Git repository
+root folder name.
 
 It also creates project memory under AI-Vault:
 
@@ -88,11 +88,11 @@ Repair mode re-detects the project name from the Git repository root folder,
 recomputes `vaultPath` as
 `<dev-root>\vaults\AI-Vault\10-Projects\<project-name>`, and recomputes
 `worktreesRoot` as `<dev-root>\worktrees\active`. It creates `config.json` if
-missing, updates only the known Lane fields when they are wrong, and preserves
-unknown or custom fields. It also creates the same missing `.lane` files,
+missing, updates only the known Brevity fields when they are wrong, and preserves
+unknown or custom fields. It also creates the same missing `.Brevity` files,
 folders, and AI-Vault project memory paths as normal init. Existing vault
-memory files are not overwritten. Repair also adds missing provider run
-settings without removing custom config fields.
+memory files are not overwritten. Repair also adds missing Codex run settings
+without removing custom config fields.
 
 Repair mode prints repaired config fields, unchanged config fields, created
 paths, and already-existing paths.
@@ -114,13 +114,13 @@ AI-Vault project memory, select exactly one small high-value task, and return a
 task title, task slug, and worker prompt. It also tells Codex not to implement
 code, create a worktree, call Codex automatically, or use placeholders.
 
-After writing the prompt, Lane prints the prompt path and:
+After writing the prompt, Brevity prints the prompt path and:
 
 ```text
 Open Codex in this repo and paste the planner prompt.
 ```
 
-Lane does not automatically launch Codex or run autonomous planning.
+Brevity does not automatically launch Codex or run autonomous planning.
 
 The backlog plan mode reads the same config and writes a backlog planner prompt
 to:
@@ -136,7 +136,7 @@ small tasks. Each task must include a title, slug, `status: planned`,
 keep tasks small and independently executable where possible, avoid
 placeholders, and not implement code.
 
-After writing the backlog prompt, Lane prints the prompt path and:
+After writing the backlog prompt, Brevity prints the prompt path and:
 
 ```text
 Open Codex in this repo and paste the backlog planner prompt.
@@ -168,7 +168,7 @@ Planner output tasks must use these fields:
   Stop after patch + summary.
 ```
 
-Lane validates required fields, requires `status: planned`, writes readable
+Brevity validates required fields, requires `status: planned`, writes readable
 Markdown task specs, and refuses to overwrite existing task specs. It does not
 activate worktrees, launch Codex, merge branches, or change runtime task
 metadata.
@@ -180,7 +180,7 @@ The board command reads:
 ```
 
 `.lane\tasks.json` is runtime state only. It tracks task worktrees, branches,
-prompts, statuses, and cleanup state for task work that Lane has already
+prompts, statuses, and cleanup state for task work that Brevity has already
 created. It is not the durable planning backlog.
 
 Vault task specs are durable planned work. They live as Markdown files under:
@@ -200,11 +200,11 @@ matching tasks are present, including:
 - `done`
 - `blocked`
 
-When no task metadata exists, it prints `No Lane tasks found.` The board is
+When no task metadata exists, it prints `No Brevity tasks found.` The board is
 read-only; it does not start work, run planner automation, merge branches, or
 change task lifecycle state.
 
-The status command lists the standard Lane workspace locations when they exist:
+The status command lists the standard Brevity workspace locations when they exist:
 
 - `repos\active`
 - `worktrees\active`
@@ -246,7 +246,7 @@ The task activate command reads:
 ```
 
 It uses `vaultPath`, `worktreesRoot`, and `projectName` from that config. For
-the requested slug, Lane reads the durable vault task spec from:
+the requested slug, Brevity reads the durable vault task spec from:
 
 ```text
 <vaultPath>\tasks\<slug>.md
@@ -264,13 +264,13 @@ and creates the matching branch:
 task/<slug>
 ```
 
-Lane copies the vault task spec contents into:
+Brevity copies the vault task spec contents into:
 
 ```text
 <worktreePath>\prompt.md
 ```
 
-The original vault task spec is not modified or deleted. Lane records runtime
+The original vault task spec is not modified or deleted. Brevity records runtime
 metadata in:
 
 ```text
@@ -293,8 +293,8 @@ It uses `vaultPath` from that config and looks for:
 <vaultPath>\tasks\<slug>.md
 ```
 
-When the spec exists, Lane prints the task slug, spec path, and Markdown file
-contents. When the spec is missing, Lane prints a clear not-found message and
+When the spec exists, Brevity prints the task slug, spec path, and Markdown file
+contents. When the spec is missing, Brevity prints a clear not-found message and
 the expected path. This command is read-only; it does not create worktrees,
 parse backlog planner output, or change `.lane\tasks.json`.
 
@@ -311,7 +311,7 @@ run manually:
 codex -C <worktreePath> -a never -s workspace-write
 ```
 
-It also prints `Read prompt.md and follow it exactly.` Lane does not
+It also prints `Read prompt.md and follow it exactly.` Brevity does not
 automatically launch Codex.
 
 The task run command reads the matching record from:
@@ -320,26 +320,25 @@ The task run command reads the matching record from:
 <repo>\.lane\tasks.json
 ```
 
-It reads provider settings from `.lane\config.json` and prints the task slug,
-worktree path, prompt path, resolved provider, and worker command:
+It reads Codex settings from `.lane\config.json` and prints the task slug,
+worktree path, prompt path, and headless Codex command:
 
 ```text
 codex exec -C <worktreePath> -s <sandbox> prompt.md
 ```
 
-Lane resolves the worker from top-level `defaultProvider`, then reads settings
-from `providers.<name>`. The configured provider may be `codex` or `gemini`.
-For `codex`, Lane includes `-m <model>` and `-p <profile>` when configured. For
-`gemini`, Lane builds a non-interactive command with `-p <prompt text>`,
-includes `-m <model>` when configured, and includes `-s` when sandbox is not
-blank or `none`. By default, this is a dry run and does not execute the worker,
-change task status, or record metrics.
-When `--execute` is used, Lane applies `providers.codex.executionPolicy` from
-`.lane\config.json` to the worker process only when Codex is selected. The
-default is `Bypass`, which helps PowerShell run script shims such as globally
-installed npm commands without changing the user's machine policy. Set
-`providers.codex.executionPolicy` to another PowerShell execution policy name,
-such as `RemoteSigned`, if a repository needs a stricter worker process policy.
+The configured provider may be `codex` or `gemini`. For `codex`, Brevity includes
+`-m <model>` and `-p <profile>` when configured. For `gemini`, Brevity builds a
+non-interactive command with `-p <prompt text>`, includes `-m <model>` when
+configured, and includes `-s` when sandbox is not blank or `none`. By default,
+this is a dry run and does not execute the worker, change task status, or record
+metrics.
+When `--execute` is used, Brevity applies `codex.executionPolicy` from
+`.lane\config.json` to the worker process only. The default is `Bypass`, which
+helps PowerShell run script shims such as globally installed npm commands
+without changing the user's machine policy.
+Set `codex.executionPolicy` to another PowerShell execution policy name, such
+as `RemoteSigned`, if a repository needs a stricter worker process policy.
 
 Use `--execute` to run the generated command:
 
@@ -347,7 +346,7 @@ Use `--execute` to run the generated command:
 .\lane.ps1 task run <slug> --execute
 ```
 
-Lane does not implement metrics or other AI providers yet. Setting another
+Brevity does not implement metrics or other AI providers yet. Setting another
 provider returns a clear unsupported-provider error.
 
 The task status command reads:
@@ -358,7 +357,7 @@ The task status command reads:
 
 When task metadata exists, it prints the slug, branch, status, worktree path,
 and prompt path for each task. When no task metadata exists, it prints
-`No Lane tasks found.`
+`No Brevity tasks found.`
 
 The task merge command reads the matching record from:
 
@@ -367,9 +366,9 @@ The task merge command reads the matching record from:
 ```
 
 It merges the recorded branch into the current Git branch with
-`git merge <branch>`. When the merge succeeds, Lane updates the task status to
+`git merge <branch>`. When the merge succeeds, Brevity updates the task status to
 `merged`. It does not remove the worktree, delete the branch, or remove task
-metadata. If the merge fails, Lane leaves metadata unchanged.
+metadata. If the merge fails, Brevity leaves metadata unchanged.
 
 The task cleanup command reads the matching record from:
 
@@ -380,7 +379,7 @@ The task cleanup command reads the matching record from:
 It removes the recorded Git worktree, deletes the recorded Git branch with
 `git branch -d`, and then removes the task record from metadata. This is the
 default safe cleanup behavior. If Git cannot remove the worktree or delete the
-branch, Lane leaves the metadata unchanged.
+branch, Brevity leaves the metadata unchanged.
 
 Use `--force` only when you explicitly want Git's forced cleanup behavior:
 
@@ -388,28 +387,28 @@ Use `--force` only when you explicitly want Git's forced cleanup behavior:
 .\lane.ps1 task cleanup <slug> --force
 ```
 
-With `--force`, Lane removes the worktree with
+With `--force`, Brevity removes the worktree with
 `git worktree remove --force <worktreePath>` and deletes the branch with
 `git branch -D <branch>`. If the recorded worktree path is missing or is not a
-registered Git worktree, Lane prints a warning and continues to branch removal.
-When branch removal succeeds, or the branch is already missing, Lane removes the
-task metadata record. If branch removal fails for another reason, Lane keeps the
+registered Git worktree, Brevity prints a warning and continues to branch removal.
+When branch removal succeeds, or the branch is already missing, Brevity removes the
+task metadata record. If branch removal fails for another reason, Brevity keeps the
 metadata unchanged.
 
 ## Planned Commands
 
-These commands are part of Lane's public design, but are not implemented in v0:
+These commands are part of Brevity's public design, but are not implemented in v0:
 
 ```powershell
-lane onboard
+Brevity onboard
 ```
 
-`lane status` is the successor to the bootstrap script's
+`Brevity status` is the successor to the bootstrap script's
 `.system\scripts\workspace-status.ps1`.
 
 ## Workspace Layout
 
-Lane keeps orchestration separate from project source:
+Brevity keeps orchestration separate from project source:
 
 ```text
 <dev-root>\
@@ -440,6 +439,6 @@ Lane keeps orchestration separate from project source:
 - No web app.
 - No planner automation in v0.
 - Planner prompt generation is manual and does not create worktrees.
-- Codex and Gemini are the configured worker providers in v0.
+- Codex is the only configured worker provider in v0.
 - Markdown remains the durable memory layer.
 - Git remains the source of truth for code.
