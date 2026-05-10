@@ -206,6 +206,7 @@ function Get-DefaultGeminiConfig {
         command = "gemini"
         model = $null
         approvalMode = $null
+        skipTrust = $false
     }))
 }
 
@@ -332,6 +333,7 @@ function Repair-ProviderConfigDefaults {
     $Results = Repair-ProviderConfigField -ProviderConfig $Config.providers.gemini -Results $Results -ProviderName "gemini" -Name "command" -ExpectedValue $geminiDefaults.command
     $Results = Repair-ProviderConfigField -ProviderConfig $Config.providers.gemini -Results $Results -ProviderName "gemini" -Name "model" -ExpectedValue $geminiDefaults.model
     $Results = Repair-ProviderConfigField -ProviderConfig $Config.providers.gemini -Results $Results -ProviderName "gemini" -Name "approvalMode" -ExpectedValue $geminiDefaults.approvalMode
+    $Results = Repair-ProviderConfigField -ProviderConfig $Config.providers.gemini -Results $Results -ProviderName "gemini" -Name "skipTrust" -ExpectedValue $geminiDefaults.skipTrust
 
     return $Results
 }
@@ -1237,6 +1239,7 @@ function Get-CodexRunConfig {
     $profile = $null
     $executionPolicy = $null
     $approvalMode = $null
+    $skipTrust = $false
 
     if (Get-Member -InputObject $providerDefaults -Name "mode" -MemberType NoteProperty -ErrorAction SilentlyContinue) {
         $mode = $providerDefaults.mode
@@ -1253,11 +1256,17 @@ function Get-CodexRunConfig {
     if (Get-Member -InputObject $providerDefaults -Name "approvalMode" -MemberType NoteProperty -ErrorAction SilentlyContinue) {
         $approvalMode = $providerDefaults.approvalMode
     }
+    if (Get-Member -InputObject $providerDefaults -Name "skipTrust" -MemberType NoteProperty -ErrorAction SilentlyContinue) {
+        $skipTrust = ConvertTo-LaneBoolean -Value $providerDefaults.skipTrust
+    }
 
     foreach ($fieldName in @("command", "mode", "sandbox", "model", "profile", "executionPolicy", "approvalMode")) {
         if (Get-Member -InputObject $providerConfig -Name $fieldName -MemberType NoteProperty -ErrorAction SilentlyContinue) {
             Set-Variable -Name $fieldName -Value $providerConfig.$fieldName
         }
+    }
+    if (Get-Member -InputObject $providerConfig -Name "skipTrust" -MemberType NoteProperty -ErrorAction SilentlyContinue) {
+        $skipTrust = ConvertTo-LaneBoolean -Value $providerConfig.skipTrust
     }
 
     if ([string]::IsNullOrWhiteSpace($command)) {
@@ -1291,6 +1300,7 @@ function Get-CodexRunConfig {
         profile = $profile
         executionPolicy = $executionPolicy
         approvalMode = $approvalMode
+        skipTrust = $skipTrust
     }))
 }
 
@@ -1356,11 +1366,21 @@ function New-CodexTaskRunCommand {
             $displayArguments += [string]$codexConfig.model
         }
 
-        if (-not [string]::IsNullOrWhiteSpace($codexConfig.approvalMode)) {
+        $geminiApprovalMode = $codexConfig.approvalMode
+        if ([string]::IsNullOrWhiteSpace($geminiApprovalMode) -and $codexConfig.skipTrust) {
+            $geminiApprovalMode = "yolo"
+        }
+
+        if (-not [string]::IsNullOrWhiteSpace($geminiApprovalMode)) {
             $arguments += "--approval-mode"
-            $arguments += [string]$codexConfig.approvalMode
+            $arguments += [string]$geminiApprovalMode
             $displayArguments += "--approval-mode"
-            $displayArguments += [string]$codexConfig.approvalMode
+            $displayArguments += [string]$geminiApprovalMode
+        }
+        
+        if ($codexConfig.skipTrust) {
+            $arguments += "--skip-trust"
+            $displayArguments += "--skip-trust"
         }
 
         $arguments += "-p"
