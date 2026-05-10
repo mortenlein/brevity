@@ -471,6 +471,8 @@ metadata unchanged.
 
 To use Gemini as a worker, you need to configure trust and authentication.
 
+For more information on provider capabilities and how to write prompts that work across different providers, see the "Provider Capabilities" section in `docs/concepts.md`.
+
 ### Trust Root
 
 Gemini CLI uses a parent-folder trust model. It looks for a `.gemini` folder in
