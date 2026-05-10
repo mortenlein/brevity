@@ -333,6 +333,9 @@ non-interactive command that runs from the task worktree and passes the
 `prompt.md` contents to `-p`. It includes `-m <model>` when configured, and
 includes `-s` when sandbox is not blank or `none`. Set
 `providers.gemini.skipTrust` to `true` to pass `--approval-mode yolo` to Gemini.
+Set `providers.gemini.env` to an object of environment variables, such as
+`GOOGLE_API_KEY`, when Gemini authentication should be scoped to the worker
+process. Dry runs print configured variable names but mask values.
 By default, this is a dry run and does not execute the worker, change task
 status, or record metrics.
 When `--execute` is used, Brevity applies `codex.executionPolicy` from

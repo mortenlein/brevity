@@ -85,7 +85,10 @@ Set `codex.provider` to `gemini` to run Gemini CLI instead of Codex. Brevity kee
 the existing config object name for compatibility. With Gemini, Brevity passes the
 task prompt text with `-p`, passes `-m <model>` when configured, and passes `-s`
 when sandbox is not blank or `none`. Set `providers.gemini.skipTrust` to `true`
-to pass `--approval-mode yolo`.
+to pass `--approval-mode yolo`. Set `providers.gemini.env` to an object of
+environment variables, such as `GOOGLE_API_KEY`, when Gemini authentication
+should be scoped to the worker process. Dry runs print configured variable names
+but mask values.
 
 `Brevity init --repair [-DevRoot <path>]` is the corrective init mode. It
 re-detects `projectName` from the Git repository root folder and recomputes:

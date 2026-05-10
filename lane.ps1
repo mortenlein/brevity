@@ -207,6 +207,7 @@ function Get-DefaultGeminiConfig {
         model = $null
         approvalMode = $null
         skipTrust = $false
+        env = New-Object PSObject
     }))
 }
 
@@ -334,6 +335,7 @@ function Repair-ProviderConfigDefaults {
     $Results = Repair-ProviderConfigField -ProviderConfig $Config.providers.gemini -Results $Results -ProviderName "gemini" -Name "model" -ExpectedValue $geminiDefaults.model
     $Results = Repair-ProviderConfigField -ProviderConfig $Config.providers.gemini -Results $Results -ProviderName "gemini" -Name "approvalMode" -ExpectedValue $geminiDefaults.approvalMode
     $Results = Repair-ProviderConfigField -ProviderConfig $Config.providers.gemini -Results $Results -ProviderName "gemini" -Name "skipTrust" -ExpectedValue $geminiDefaults.skipTrust
+    $Results = Repair-ProviderConfigField -ProviderConfig $Config.providers.gemini -Results $Results -ProviderName "gemini" -Name "env" -ExpectedValue $geminiDefaults.env
 
     return $Results
 }
@@ -1240,6 +1242,7 @@ function Get-CodexRunConfig {
     $executionPolicy = $null
     $approvalMode = $null
     $skipTrust = $false
+    $env = New-Object PSObject
 
     if (Get-Member -InputObject $providerDefaults -Name "mode" -MemberType NoteProperty -ErrorAction SilentlyContinue) {
         $mode = $providerDefaults.mode
@@ -1259,6 +1262,9 @@ function Get-CodexRunConfig {
     if (Get-Member -InputObject $providerDefaults -Name "skipTrust" -MemberType NoteProperty -ErrorAction SilentlyContinue) {
         $skipTrust = ConvertTo-LaneBoolean -Value $providerDefaults.skipTrust
     }
+    if (Get-Member -InputObject $providerDefaults -Name "env" -MemberType NoteProperty -ErrorAction SilentlyContinue) {
+        $env = $providerDefaults.env
+    }
 
     foreach ($fieldName in @("command", "mode", "sandbox", "model", "profile", "executionPolicy", "approvalMode")) {
         if (Get-Member -InputObject $providerConfig -Name $fieldName -MemberType NoteProperty -ErrorAction SilentlyContinue) {
@@ -1267,6 +1273,11 @@ function Get-CodexRunConfig {
     }
     if (Get-Member -InputObject $providerConfig -Name "skipTrust" -MemberType NoteProperty -ErrorAction SilentlyContinue) {
         $skipTrust = ConvertTo-LaneBoolean -Value $providerConfig.skipTrust
+    }
+    if (Get-Member -InputObject $providerConfig -Name "env" -MemberType NoteProperty -ErrorAction SilentlyContinue) {
+        if ($null -ne $providerConfig.env -and $providerConfig.env -is [System.Management.Automation.PSCustomObject]) {
+            $env = $providerConfig.env
+        }
     }
 
     if ([string]::IsNullOrWhiteSpace($command)) {
@@ -1301,6 +1312,7 @@ function Get-CodexRunConfig {
         executionPolicy = $executionPolicy
         approvalMode = $approvalMode
         skipTrust = $skipTrust
+        env = $env
     }))
 }
 
@@ -1342,6 +1354,44 @@ function Format-PowerShellLiteral {
     return "'" + ($Value -replace "'", "''") + "'"
 }
 
+function ConvertTo-WorkerEnvironmentMap {
+    param([object]$EnvironmentConfig)
+
+    $environment = [ordered]@{}
+    if ($null -eq $EnvironmentConfig -or $EnvironmentConfig -isnot [System.Management.Automation.PSCustomObject]) {
+        return $environment
+    }
+
+    foreach ($property in @($EnvironmentConfig.PSObject.Properties)) {
+        if ([string]::IsNullOrWhiteSpace($property.Name) -or $property.Name -match '=') {
+            throw "Invalid worker environment variable name: $($property.Name)"
+        }
+
+        if ($null -eq $property.Value) {
+            continue
+        }
+
+        $environment[$property.Name] = [string]$property.Value
+    }
+
+    return $environment
+}
+
+function Format-EnvironmentDisplay {
+    param([System.Collections.IDictionary]$Environment)
+
+    if ($null -eq $Environment -or $Environment.Count -eq 0) {
+        return ""
+    }
+
+    $assignments = @()
+    foreach ($name in @($Environment.Keys)) {
+        $assignments += "`$env:$name='<configured>'"
+    }
+
+    return ($assignments -join "; ") + "; "
+}
+
 function New-CodexTaskRunCommand {
     param(
         [object]$Config,
@@ -1353,6 +1403,7 @@ function New-CodexTaskRunCommand {
     if ([string]::Equals([string]$codexConfig.provider, "gemini", [System.StringComparison]::OrdinalIgnoreCase)) {
         $arguments = @()
         $displayArguments = @()
+        $environment = ConvertTo-WorkerEnvironmentMap -EnvironmentConfig $codexConfig.env
 
         if (-not [string]::IsNullOrWhiteSpace($codexConfig.sandbox) -and -not [string]::Equals([string]$codexConfig.sandbox, "none", [System.StringComparison]::OrdinalIgnoreCase)) {
             $arguments += "-s"
@@ -1387,7 +1438,8 @@ function New-CodexTaskRunCommand {
         $arguments += Get-TaskPromptText -WorktreePath $WorktreePath
         $displayArguments += "-p"
         $displayCommand = Format-CommandLine -Parts (@([string]$codexConfig.command) + $displayArguments)
-        $display = "Set-Location -LiteralPath $(Format-PowerShellLiteral -Value $WorktreePath); $displayCommand (Get-Content -LiteralPath 'prompt.md' -Raw)"
+        $environmentDisplay = Format-EnvironmentDisplay -Environment $environment
+        $display = "Set-Location -LiteralPath $(Format-PowerShellLiteral -Value $WorktreePath); $environmentDisplay$displayCommand (Get-Content -LiteralPath 'prompt.md' -Raw)"
 
         return (New-Object PSObject -Property ([ordered]@{
             provider = [string]$codexConfig.provider
@@ -1395,6 +1447,7 @@ function New-CodexTaskRunCommand {
             arguments = $arguments
             executionPolicy = [string]$codexConfig.executionPolicy
             workingDirectory = $WorktreePath
+            environment = $environment
             display = $display
         }))
     }
@@ -1426,6 +1479,7 @@ function New-CodexTaskRunCommand {
         arguments = $arguments
         executionPolicy = [string]$codexConfig.executionPolicy
         workingDirectory = $WorktreePath
+        environment = [ordered]@{}
         display = Format-CommandLine -Parts $parts
     }))
 }
@@ -1503,11 +1557,17 @@ function Show-TaskRun {
 
     Write-Host "Executing $($codexCommand.provider) worker..."
     $previousExecutionPolicyPreference = $env:PSExecutionPolicyPreference
+    $previousEnvironment = [ordered]@{}
     if (-not [string]::IsNullOrWhiteSpace($codexCommand.executionPolicy)) {
         $env:PSExecutionPolicyPreference = $codexCommand.executionPolicy
     }
 
     try {
+        foreach ($name in @($codexCommand.environment.Keys)) {
+            $previousEnvironment[$name] = [Environment]::GetEnvironmentVariable($name, "Process")
+            [Environment]::SetEnvironmentVariable($name, $codexCommand.environment[$name], "Process")
+        }
+
         Push-Location -LiteralPath $codexCommand.workingDirectory
         try {
             & $codexCommand.command @($codexCommand.arguments)
@@ -1520,6 +1580,15 @@ function Show-TaskRun {
         }
     }
     finally {
+        foreach ($name in @($previousEnvironment.Keys)) {
+            if ($null -eq $previousEnvironment[$name]) {
+                [Environment]::SetEnvironmentVariable($name, $null, "Process")
+            }
+            else {
+                [Environment]::SetEnvironmentVariable($name, $previousEnvironment[$name], "Process")
+            }
+        }
+
         $env:PSExecutionPolicyPreference = $previousExecutionPolicyPreference
     }
 }
