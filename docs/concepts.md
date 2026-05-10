@@ -418,6 +418,12 @@ record, and merges the recorded branch into the current Git branch with
 `merged`. It does not clean up the worktree, delete the branch, or remove task
 metadata. If the merge fails, the metadata stays unchanged.
 
+## Provider Capabilities
+
+Brevity supports different AI providers, such as Codex and Gemini. These providers may expose different tools and capabilities. For example, some providers may offer file system tools like `replace` and `write_file`, while others may not.
+
+When writing prompts for Brevity workers, avoid assuming the availability of provider-specific tools. Gemini may report that a tool is unavailable if it is not supported by the current provider. In such cases, re-phrase the prompt in provider-neutral terms that describe the goal, not the specific tool to achieve it.
+
 ## Command Model
 
 Brevity is designed around these commands:
