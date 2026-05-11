@@ -141,12 +141,20 @@ repo-local Brevity state when missing:
 ```text
 <repo>\.brevity\
 <repo>\.brevity\tasks.json
+<repo>\.brevity\provider-health.json
 <repo>\.brevity\config.json
 ```
 
 `config.json` records the project name, dev root, AI-Vault project path,
 worktrees root, and Codex run settings. The project name is the Git repository
 root folder name.
+
+`provider-health.json` is lightweight runtime metadata for AI provider health.
+It starts Codex and Gemini as `unknown` and supports `healthy`,
+`capacity-degraded`, `quota-constrained`, `unavailable`, and `unknown`.
+Provider health is not task status: it must not change task lifecycle,
+worktree, merge, or cleanup state. Brevity v0 does not automatically route or
+fall back based on provider health.
 
 It also creates project memory under AI-Vault:
 

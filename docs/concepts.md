@@ -48,6 +48,40 @@ to track worktrees, branches, prompts, statuses, and cleanup state for task
 work that Brevity has already created. Durable planned work belongs in vault task
 specs, not in `.brevity\tasks.json`.
 
+`provider-health.json` records lightweight runtime health metadata for configured
+AI providers. New workspaces start each provider as `unknown`:
+
+```json
+{
+  "codex": {
+    "status": "unknown",
+    "note": "",
+    "updatedAt": null
+  },
+  "gemini": {
+    "status": "unknown",
+    "note": "",
+    "updatedAt": null
+  }
+}
+```
+
+Provider health is scheduler metadata, not task lifecycle state. It must not
+change task status, worktree state, branch state, merge state, or cleanup state.
+The supported health states are:
+
+- `healthy`
+- `capacity-degraded`
+- `quota-constrained`
+- `unavailable`
+- `unknown`
+
+For example, Gemini `MODEL_CAPACITY_EXHAUSTED` can be represented as
+`capacity-degraded`, while Codex low quota can be represented as
+`quota-constrained`. Brevity v0 does not automatically route, retry, or fall back
+based on this file; it only provides a clear local place to record the state for
+future routing decisions.
+
 `config.json` records:
 
 - `projectName`

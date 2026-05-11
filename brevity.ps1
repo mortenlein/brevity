@@ -235,6 +235,31 @@ function Get-DefaultProvidersConfig {
     }))
 }
 
+function Get-DefaultProviderHealthState {
+    return (New-Object PSObject -Property ([ordered]@{
+        codex = New-Object PSObject -Property ([ordered]@{
+            status = "unknown"
+            note = ""
+            updatedAt = $null
+        })
+        gemini = New-Object PSObject -Property ([ordered]@{
+            status = "unknown"
+            note = ""
+            updatedAt = $null
+        })
+    }))
+}
+
+function Ensure-ProviderHealthFile {
+    param(
+        [string]$Path,
+        [object[]]$Results
+    )
+
+    $healthLines = @(ConvertTo-Json -InputObject (Get-DefaultProviderHealthState) -Depth 10)
+    return Ensure-File -Path $Path -Lines $healthLines -Results $Results
+}
+
 function Repair-ConfigField {
     param(
         [object]$Config,
@@ -963,6 +988,7 @@ function Initialize-BrevityRepository {
     $projectName = Split-Path -Leaf $repoRoot
     $brevityRoot = Join-Path $repoRoot ".brevity"
     $tasksPath = Join-Path $brevityRoot "tasks.json"
+    $providerHealthPath = Join-Path $brevityRoot "provider-health.json"
     $configPath = Join-Path $brevityRoot "config.json"
     $vaultPath = Join-Path $rootPath "vaults\AI-Vault\10-Projects\$projectName"
     $worktreesRoot = Join-Path $rootPath "worktrees\active"
@@ -971,6 +997,7 @@ function Initialize-BrevityRepository {
     $results = @()
     $results = Ensure-Directory -Path $brevityRoot -Results $results
     $results = Ensure-File -Path $tasksPath -Lines @("[]") -Results $results
+    $results = Ensure-ProviderHealthFile -Path $providerHealthPath -Results $results
 
     $fieldResults = @()
     if ($Repair) {
