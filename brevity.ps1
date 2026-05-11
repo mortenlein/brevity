@@ -309,9 +309,9 @@ function Repair-ProviderConfigDefaults {
 
     $defaultProvider = "gemini"
     if (Get-Member -InputObject $Config -Name "codex" -MemberType NoteProperty -ErrorAction SilentlyContinue) {
-        $legacyCodexForProvider = $Config.codex
-        if ($null -ne $legacyCodexForProvider -and (Get-Member -InputObject $legacyCodexForProvider -Name "provider" -MemberType NoteProperty -ErrorAction SilentlyContinue)) {
-            $legacyProvider = ([string]$legacyCodexForProvider.provider).ToLowerInvariant()
+        $legacyConfigForProvider = $Config.codex
+        if ($null -ne $legacyConfigForProvider -and (Get-Member -InputObject $legacyConfigForProvider -Name "provider" -MemberType NoteProperty -ErrorAction SilentlyContinue)) {
+            $legacyProvider = ([string]$legacyConfigForProvider.provider).ToLowerInvariant()
             if ($legacyProvider -eq "codex" -or $legacyProvider -eq "gemini") {
                 $defaultProvider = $legacyProvider
             }
@@ -324,15 +324,15 @@ function Repair-ProviderConfigDefaults {
     $Results = Repair-ConfigObjectField -Config $Config.providers -Results $Results -Name "gemini"
 
     if (Get-Member -InputObject $Config -Name "codex" -MemberType NoteProperty -ErrorAction SilentlyContinue) {
-        $legacyCodex = $Config.codex
-        if ($null -ne $legacyCodex -and $legacyCodex -is [System.Management.Automation.PSCustomObject]) {
-            foreach ($legacyField in @($legacyCodex.PSObject.Properties.Name)) {
+        $legacyConfig = $Config.codex
+        if ($null -ne $legacyConfig -and $legacyConfig -is [System.Management.Automation.PSCustomObject]) {
+            foreach ($legacyField in @($legacyConfig.PSObject.Properties.Name)) {
                 if ($legacyField -eq "provider") {
                     continue
                 }
 
                 if (-not (Get-Member -InputObject $Config.providers.codex -Name $legacyField -MemberType NoteProperty -ErrorAction SilentlyContinue)) {
-                    Set-ConfigField -Config $Config.providers.codex -Name $legacyField -Value $legacyCodex.$legacyField
+                    Set-ConfigField -Config $Config.providers.codex -Name $legacyField -Value $legacyConfig.$legacyField
                 }
             }
         }
@@ -1197,16 +1197,16 @@ function Start-TaskWork {
         exit 1
     }
 
-    $codexCommand = "codex -C $($task.worktreePath) -a never -s workspace-write"
+    $workerCommand = "codex -C $($task.worktreePath) -a never -s workspace-write"
 
     Write-Host "Task: $($task.slug)"
     Write-Host "Worktree: $($task.worktreePath)"
     Write-Host "Prompt: $($task.promptPath)"
-    Write-Host "Codex: $codexCommand"
+    Write-Host "Worker: $workerCommand"
     Write-Host "Read prompt.md and follow it exactly."
 }
 
-function Get-CodexRunConfig {
+function Get-WorkerConfig {
     param([object]$Config)
 
     $provider = "codex"
@@ -1214,9 +1214,9 @@ function Get-CodexRunConfig {
         $provider = $Config.defaultProvider
     }
     elseif (Get-Member -InputObject $Config -Name "codex" -MemberType NoteProperty -ErrorAction SilentlyContinue) {
-        $legacyCodex = $Config.codex
-        if ($null -ne $legacyCodex -and (Get-Member -InputObject $legacyCodex -Name "provider" -MemberType NoteProperty -ErrorAction SilentlyContinue)) {
-            $provider = $legacyCodex.provider
+        $legacyConfig = $Config.codex
+        if ($null -ne $legacyConfig -and (Get-Member -InputObject $legacyConfig -Name "provider" -MemberType NoteProperty -ErrorAction SilentlyContinue)) {
+            $provider = $legacyConfig.provider
         }
     }
 
@@ -1422,33 +1422,33 @@ function Format-EnvironmentDisplay {
     return ($assignments -join "; ") + "; "
 }
 
-function New-CodexTaskRunCommand {
+function New-WorkerCommand {
     param(
         [object]$Config,
         [string]$WorktreePath
     )
 
-    $codexConfig = Get-CodexRunConfig -Config $Config
+    $workerConfig = Get-WorkerConfig -Config $Config
 
-    if ([string]::Equals([string]$codexConfig.provider, "gemini", [System.StringComparison]::OrdinalIgnoreCase)) {
+    if ([string]::Equals([string]$workerConfig.provider, "gemini", [System.StringComparison]::OrdinalIgnoreCase)) {
         $arguments = @()
         $displayArguments = @()
-        $environment = ConvertTo-WorkerEnvironmentMap -EnvironmentConfig $codexConfig.env
+        $environment = ConvertTo-WorkerEnvironmentMap -EnvironmentConfig $workerConfig.env
 
-        if (-not [string]::IsNullOrWhiteSpace($codexConfig.sandbox) -and -not [string]::Equals([string]$codexConfig.sandbox, "none", [System.StringComparison]::OrdinalIgnoreCase)) {
+        if (-not [string]::IsNullOrWhiteSpace($workerConfig.sandbox) -and -not [string]::Equals([string]$workerConfig.sandbox, "none", [System.StringComparison]::OrdinalIgnoreCase)) {
             $arguments += "-s"
             $displayArguments += "-s"
         }
 
-        if (-not [string]::IsNullOrWhiteSpace($codexConfig.model)) {
+        if (-not [string]::IsNullOrWhiteSpace($workerConfig.model)) {
             $arguments += "-m"
-            $arguments += [string]$codexConfig.model
+            $arguments += [string]$workerConfig.model
             $displayArguments += "-m"
-            $displayArguments += [string]$codexConfig.model
+            $displayArguments += [string]$workerConfig.model
         }
 
-        $geminiApprovalMode = $codexConfig.approvalMode
-        if ([string]::IsNullOrWhiteSpace($geminiApprovalMode) -and $codexConfig.skipTrust) {
+        $geminiApprovalMode = $workerConfig.approvalMode
+        if ([string]::IsNullOrWhiteSpace($geminiApprovalMode) -and $workerConfig.skipTrust) {
             $geminiApprovalMode = "yolo"
         }
 
@@ -1459,7 +1459,7 @@ function New-CodexTaskRunCommand {
             $displayArguments += [string]$geminiApprovalMode
         }
         
-        if ($codexConfig.skipTrust) {
+        if ($workerConfig.skipTrust) {
             $arguments += "--skip-trust"
             $displayArguments += "--skip-trust"
         }
@@ -1467,15 +1467,15 @@ function New-CodexTaskRunCommand {
         $arguments += "-p"
         $arguments += Get-TaskPromptText -WorktreePath $WorktreePath
         $displayArguments += "-p"
-        $displayCommand = Format-CommandLine -Parts (@([string]$codexConfig.command) + $displayArguments)
+        $displayCommand = Format-CommandLine -Parts (@([string]$workerConfig.command) + $displayArguments)
         $environmentDisplay = Format-EnvironmentDisplay -Environment $environment
         $display = "Set-Location -LiteralPath $(Format-PowerShellLiteral -Value $WorktreePath); $environmentDisplay$displayCommand (Get-Content -LiteralPath 'prompt.md' -Raw)"
 
         return (New-Object PSObject -Property ([ordered]@{
-            provider = [string]$codexConfig.provider
-            command = [string]$codexConfig.command
+            provider = [string]$workerConfig.provider
+            command = [string]$workerConfig.command
             arguments = $arguments
-            executionPolicy = [string]$codexConfig.executionPolicy
+            executionPolicy = [string]$workerConfig.executionPolicy
             workingDirectory = $WorktreePath
             environment = $environment
             display = $display
@@ -1483,31 +1483,31 @@ function New-CodexTaskRunCommand {
     }
 
     $arguments = @(
-        [string]$codexConfig.mode,
+        [string]$workerConfig.mode,
         "-C",
         $WorktreePath,
         "-s",
-        [string]$codexConfig.sandbox
+        [string]$workerConfig.sandbox
     )
 
-    if (-not [string]::IsNullOrWhiteSpace($codexConfig.model)) {
+    if (-not [string]::IsNullOrWhiteSpace($workerConfig.model)) {
         $arguments += "-m"
-        $arguments += [string]$codexConfig.model
+        $arguments += [string]$workerConfig.model
     }
 
-    if (-not [string]::IsNullOrWhiteSpace($codexConfig.profile)) {
+    if (-not [string]::IsNullOrWhiteSpace($workerConfig.profile)) {
         $arguments += "-p"
-        $arguments += [string]$codexConfig.profile
+        $arguments += [string]$workerConfig.profile
     }
 
     $arguments += "prompt.md"
-    $parts = @([string]$codexConfig.command) + $arguments
+    $parts = @([string]$workerConfig.command) + $arguments
 
     return (New-Object PSObject -Property ([ordered]@{
-        provider = [string]$codexConfig.provider
-        command = [string]$codexConfig.command
+        provider = [string]$workerConfig.provider
+        command = [string]$workerConfig.command
         arguments = $arguments
-        executionPolicy = [string]$codexConfig.executionPolicy
+        executionPolicy = [string]$workerConfig.executionPolicy
         workingDirectory = $WorktreePath
         environment = [ordered]@{}
         display = Format-CommandLine -Parts $parts
@@ -1564,7 +1564,7 @@ function Show-TaskRun {
     }
 
     try {
-        $codexCommand = New-CodexTaskRunCommand -Config $config -WorktreePath $task.worktreePath
+        $workerCommand = New-WorkerCommand -Config $config -WorktreePath $task.worktreePath
     }
     catch {
         Write-Host $_.Exception.Message -ForegroundColor Red
@@ -1574,10 +1574,10 @@ function Show-TaskRun {
     Write-Host "Task: $($task.slug)"
     Write-Host "Worktree: $($task.worktreePath)"
     Write-Host "Prompt: $($task.promptPath)"
-    Write-Host "Provider: $($codexCommand.provider)"
-    Write-Host "Worker: $($codexCommand.display)"
-    if (-not [string]::IsNullOrWhiteSpace($codexCommand.executionPolicy)) {
-        Write-Host "ExecutionPolicy (worker process): $($codexCommand.executionPolicy)"
+    Write-Host "Provider: $($workerCommand.provider)"
+    Write-Host "Worker: $($workerCommand.display)"
+    if (-not [string]::IsNullOrWhiteSpace($workerCommand.executionPolicy)) {
+        Write-Host "ExecutionPolicy (worker process): $($workerCommand.executionPolicy)"
     }
 
     if (-not $Execute) {
@@ -1585,23 +1585,23 @@ function Show-TaskRun {
         return
     }
 
-    Write-Host "Executing $($codexCommand.provider) worker..."
+    Write-Host "Executing $($workerCommand.provider) worker..."
     $previousExecutionPolicyPreference = $env:PSExecutionPolicyPreference
     $previousEnvironment = [ordered]@{}
-    if (-not [string]::IsNullOrWhiteSpace($codexCommand.executionPolicy)) {
-        $env:PSExecutionPolicyPreference = $codexCommand.executionPolicy
+    if (-not [string]::IsNullOrWhiteSpace($workerCommand.executionPolicy)) {
+        $env:PSExecutionPolicyPreference = $workerCommand.executionPolicy
     }
 
     try {
-        foreach ($name in @($codexCommand.environment.Keys)) {
+        foreach ($name in @($workerCommand.environment.Keys)) {
             $previousEnvironment[$name] = [Environment]::GetEnvironmentVariable($name, "Process")
-            [Environment]::SetEnvironmentVariable($name, $codexCommand.environment[$name], "Process")
+            [Environment]::SetEnvironmentVariable($name, $workerCommand.environment[$name], "Process")
         }
 
-        Push-Location -LiteralPath $codexCommand.workingDirectory
+        Push-Location -LiteralPath $workerCommand.workingDirectory
         try {
-            $argsForWorker = [string[]]@($codexCommand.arguments)
-            & $codexCommand.command @argsForWorker
+            $argsForWorker = [string[]]@($workerCommand.arguments)
+            & $workerCommand.command @argsForWorker
             if ($LASTEXITCODE -ne 0) {
                 exit $LASTEXITCODE
             }
