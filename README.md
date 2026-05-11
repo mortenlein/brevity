@@ -486,6 +486,48 @@ When branch removal succeeds, or the branch is already missing, Brevity removes 
 task metadata record. If branch removal fails for another reason, Brevity keeps the
 metadata unchanged.
 
+## Workspace Lifecycle Hygiene
+
+Brevity promotes a high-velocity, high-hygiene lifecycle for AI-assisted work.
+Because AI workers can iterate rapidly, a workspace can quickly accumulate
+stale branches and worktrees if cleanup is treated as optional maintenance.
+
+### Short-lived Worktrees
+
+Worktrees are intended to be ephemeral. A worktree should exist only for the
+duration of a single task. Once the task is merged, it should be removed to keep
+the workspace manageable.
+
+### Persistent Vault Memory
+
+While worktrees and branches are short-lived, project knowledge is durable.
+Brevity uses the AI-Vault to store task specs, architecture notes, and
+decisions. Context and intent remain available in the vault even after a
+worktree is deleted.
+
+### Aggressive Cleanup
+
+Cleanup is a core part of the Brevity task loop, not optional maintenance.
+The standard flow for every task ends with `Brevity task cleanup`. This:
+1.  Removes the Git worktree.
+2.  Deletes the local Git branch.
+3.  Clears the runtime metadata from `.brevity\tasks.json`.
+
+Maintaining a clean `Brevity board` is essential for reasoning about the current
+state of the project.
+
+### Recoverable Execution
+
+AI workers or model providers may fail during execution (e.g., due to timeouts,
+crashes, or capacity errors). These failures can leave a task in a partial state
+with runtime metadata still present.
+
+Brevity's lifecycle model is designed to be recoverable:
+-   **If a worker fails:** The worktree and branch remain intact. You can
+    re-run the task with `Brevity task run <slug> --execute`.
+-   **If a task is abandoned:** Use `Brevity task cleanup <slug> --force` to
+    reset the workspace state.
+
 ## Gemini Worker Setup
 
 To use Gemini as a worker, you need to configure trust and authentication.
