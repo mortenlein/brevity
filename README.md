@@ -584,7 +584,20 @@ This keeps the secret out of the repository.
 
   Capacity errors are transient. When they occur:
   1.  **Retry later:** The provider may have temporary capacity limits.
-  2.  **Switch profiles:** Use a different worker profile (e.g., switch from `gemini-flash` to `gemini-pro` or `codex-balanced`). See `docs/concepts.md` for more on fallback strategies.
+  2.  **Switch profiles:** Use the `--profile` flag to manually route the task
+      to a different worker profile or provider that may have available capacity.
+
+  *Examples:*
+  ```powershell
+  # Switch to a different Gemini profile
+  .\brevity.ps1 task run <slug> --execute --profile gemini-flash
+  .\brevity.ps1 task run <slug> --execute --profile gemini-lite
+
+  # Switch to a different provider profile
+  .\brevity.ps1 task run <slug> --execute --profile codex-balanced
+  ```
+
+  See `docs/concepts.md` for more on available profiles and fallback strategies.
 
 - **`ripgrep` not found:** Gemini may warn that `rg.exe` (ripgrep) is not in your path. This is a non-blocking warning. Gemini will fall back to its internal search tool if ripgrep is not available, which may be slower.
 

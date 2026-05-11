@@ -488,7 +488,20 @@ on how to proceed.
     minutes and retrying is the simplest first step.
 2.  **Profile Switching:** If one profile is exhausted, another might still have
     capacity. For example, if `gemini-flash` is overloaded, `gemini-pro` might
-    be available (or vice versa).
+    be available (or vice versa). Use the `--profile` flag to manually route
+    to a different worker profile:
+
+    ```powershell
+    # Switch to a more capable profile
+    .\brevity.ps1 task run <slug> --execute --profile gemini-pro
+
+    # Switch to a lower-latency profile
+    .\brevity.ps1 task run <slug> --execute --profile gemini-lite
+
+    # Switch to a different provider profile
+    .\brevity.ps1 task run <slug> --execute --profile codex-balanced
+    ```
+
 3.  **Provider Switching:** If a provider is completely down or exhausted,
     switching the `defaultProvider` in `.brevity\config.json` to a different
     provider (e.g., from `gemini` to `codex`) can unblock work.
