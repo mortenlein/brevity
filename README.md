@@ -86,6 +86,25 @@ The workflow is:
 
 This process bridges the planning phase with the worker loop. Once a task is activated, you can use the fast loop below to execute it.
 
+## Economic Model Selection
+
+Brevity encourages selecting the cheapest sufficient model for each task to manage
+costs and quotas effectively. Planners should assign a **complexity tier** to
+each task, which maps to a stable **worker profile**.
+
+-   **Low Complexity:** Documentation, unit tests, simple fixes. Use
+    `gemini-lite` or `codex-fast`.
+-   **Medium Complexity:** Feature work, refactoring, integration tests. Use
+    `gemini-flash` or `codex-balanced`.
+-   **High Complexity:** Architecture, deep debugging, complex logic. Use
+    `gemini-pro` or `codex-deep`.
+
+Stable profiles decouple task planning from volatile provider model names.
+Provider model IDs are internal implementation details. For more details on
+available profiles and fallback strategies, see
+[Worker Profiles](docs/concepts.md#worker-profiles) in the concepts
+documentation.
+
 ## Worker Fast Loop
 
 The recommended fast iteration loop for a Gemini worker on an **activated** task is:

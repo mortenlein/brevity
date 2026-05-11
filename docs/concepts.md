@@ -424,6 +424,44 @@ Brevity supports different AI providers, such as Codex and Gemini. These provide
 
 When writing prompts for Brevity workers, avoid assuming the availability of provider-specific tools. Gemini may report that a tool is unavailable if it is not supported by the current provider. In such cases, re-phrase the prompt in provider-neutral terms that describe the goal, not the specific tool to achieve it.
 
+## Worker Profiles
+
+Brevity uses stable worker profiles to decouple task planning from volatile provider
+model names. Provider model IDs are internal implementation details that may
+change as new models are released or tiers are renamed.
+
+Planners should select the cheapest profile sufficient for the task's complexity
+tier.
+
+### Gemini Profiles
+
+- `gemini-lite`: Optimized for low-latency, simple tasks.
+- `gemini-flash`: Balanced performance and cost for most development tasks.
+- `gemini-pro`: High-reasoning capacity for complex architectural changes.
+
+### Codex Profiles
+
+- `codex-fast`: Quick, low-cost worker for straightforward edits.
+- `codex-balanced`: The standard worker for everyday development.
+- `codex-deep`: Maximum depth and reasoning for difficult bug fixes and refactors.
+
+## Task Complexity Tiers
+
+- `low`: Simple changes, unit tests, documentation updates. (Use `lite` or `fast` profiles)
+- `medium`: Feature implementation, cross-file refactoring, integration tests. (Use `flash` or `balanced` profiles)
+- `high`: Architectural changes, deep debugging, complex migrations. (Use `pro` or `deep` profiles)
+
+## Fallback Guidance
+
+When a preferred profile is unavailable due to quota exhaustion or capacity limits:
+
+1.  **Capability Fallback:** Move to the next more capable profile within the same
+    provider (e.g., `gemini-flash` -> `gemini-pro`).
+2.  **Cross-Provider Fallback:** Move to the equivalent tier in a different
+    provider (e.g., `gemini-flash` -> `codex-balanced`).
+3.  **Graceful Degradation:** As a last resort, fall back to a less capable profile.
+    Note that this may require more manual intervention or iterative refinement.
+
 ## Command Model
 
 Brevity is designed around these commands:

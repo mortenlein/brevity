@@ -633,6 +633,8 @@ function New-PlanPrompt {
         "",
         "Task title:",
         "Task slug:",
+        "Task complexity: (low, medium, high)",
+        "Worker profile: (e.g., gemini-flash, codex-balanced)",
         "Worker prompt:",
         "",
         "Worker prompt requirements:",
@@ -642,6 +644,13 @@ function New-PlanPrompt {
         "- Include the relevant context from project memory.",
         "- Include concise verification steps.",
         "- End with: Stop after patch + summary.",
+        "",
+        "Worker Profile Guidance:",
+        "",
+        "- Choose the cheapest profile sufficient for the task complexity.",
+        "- low: Use gemini-lite or codex-fast.",
+        "- medium: Use gemini-flash or codex-balanced.",
+        "- high: Use gemini-pro or codex-deep.",
         "",
         "Constraints:",
         "",
@@ -740,7 +749,7 @@ function Test-PlannerFieldLine {
         [ref]$Value
     )
 
-    if ($Line -match '^\s*(?:[-*]\s*)?(title|slug|status|dependencies|workerPrompt)\s*:\s*(.*)$') {
+    if ($Line -match '^\s*(?:[-*]\s*)?(title|slug|complexity|profile|status|dependencies|workerPrompt)\s*:\s*(.*)$') {
         $Name.Value = $matches[1]
         $Value.Value = $matches[2]
         return $true
@@ -797,6 +806,8 @@ function Read-PlannerOutputTasks {
                 $currentTask = New-Object PSObject -Property ([ordered]@{
                     title = ""
                     slug = ""
+                    complexity = ""
+                    profile = ""
                     status = ""
                     dependencies = ""
                     workerPrompt = ""
