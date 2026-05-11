@@ -1242,19 +1242,16 @@ function Get-BrevityProfileConfig {
         "codex-fast" {
             return @{
                 provider = "codex"
-                profile = "fast"
             }
         }
         "codex-balanced" {
             return @{
                 provider = "codex"
-                profile = "balanced"
             }
         }
         "codex-deep" {
             return @{
                 provider = "codex"
-                profile = "deep"
             }
         }
         Default {

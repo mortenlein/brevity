@@ -356,7 +356,10 @@ codex exec -C <worktreePath> -s <sandbox> prompt.md
 ```
 
 If `model` is configured, Brevity includes `-m <model>`. If `profile` is
-configured, Brevity includes `-p <profile>`.
+configured in the Codex provider config, Brevity includes `-p <profile>`.
+Brevity worker profiles such as `codex-balanced` are orchestration metadata;
+they select the Codex provider but are not passed to Codex as native `-p`
+config profiles.
 
 The headless Gemini command format is:
 
@@ -445,6 +448,11 @@ tier.
 - `codex-fast`: Quick, low-cost worker for straightforward edits.
 - `codex-balanced`: The standard worker for everyday development.
 - `codex-deep`: Maximum depth and reasoning for difficult bug fixes and refactors.
+
+These are Brevity worker profiles, not Codex CLI config profiles. Passing
+`--profile codex-balanced` to `Brevity task run` must not become
+`codex exec ... -p balanced`; Codex `-p` is reserved for an explicitly configured
+native Codex provider profile.
 
 ## Task Complexity Tiers
 
