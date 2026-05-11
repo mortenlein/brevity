@@ -125,6 +125,8 @@ Brevity v0 supports:
 .\brevity.ps1 plan apply <file>
 .\brevity.ps1 board
 .\brevity.ps1 status [-DevRoot <path>]
+.\brevity.ps1 provider status
+.\brevity.ps1 provider set <provider> <status> [-Note <note>]
 .\brevity.ps1 task new <slug> [-DevRoot <path>]
 .\brevity.ps1 task activate <slug>
 .\brevity.ps1 task spec <slug>
@@ -152,6 +154,9 @@ root folder name.
 `provider-health.json` is lightweight runtime metadata for AI provider health.
 It starts Codex and Gemini as `unknown` and supports `healthy`,
 `capacity-degraded`, `quota-constrained`, `unavailable`, and `unknown`.
+Use `.\brevity.ps1 provider status` to inspect current provider state. Use
+`.\brevity.ps1 provider set <provider> <status> [-Note <note>]` to update one
+provider, refresh `updatedAt`, and optionally store an operator note.
 Provider health is not task status: it must not change task lifecycle,
 worktree, merge, or cleanup state. Brevity v0 does not automatically route or
 fall back based on provider health.

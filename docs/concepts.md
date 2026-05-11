@@ -82,6 +82,15 @@ For example, Gemini `MODEL_CAPACITY_EXHAUSTED` can be represented as
 based on this file; it only provides a clear local place to record the state for
 future routing decisions.
 
+`Brevity provider status` reads `.brevity\provider-health.json` and prints each
+provider's status, update timestamp, and note.
+
+`Brevity provider set <provider> <status> [-Note <note>]` updates one provider
+record in `.brevity\provider-health.json`. The provider must already exist in
+the health file, and the status must be one of the supported health states. The
+command refreshes `updatedAt` with a UTC timestamp and stores the note when one
+is supplied.
+
 `config.json` records:
 
 - `projectName`

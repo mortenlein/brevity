@@ -260,6 +260,137 @@ function Ensure-ProviderHealthFile {
     return Ensure-File -Path $Path -Lines $healthLines -Results $Results
 }
 
+function Get-SupportedProviderHealthStatuses {
+    return @("healthy", "capacity-degraded", "quota-constrained", "unavailable", "unknown")
+}
+
+function Read-ProviderHealth {
+    $repoRoot = Get-RepositoryRoot
+    $healthPath = Join-Path $repoRoot ".brevity\provider-health.json"
+
+    if (-not (Test-Path -LiteralPath $healthPath)) {
+        Write-Host "Provider health file not found: $healthPath" -ForegroundColor Red
+        Write-Host "Run .\brevity.ps1 init to create Brevity runtime metadata."
+        exit 1
+    }
+
+    $rawHealth = Get-Content -LiteralPath $healthPath -Raw
+    if ([string]::IsNullOrWhiteSpace($rawHealth)) {
+        Write-Host "Provider health file is empty: $healthPath" -ForegroundColor Red
+        exit 1
+    }
+
+    try {
+        $health = $rawHealth | ConvertFrom-Json
+    }
+    catch {
+        Write-Host "Provider health file is not valid JSON: $healthPath" -ForegroundColor Red
+        exit 1
+    }
+
+    return (New-Object PSObject -Property ([ordered]@{
+        path = $healthPath
+        health = $health
+    }))
+}
+
+function Test-ProviderHealthStatus {
+    param([string]$Status)
+
+    $normalizedStatus = ([string]$Status).ToLowerInvariant()
+    return @(Get-SupportedProviderHealthStatuses) -contains $normalizedStatus
+}
+
+function Show-ProviderStatus {
+    $providerHealth = Read-ProviderHealth
+    $health = $providerHealth.health
+
+    Write-Host "Provider health"
+    Write-Host "Path: $($providerHealth.path)"
+    Write-Host ""
+
+    foreach ($providerName in @($health.PSObject.Properties.Name | Sort-Object)) {
+        $provider = $health.$providerName
+        $status = ""
+        $note = ""
+        $updatedAt = ""
+
+        if ($null -ne $provider) {
+            if (Get-Member -InputObject $provider -Name "status" -MemberType NoteProperty -ErrorAction SilentlyContinue) {
+                $status = [string]$provider.status
+            }
+            if (Get-Member -InputObject $provider -Name "note" -MemberType NoteProperty -ErrorAction SilentlyContinue) {
+                $note = [string]$provider.note
+            }
+            if (Get-Member -InputObject $provider -Name "updatedAt" -MemberType NoteProperty -ErrorAction SilentlyContinue) {
+                $updatedAt = [string]$provider.updatedAt
+            }
+        }
+
+        if ([string]::IsNullOrWhiteSpace($status)) {
+            $status = "unknown"
+        }
+        if ([string]::IsNullOrWhiteSpace($updatedAt)) {
+            $updatedAt = "-"
+        }
+        if ([string]::IsNullOrWhiteSpace($note)) {
+            $note = "-"
+        }
+
+        Write-Host "$providerName`t$status`t$updatedAt`t$note"
+    }
+}
+
+function Set-ProviderStatus {
+    param(
+        [string]$ProviderName,
+        [string]$Status,
+        [string]$Note = ""
+    )
+
+    if ([string]::IsNullOrWhiteSpace($ProviderName)) {
+        Write-Host "Missing provider name." -ForegroundColor Red
+        Write-Host "Usage: .\brevity.ps1 provider set <provider> <status> [-Note <note>]"
+        exit 1
+    }
+
+    if ([string]::IsNullOrWhiteSpace($Status)) {
+        Write-Host "Missing provider status." -ForegroundColor Red
+        Write-Host "Usage: .\brevity.ps1 provider set <provider> <status> [-Note <note>]"
+        exit 1
+    }
+
+    $normalizedProviderName = ([string]$ProviderName).ToLowerInvariant()
+    $normalizedStatus = ([string]$Status).ToLowerInvariant()
+
+    if (-not (Test-ProviderHealthStatus -Status $normalizedStatus)) {
+        Write-Host "Invalid provider status: $Status" -ForegroundColor Red
+        Write-Host "Supported statuses: $((Get-SupportedProviderHealthStatuses) -join ', ')"
+        exit 1
+    }
+
+    $providerHealth = Read-ProviderHealth
+    $health = $providerHealth.health
+    if (-not (Get-Member -InputObject $health -Name $normalizedProviderName -MemberType NoteProperty -ErrorAction SilentlyContinue)) {
+        Write-Host "Invalid provider: $ProviderName" -ForegroundColor Red
+        Write-Host "Known providers: $((@($health.PSObject.Properties.Name) | Sort-Object) -join ', ')"
+        exit 1
+    }
+
+    $provider = $health.$normalizedProviderName
+    if ($null -eq $provider -or $provider -isnot [System.Management.Automation.PSCustomObject]) {
+        $provider = New-Object PSObject
+        $health.$normalizedProviderName = $provider
+    }
+
+    Set-ConfigField -Config $provider -Name "status" -Value $normalizedStatus
+    Set-ConfigField -Config $provider -Name "note" -Value ([string]$Note)
+    Set-ConfigField -Config $provider -Name "updatedAt" -Value ([DateTime]::UtcNow.ToString("o"))
+
+    ConvertTo-Json -InputObject $health -Depth 10 | Set-Content -LiteralPath $providerHealth.path -Encoding ASCII
+    Write-Host "Updated provider health: $normalizedProviderName -> $normalizedStatus"
+}
+
 function Repair-ConfigField {
     param(
         [object]$Config,
@@ -425,6 +556,8 @@ function Show-Help {
     Write-Host "  .\brevity.ps1 plan apply <file>"
     Write-Host "  .\brevity.ps1 board"
     Write-Host "  .\brevity.ps1 status [-DevRoot <path>]"
+    Write-Host "  .\brevity.ps1 provider status"
+    Write-Host "  .\brevity.ps1 provider set <provider> <status> [-Note <note>]"
     Write-Host "  .\brevity.ps1 task new <slug> [-DevRoot <path>]"
     Write-Host "  .\brevity.ps1 task activate <slug>"
     Write-Host "  .\brevity.ps1 task spec <slug>"
@@ -2159,6 +2292,63 @@ switch ($Command.ToLowerInvariant()) {
     }
     "onboard" {
         Write-NotImplemented "onboard"
+    }
+    "provider" {
+        if ([string]::IsNullOrWhiteSpace($Subcommand)) {
+            Write-Host "Missing brevity provider command." -ForegroundColor Red
+            Write-Host "Usage: .\brevity.ps1 provider status"
+            Write-Host "Usage: .\brevity.ps1 provider set <provider> <status> [-Note <note>]"
+            exit 1
+        }
+
+        switch ($Subcommand.ToLowerInvariant()) {
+            "status" { Show-ProviderStatus }
+            "set" {
+                $providerName = $null
+                $providerStatus = $null
+                $providerNote = ""
+
+                if ($null -ne $RemainingArgs) {
+                    $skipNext = $false
+                    for ($i = 0; $i -lt $RemainingArgs.Length; $i++) {
+                        if ($skipNext) {
+                            $skipNext = $false
+                            continue
+                        }
+
+                        $arg = $RemainingArgs[$i]
+                        if ([string]::Equals($arg, "-Note", [System.StringComparison]::OrdinalIgnoreCase)) {
+                            if ($i + 1 -lt $RemainingArgs.Length) {
+                                $providerNote = [string]$RemainingArgs[$i + 1]
+                                $skipNext = $true
+                            }
+                            else {
+                                Write-Host "Missing value for -Note." -ForegroundColor Red
+                                exit 1
+                            }
+                        }
+                        elseif ([string]::IsNullOrWhiteSpace($providerName)) {
+                            $providerName = [string]$arg
+                        }
+                        elseif ([string]::IsNullOrWhiteSpace($providerStatus)) {
+                            $providerStatus = [string]$arg
+                        }
+                        else {
+                            Write-Host "Unknown argument for brevity provider set: $arg" -ForegroundColor Red
+                            Write-Host "Usage: .\brevity.ps1 provider set <provider> <status> [-Note <note>]"
+                            exit 1
+                        }
+                    }
+                }
+
+                Set-ProviderStatus -ProviderName $providerName -Status $providerStatus -Note $providerNote
+            }
+            default {
+                Write-Host "Unknown brevity provider command: $Subcommand" -ForegroundColor Red
+                Show-Help
+                exit 1
+            }
+        }
     }
     "task" {
         if ([string]::IsNullOrWhiteSpace($Subcommand)) {
