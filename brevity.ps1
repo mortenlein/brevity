@@ -1,4 +1,4 @@
-﻿param(
+param(
     [Parameter(Position = 0)]
     [string]$Command = "help",
 
@@ -366,8 +366,8 @@ function Write-Section {
 
 function Write-DirectoryChildren {
     param(
-        [string]$Title,
-        [string]$Path
+        [string]$Path,
+        [string]$Title
     )
 
     Write-Section $Title
@@ -404,7 +404,7 @@ function Show-Help {
     Write-Host "  .\brevity.ps1 task activate <slug>"
     Write-Host "  .\brevity.ps1 task spec <slug>"
     Write-Host "  .\brevity.ps1 task start <slug>"
-    Write-Host "  .\brevity.ps1 task run <slug> [--execute]"
+    Write-Host "  .\brevity.ps1 task run <slug> [--execute] [--profile <name>]"
     Write-Host "  .\brevity.ps1 task status"
     Write-Host "  .\brevity.ps1 task merge <slug>"
     Write-Host "  .\brevity.ps1 task cleanup <slug> [--force]"
@@ -440,10 +440,10 @@ function Show-Status {
         Write-Host "Missing: $vaultRoot" -ForegroundColor DarkYellow
     }
 
-    Write-DirectoryChildren "ACTIVE REPOS" (Join-Path $rootPath "repos\active")
-    Write-DirectoryChildren "ACTIVE WORKTREES" (Join-Path $rootPath "worktrees\active")
-    Write-DirectoryChildren "PAUSED WORKTREES" (Join-Path $rootPath "worktrees\paused")
-    Write-DirectoryChildren "COMPLETED WORKTREES" (Join-Path $rootPath "worktrees\completed")
+    Write-DirectoryChildren -Title "ACTIVE REPOS" -Path (Join-Path $rootPath "repos\active")
+    Write-DirectoryChildren -Title "ACTIVE WORKTREES" -Path (Join-Path $rootPath "worktrees\active")
+    Write-DirectoryChildren -Title "PAUSED WORKTREES" -Path (Join-Path $rootPath "worktrees\paused")
+    Write-DirectoryChildren -Title "COMPLETED WORKTREES" -Path (Join-Path $rootPath "worktrees\completed")
 }
 
 function Write-NotImplemented {
@@ -1217,8 +1217,57 @@ function Start-TaskWork {
     Write-Host "Read prompt.md and follow it exactly."
 }
 
+function Get-BrevityProfileConfig {
+    param([string]$Name)
+
+    switch ($Name.ToLowerInvariant()) {
+        "gemini-lite" {
+            return @{
+                provider = "gemini"
+                model = "gemini-1.5-flash-8b"
+            }
+        }
+        "gemini-flash" {
+            return @{
+                provider = "gemini"
+                model = "gemini-3-flash-preview"
+            }
+        }
+        "gemini-pro" {
+            return @{
+                provider = "gemini"
+                model = "gemini-1.5-pro"
+            }
+        }
+        "codex-fast" {
+            return @{
+                provider = "codex"
+                profile = "fast"
+            }
+        }
+        "codex-balanced" {
+            return @{
+                provider = "codex"
+                profile = "balanced"
+            }
+        }
+        "codex-deep" {
+            return @{
+                provider = "codex"
+                profile = "deep"
+            }
+        }
+        Default {
+            throw "Unknown worker profile: $Name. Brevity v0 supports: gemini-lite, gemini-flash, gemini-pro, codex-fast, codex-balanced, codex-deep."
+        }
+    }
+}
+
 function Get-WorkerConfig {
-    param([object]$Config)
+    param(
+        [object]$Config,
+        [string]$ProfileName
+    )
 
     $provider = "codex"
     if (Get-Member -InputObject $Config -Name "defaultProvider" -MemberType NoteProperty -ErrorAction SilentlyContinue) {
@@ -1236,6 +1285,14 @@ function Get-WorkerConfig {
     }
 
     $normalizedProvider = ([string]$provider).ToLowerInvariant()
+
+    # Apply profile overrides if requested
+    $profileOverrides = $null
+    if (-not [string]::IsNullOrWhiteSpace($ProfileName)) {
+        $profileOverrides = Get-BrevityProfileConfig -Name $ProfileName
+        $normalizedProvider = ([string]$profileOverrides.provider).ToLowerInvariant()
+    }
+
     $providerDefaults = $null
     if ($normalizedProvider -eq "gemini") {
         $providerDefaults = Get-DefaultGeminiConfig
@@ -1244,7 +1301,7 @@ function Get-WorkerConfig {
         $providerDefaults = Get-DefaultCodexConfig
     }
     else {
-        throw "Unsupported worker provider: $provider. Brevity v0 supports providers 'codex' and 'gemini'."
+        throw "Unsupported worker provider: $normalizedProvider. Brevity v0 supports providers 'codex' and 'gemini'."
     }
 
     $providerConfig = $null
@@ -1299,6 +1356,17 @@ function Get-WorkerConfig {
             Set-Variable -Name $fieldName -Value $providerConfig.$fieldName
         }
     }
+
+    # Profile overrides take precedence over provider config from file
+    if ($null -ne $profileOverrides) {
+        if ($profileOverrides.ContainsKey("model")) {
+            $model = $profileOverrides.model
+        }
+        if ($profileOverrides.ContainsKey("profile")) {
+            $profile = $profileOverrides.profile
+        }
+    }
+
     if (Get-Member -InputObject $providerConfig -Name "skipTrust" -MemberType NoteProperty -ErrorAction SilentlyContinue) {
         $skipTrust = ConvertTo-BrevityBoolean -Value $providerConfig.skipTrust
     }
@@ -1418,6 +1486,7 @@ function ConvertTo-WorkerEnvironmentMap {
 
     return $environment
 }
+
 function Format-EnvironmentDisplay {
     param([System.Collections.IDictionary]$Environment)
 
@@ -1436,10 +1505,11 @@ function Format-EnvironmentDisplay {
 function New-WorkerCommand {
     param(
         [object]$Config,
-        [string]$WorktreePath
+        [string]$WorktreePath,
+        [string]$ProfileName
     )
 
-    $workerConfig = Get-WorkerConfig -Config $Config
+    $workerConfig = Get-WorkerConfig -Config $Config -ProfileName $ProfileName
 
     if ([string]::Equals([string]$workerConfig.provider, "gemini", [System.StringComparison]::OrdinalIgnoreCase)) {
         $arguments = @()
@@ -1528,12 +1598,13 @@ function New-WorkerCommand {
 function Show-TaskRun {
     param(
         [string]$Slug,
-        [bool]$Execute = $false
+        [bool]$Execute = $false,
+        [string]$ProfileName
     )
 
     if ([string]::IsNullOrWhiteSpace($Slug)) {
         Write-Host "Missing task slug." -ForegroundColor Red
-        Write-Host "Usage: .\brevity.ps1 task run <slug> [--execute]"
+        Write-Host "Usage: .\brevity.ps1 task run <slug> [--execute] [--profile <name>]"
         exit 1
     }
 
@@ -1575,7 +1646,7 @@ function Show-TaskRun {
     }
 
     try {
-        $workerCommand = New-WorkerCommand -Config $config -WorktreePath $task.worktreePath
+        $workerCommand = New-WorkerCommand -Config $config -WorktreePath $task.worktreePath -ProfileName $ProfileName
     }
     catch {
         Write-Host $_.Exception.Message -ForegroundColor Red
@@ -2119,23 +2190,41 @@ switch ($Command.ToLowerInvariant()) {
             "run" {
                 $taskSlug = $null
                 $executeTask = $false
+                $profileName = $null
                 if ($null -ne $RemainingArgs) {
-                    foreach ($taskArg in $RemainingArgs) {
-                        if ($taskArg -eq "--execute") {
+                    $skipNext = $false
+                    for ($i = 0; $i -lt $RemainingArgs.Length; $i++) {
+                        if ($skipNext) {
+                            $skipNext = $false
+                            continue
+                        }
+
+                        $arg = $RemainingArgs[$i]
+                        if ($arg -eq "--execute") {
                             $executeTask = $true
                         }
+                        elseif ($arg -eq "--profile") {
+                            if ($i + 1 -lt $RemainingArgs.Length) {
+                                $profileName = [string]$RemainingArgs[$i + 1]
+                                $skipNext = $true
+                            }
+                            else {
+                                Write-Host "Missing value for --profile." -ForegroundColor Red
+                                exit 1
+                            }
+                        }
                         elseif ([string]::IsNullOrWhiteSpace($taskSlug)) {
-                            $taskSlug = [string]$taskArg
+                            $taskSlug = [string]$arg
                         }
                         else {
-                            Write-Host "Unknown argument for brevity task run: $taskArg" -ForegroundColor Red
-                            Write-Host "Usage: .\brevity.ps1 task run <slug> [--execute]"
+                            Write-Host "Unknown argument for brevity task run: $arg" -ForegroundColor Red
+                            Write-Host "Usage: .\brevity.ps1 task run <slug> [--execute] [--profile <name>]"
                             exit 1
                         }
                     }
                 }
 
-                Show-TaskRun -Slug $taskSlug -Execute $executeTask
+                Show-TaskRun -Slug $taskSlug -Execute $executeTask -ProfileName $profileName
             }
             "status" { Show-TaskStatus }
             "merge" {
@@ -2183,12 +2272,3 @@ switch ($Command.ToLowerInvariant()) {
         exit 1
     }
 }
-
-
-
-
-
-
-
-
-

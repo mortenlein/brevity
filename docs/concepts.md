@@ -339,7 +339,7 @@ codex -C <worktreePath> -a never -s workspace-write
 The command also tells the operator to read `prompt.md` and follow it exactly.
 It does not automatically launch Codex or run planner automation.
 
-`Brevity task run <slug>` reads the same metadata file and finds the matching task
+`Brevity task run <slug> [--execute] [--profile <name>]` reads the same metadata file and finds the matching task
 record. It prints:
 
 - task slug
@@ -347,7 +347,8 @@ record. It prints:
 - prompt path
 - headless worker command
 
-The command is built from worker settings in `.brevity\config.json`. The configured
+The command is built from worker settings in `.brevity\config.json` or overridden by
+the provided profile. The configured
 provider may be `codex` or `gemini`. The headless Codex command format is:
 
 ```text
@@ -553,8 +554,8 @@ Brevity is designed around these commands:
 - `Brevity task activate` creates a task worktree from a vault task spec.
 - `Brevity task spec` prints a vault-backed task spec by slug.
 - `Brevity task start` prints the manual Codex start command for a task worktree.
-- `Brevity task run` prints or executes the headless Codex command for a task
-  worktree.
+- `Brevity task run` prints or executes the headless worker command for a task
+  worktree, supporting optional `--profile <name>` overrides.
 - `Brevity task status` reports task worktree state.
 - `Brevity task merge` merges a completed task branch back to its base.
 - `Brevity task cleanup` removes task worktrees after merge.

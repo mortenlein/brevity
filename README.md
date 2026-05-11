@@ -129,7 +129,7 @@ Brevity v0 supports:
 .\brevity.ps1 task activate <slug>
 .\brevity.ps1 task spec <slug>
 .\brevity.ps1 task start <slug>
-.\brevity.ps1 task run <slug> [--execute]
+.\brevity.ps1 task run <slug> [--execute] [--profile <name>]
 .\brevity.ps1 task status
 .\brevity.ps1 task merge <slug>
 .\brevity.ps1 task cleanup <slug> [--force]
