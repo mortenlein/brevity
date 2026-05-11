@@ -100,8 +100,11 @@ each task, which maps to a stable **worker profile**.
     `gemini-pro` or `codex-deep`.
 
 Stable profiles decouple task planning from volatile provider model names.
-Provider model IDs are internal implementation details. For more details on
-available profiles and fallback strategies, see
+Provider model IDs are internal implementation details. Brevity keeps these
+profiles in one script-local capability matrix that records provider,
+cost tier, capability tier, complexity fit, intended use, and optional
+provider-native settings such as `model`. For more details on available profiles
+and fallback strategies, see
 [Worker Profiles](docs/concepts.md#worker-profiles) in the concepts
 documentation.
 
@@ -427,7 +430,10 @@ codex exec -C <worktreePath> -s <sandbox> prompt.md
 ```
 
 The configured provider may be `codex` or `gemini`. For `codex`, Brevity includes
-`-m <model>` and `-p <profile>` when configured. For `gemini`, Brevity builds a
+`-m <model>` when a model is configured by provider config or by the selected
+worker profile. It includes `-p <profile>` only when a native Codex provider
+profile is explicitly configured; Brevity worker profile names such as
+`codex-balanced` are not passed to Codex `-p`. For `gemini`, Brevity builds a
 non-interactive command that runs from the task worktree and passes the
 `prompt.md` contents to `-p`. It includes `-m <model>` when configured, and
 includes `-s` when sandbox is not blank or `none`. Set

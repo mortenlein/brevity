@@ -480,22 +480,47 @@ change as new models are released or tiers are renamed.
 Planners should select the cheapest profile sufficient for the task's complexity
 tier.
 
+Brevity stores profile metadata in a central capability matrix in `brevity.ps1`.
+Each entry records:
+
+- `provider`
+- `costTier`
+- `capabilityTier`
+- `complexityFit`
+- `intendedUse`
+- optional `model`
+- optional `providerConfig` overrides
+
+Planner logic should reason about stable profile capabilities instead of
+provider model IDs. The matrix is scheduler metadata for future routing, but it
+can also supply provider-native execution settings when those settings are
+explicitly known.
+
 ### Gemini Profiles
 
-- `gemini-lite`: Optimized for low-latency, simple tasks.
-- `gemini-flash`: Balanced performance and cost for most development tasks.
-- `gemini-pro`: High-reasoning capacity for complex architectural changes.
+| Profile | Cost | Capability | Complexity fit | Model |
+| --- | --- | --- | --- | --- |
+| `gemini-lite` | low | lite | low | none by default |
+| `gemini-flash` | low | fast | low, medium | `gemini-3-flash-preview` |
+| `gemini-pro` | medium | pro | medium, high | none by default |
 
 ### Codex Profiles
 
-- `codex-fast`: Quick, low-cost worker for straightforward edits.
-- `codex-balanced`: The standard worker for everyday development.
-- `codex-deep`: Maximum depth and reasoning for difficult bug fixes and refactors.
+| Profile | Cost | Capability | Complexity fit | Model |
+| --- | --- | --- | --- | --- |
+| `codex-fast` | low | fast | low | none by default |
+| `codex-balanced` | medium | balanced | medium | none by default |
+| `codex-deep` | high | deep | high | none by default |
 
 These are Brevity worker profiles, not Codex CLI config profiles. Passing
 `--profile codex-balanced` to `Brevity task run` must not become
 `codex exec ... -p balanced`; Codex `-p` is reserved for an explicitly configured
 native Codex provider profile.
+
+If a selected worker profile has a non-empty `model`, Brevity passes it to the
+provider using the supported native model flag, such as Codex `-m`. Codex profile
+entries intentionally do not name a model until a safe cheaper or stronger Codex
+model is explicitly known in config or docs.
 
 ## Task Complexity Tiers
 

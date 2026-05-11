@@ -1377,47 +1377,76 @@ function Start-TaskWork {
     Write-Host "Read prompt.md and follow it exactly."
 }
 
+function Get-BrevityProfileMatrix {
+    return [ordered]@{
+        "gemini-lite" = @{
+            provider = "gemini"
+            costTier = "low"
+            capabilityTier = "lite"
+            complexityFit = @("low")
+            intendedUse = "Low-latency worker for simple edits, documentation, and small tests."
+            model = $null
+            providerConfig = @{}
+        }
+        "gemini-flash" = @{
+            provider = "gemini"
+            costTier = "low"
+            capabilityTier = "fast"
+            complexityFit = @("low", "medium")
+            intendedUse = "Default Gemini worker for everyday implementation and review tasks."
+            model = "gemini-3-flash-preview"
+            providerConfig = @{}
+        }
+        "gemini-pro" = @{
+            provider = "gemini"
+            costTier = "medium"
+            capabilityTier = "pro"
+            complexityFit = @("medium", "high")
+            intendedUse = "Higher-capability Gemini worker for complex design and refactoring."
+            model = $null
+            providerConfig = @{}
+        }
+        "codex-fast" = @{
+            provider = "codex"
+            costTier = "low"
+            capabilityTier = "fast"
+            complexityFit = @("low")
+            intendedUse = "Quick Codex worker for straightforward edits and focused fixes."
+            model = $null
+            providerConfig = @{}
+        }
+        "codex-balanced" = @{
+            provider = "codex"
+            costTier = "medium"
+            capabilityTier = "balanced"
+            complexityFit = @("medium")
+            intendedUse = "Default Codex worker for everyday development tasks."
+            model = $null
+            providerConfig = @{}
+        }
+        "codex-deep" = @{
+            provider = "codex"
+            costTier = "high"
+            capabilityTier = "deep"
+            complexityFit = @("high")
+            intendedUse = "Deep Codex worker for difficult bug fixes and refactors."
+            model = $null
+            providerConfig = @{}
+        }
+    }
+}
+
 function Get-BrevityProfileConfig {
     param([string]$Name)
 
-    switch ($Name.ToLowerInvariant()) {
-        "gemini-lite" {
-            return @{
-                provider = "gemini"
-                model = "gemini-1.5-flash-8b"
-            }
-        }
-        "gemini-flash" {
-            return @{
-                provider = "gemini"
-                model = "gemini-3-flash-preview"
-            }
-        }
-        "gemini-pro" {
-            return @{
-                provider = "gemini"
-                model = "gemini-1.5-pro"
-            }
-        }
-        "codex-fast" {
-            return @{
-                provider = "codex"
-            }
-        }
-        "codex-balanced" {
-            return @{
-                provider = "codex"
-            }
-        }
-        "codex-deep" {
-            return @{
-                provider = "codex"
-            }
-        }
-        Default {
-            throw "Unknown worker profile: $Name. Brevity v0 supports: gemini-lite, gemini-flash, gemini-pro, codex-fast, codex-balanced, codex-deep."
-        }
+    $profileMatrix = Get-BrevityProfileMatrix
+    $normalizedName = $Name.ToLowerInvariant()
+
+    if (-not $profileMatrix.Contains($normalizedName)) {
+        throw "Unknown worker profile: $Name. Brevity v0 supports: gemini-lite, gemini-flash, gemini-pro, codex-fast, codex-balanced, codex-deep."
     }
+
+    return $profileMatrix[$normalizedName]
 }
 
 function Get-WorkerConfig {
@@ -1514,16 +1543,6 @@ function Get-WorkerConfig {
         }
     }
 
-    # Profile overrides take precedence over provider config from file
-    if ($null -ne $profileOverrides) {
-        if ($profileOverrides.ContainsKey("model")) {
-            $model = $profileOverrides.model
-        }
-        if ($profileOverrides.ContainsKey("profile")) {
-            $profile = $profileOverrides.profile
-        }
-    }
-
     if (Get-Member -InputObject $providerConfig -Name "skipTrust" -MemberType NoteProperty -ErrorAction SilentlyContinue) {
         $skipTrust = ConvertTo-BrevityBoolean -Value $providerConfig.skipTrust
     }
@@ -1531,6 +1550,30 @@ function Get-WorkerConfig {
         if ($null -ne $providerConfig.env -and $providerConfig.env -is [System.Management.Automation.PSCustomObject]) {
             $env = $providerConfig.env
         }
+    }
+
+    # Profile providerConfig contains provider-native settings only.
+    if ($null -ne $profileOverrides -and $profileOverrides.ContainsKey("providerConfig")) {
+        $nativeOverrides = $profileOverrides.providerConfig
+        if ($null -ne $nativeOverrides) {
+            foreach ($fieldName in @("command", "mode", "sandbox", "model", "profile", "executionPolicy", "approvalMode")) {
+                if ($nativeOverrides.ContainsKey($fieldName)) {
+                    Set-Variable -Name $fieldName -Value $nativeOverrides[$fieldName]
+                }
+            }
+
+            if ($nativeOverrides.ContainsKey("skipTrust")) {
+                $skipTrust = ConvertTo-BrevityBoolean -Value $nativeOverrides["skipTrust"]
+            }
+            if ($nativeOverrides.ContainsKey("env")) {
+                $env = $nativeOverrides["env"]
+            }
+        }
+    }
+
+    # Profile model is provider-native execution metadata; profile names are not passed as Codex -p.
+    if ($null -ne $profileOverrides -and $profileOverrides.ContainsKey("model") -and $null -ne $profileOverrides.model) {
+        $model = $profileOverrides.model
     }
 
     if ([string]::IsNullOrWhiteSpace($command)) {
