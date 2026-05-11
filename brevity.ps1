@@ -1436,6 +1436,25 @@ function Get-BrevityProfileMatrix {
     }
 }
 
+function Get-BrevityComplexityProfileDefaults {
+    return [ordered]@{
+        low = @(
+            "codex-fast",
+            "gemini-lite",
+            "gemini-flash"
+        )
+        medium = @(
+            "codex-balanced",
+            "gemini-flash",
+            "gemini-pro"
+        )
+        high = @(
+            "codex-deep",
+            "gemini-pro"
+        )
+    }
+}
+
 function Get-BrevityProfileConfig {
     param([string]$Name)
 

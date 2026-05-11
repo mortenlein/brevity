@@ -93,18 +93,21 @@ costs and quotas effectively. Planners should assign a **complexity tier** to
 each task, which maps to a stable **worker profile**.
 
 -   **Low Complexity:** Documentation, unit tests, simple fixes. Use
-    `gemini-lite` or `codex-fast`.
+    `codex-fast`, `gemini-lite`, or `gemini-flash`.
 -   **Medium Complexity:** Feature work, refactoring, integration tests. Use
-    `gemini-flash` or `codex-balanced`.
+    `codex-balanced`, `gemini-flash`, or `gemini-pro`.
 -   **High Complexity:** Architecture, deep debugging, complex logic. Use
-    `gemini-pro` or `codex-deep`.
+    `codex-deep` or `gemini-pro`.
 
 Stable profiles decouple task planning from volatile provider model names.
 Provider model IDs are internal implementation details. Brevity keeps these
 profiles in one script-local capability matrix that records provider,
 cost tier, capability tier, complexity fit, intended use, and optional
-provider-native settings such as `model`. For more details on available profiles
-and fallback strategies, see
+provider-native settings such as `model`. Brevity also keeps a script-local,
+planner-only complexity default map that gives future planners a clear preferred
+profile order without changing worker execution, automatic routing, fallback, or
+explicit `--profile` behavior. For more details on available profiles and
+fallback strategies, see
 [Worker Profiles](docs/concepts.md#worker-profiles) in the concepts
 documentation.
 

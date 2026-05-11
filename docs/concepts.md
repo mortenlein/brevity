@@ -496,6 +496,19 @@ provider model IDs. The matrix is scheduler metadata for future routing, but it
 can also supply provider-native execution settings when those settings are
 explicitly known.
 
+`brevity.ps1` also defines planner-only complexity defaults in
+`Get-BrevityComplexityProfileDefaults`:
+
+| Complexity | Preferred profiles |
+| --- | --- |
+| `low` | `codex-fast`, `gemini-lite`, `gemini-flash` |
+| `medium` | `codex-balanced`, `gemini-flash`, `gemini-pro` |
+| `high` | `codex-deep`, `gemini-pro` |
+
+These defaults guide manual planners and future scheduler routing. They do not
+execute workers, mutate task status, invoke provider health, fall back
+automatically, or override an explicit `--profile` selection.
+
 ### Gemini Profiles
 
 | Profile | Cost | Capability | Complexity fit | Model |
@@ -524,9 +537,12 @@ model is explicitly known in config or docs.
 
 ## Task Complexity Tiers
 
-- `low`: Simple changes, unit tests, documentation updates. (Use `lite` or `fast` profiles)
-- `medium`: Feature implementation, cross-file refactoring, integration tests. (Use `flash` or `balanced` profiles)
-- `high`: Architectural changes, deep debugging, complex migrations. (Use `pro` or `deep` profiles)
+- `low`: Simple changes, unit tests, documentation updates. Prefer `codex-fast`,
+  `gemini-lite`, then `gemini-flash`.
+- `medium`: Feature implementation, cross-file refactoring, integration tests.
+  Prefer `codex-balanced`, `gemini-flash`, then `gemini-pro`.
+- `high`: Architectural changes, deep debugging, complex migrations. Prefer
+  `codex-deep`, then `gemini-pro`.
 
 ## Fallback Guidance
 
