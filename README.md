@@ -538,6 +538,12 @@ This keeps the secret out of the repository.
 
 ### Troubleshooting
 
+- **Capacity and Quota:** If a worker fails with a `429` error, such as `QUOTA_EXHAUSTED` or `MODEL_CAPACITY_EXHAUSTED`, this should be treated as a **worker infrastructure failure**, not a task failure.
+
+  Capacity errors are transient. When they occur:
+  1.  **Retry later:** The provider may have temporary capacity limits.
+  2.  **Switch profiles:** Use a different worker profile (e.g., switch from `gemini-flash` to `gemini-pro` or `codex-balanced`). See `docs/concepts.md` for more on fallback strategies.
+
 - **`ripgrep` not found:** Gemini may warn that `rg.exe` (ripgrep) is not in your path. This is a non-blocking warning. Gemini will fall back to its internal search tool if ripgrep is not available, which may be slower.
 
   For better performance, we recommend installing ripgrep.

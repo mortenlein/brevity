@@ -459,10 +459,44 @@ When a preferred profile is unavailable due to quota exhaustion or capacity limi
     provider (e.g., `gemini-flash` -> `gemini-pro`).
 2.  **Cross-Provider Fallback:** Move to the equivalent tier in a different
     provider (e.g., `gemini-flash` -> `codex-balanced`).
-3.  **Graceful Degradation:** As a last resort, fall back to a less capable profile.
+### Graceful Degradation: As a last resort, fall back to a less capable profile.
     Note that this may require more manual intervention or iterative refinement.
 
+## Capacity Handling
+
+Brevity treats `429` errors (quota exhaustion or model capacity) as **worker
+infrastructure failures**, not task failures. These errors indicate that the
+provider cannot fulfill the request at this time, but the task itself remains
+valid and unchanged.
+
+When a capacity failure occurs, Brevity fails the command but provides guidance
+on how to proceed.
+
+### Capacity Error Types
+
+-   `QUOTA_EXHAUSTED`: The API key has reached its usage limit for the current
+    period.
+-   `MODEL_CAPACITY_EXHAUSTED`: The provider is currently overloaded and cannot
+    accept new requests for that specific model.
+-   `No capacity available for model...`: Similar to capacity exhaustion, often
+    localized to a region or tier.
+
+### Strategies for Capacity Failures
+
+1.  **Retry Strategy:** Since capacity errors are often transient, waiting a few
+    minutes and retrying is the simplest first step.
+2.  **Profile Switching:** If one profile is exhausted, another might still have
+    capacity. For example, if `gemini-flash` is overloaded, `gemini-pro` might
+    be available (or vice versa).
+3.  **Provider Switching:** If a provider is completely down or exhausted,
+    switching the `defaultProvider` in `.brevity\config.json` to a different
+    provider (e.g., from `gemini` to `codex`) can unblock work.
+
+Automatic retry and profile switching are planned for future versions of Brevity.
+In v0, these actions must be performed manually by the operator.
+
 ## Command Model
+
 
 Brevity is designed around these commands:
 

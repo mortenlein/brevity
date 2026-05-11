@@ -1613,8 +1613,14 @@ function Show-TaskRun {
         try {
             $argsForWorker = [string[]]@($workerCommand.arguments)
             & $workerCommand.command @argsForWorker
-            if ($LASTEXITCODE -ne 0) {
-                exit $LASTEXITCODE
+            $exitCode = $LASTEXITCODE
+            if ($exitCode -ne 0) {
+                Write-Host ""
+                Write-Host "Worker failed with exit code $exitCode." -ForegroundColor Yellow
+                Write-Host "If the output contains 'QUOTA_EXHAUSTED', 'MODEL_CAPACITY_EXHAUSTED', or 'exhausted your capacity'," -ForegroundColor Gray
+                Write-Host "this is an infrastructure failure, not a task failure. Consider retrying later or switching" -ForegroundColor Gray
+                Write-Host "to a different worker profile." -ForegroundColor Gray
+                exit $exitCode
             }
         }
         finally {
