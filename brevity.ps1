@@ -1722,27 +1722,58 @@ function Remove-TaskWorktree {
     $repoRoot = Get-RepositoryRoot
     $tasksPath = Join-Path $repoRoot ".brevity\tasks.json"
 
-    if (-not (Test-Path -LiteralPath $tasksPath)) {
-        Write-Host "Task not found: $Slug" -ForegroundColor Red
-        Write-Host "No Brevity task metadata exists at: $tasksPath"
-        exit 1
+    $tasks = @()
+    if (Test-Path -LiteralPath $tasksPath) {
+        $rawTasks = Get-Content -LiteralPath $tasksPath -Raw
+        if (-not [string]::IsNullOrWhiteSpace($rawTasks)) {
+            $parsedTasks = $rawTasks | ConvertFrom-Json
+            $tasks = @($parsedTasks)
+        }
     }
 
-    $rawTasks = Get-Content -LiteralPath $tasksPath -Raw
-    if ([string]::IsNullOrWhiteSpace($rawTasks)) {
-        Write-Host "Task not found: $Slug" -ForegroundColor Red
-        Write-Host "No Brevity task metadata exists at: $tasksPath"
-        exit 1
-    }
-
-    $parsedTasks = $rawTasks | ConvertFrom-Json
-    $tasks = @($parsedTasks)
     $task = $tasks | Where-Object { $_.slug -eq $Slug } | Select-Object -First 1
+    $taskFoundInMetadata = $null -ne $task
 
-    if ($null -eq $task) {
-        Write-Host "Task not found: $Slug" -ForegroundColor Red
-        Write-Host "Use .\brevity.ps1 task status to list known tasks."
-        exit 1
+    if (-not $taskFoundInMetadata) {
+        if ($Force) {
+            Write-Host "Warning: metadata not found for task '$Slug'. Attempting orphaned cleanup." -ForegroundColor Yellow
+            $inferredBranch = "task/$Slug"
+            $inferredWorktreePath = $null
+
+            # Try to find the worktree from Git list
+            $worktreeList = (& git worktree list --porcelain 2>$null)
+            foreach ($line in $worktreeList) {
+                if ($line.StartsWith("worktree ")) {
+                    $path = $line.Substring("worktree ".Length)
+                    if ($path.EndsWith("-$Slug", [System.StringComparison]::OrdinalIgnoreCase)) {
+                        $inferredWorktreePath = $path
+                        break
+                    }
+                }
+            }
+
+            # Fallback to default path calculation
+            if ([string]::IsNullOrWhiteSpace($inferredWorktreePath)) {
+                $config = Read-BrevityConfig
+                $inferredWorktreePath = Join-Path $config.worktreesRoot "$($config.projectName)-$Slug"
+            }
+
+            $task = [PSCustomObject]@{
+                slug         = $Slug
+                branch       = $inferredBranch
+                worktreePath = $inferredWorktreePath
+            }
+        }
+        else {
+            Write-Host "Task not found: $Slug" -ForegroundColor Red
+            if (-not (Test-Path -LiteralPath $tasksPath)) {
+                Write-Host "No Brevity task metadata exists at: $tasksPath"
+            }
+            else {
+                Write-Host "Use .\brevity.ps1 task status to list known tasks."
+            }
+            exit 1
+        }
     }
 
     if ([string]::IsNullOrWhiteSpace($task.worktreePath)) {
@@ -1786,7 +1817,9 @@ function Remove-TaskWorktree {
 
     if (-not (Test-GitBranchExists -Branch $task.branch)) {
         Write-Host "Warning: recorded branch is already missing: $($task.branch)" -ForegroundColor Yellow
-        Remove-TaskMetadataRecord -TasksPath $tasksPath -Tasks $tasks -Slug $Slug
+        if ($taskFoundInMetadata) {
+            Remove-TaskMetadataRecord -TasksPath $tasksPath -Tasks $tasks -Slug $Slug
+        }
         return
     }
 
@@ -1802,7 +1835,9 @@ function Remove-TaskWorktree {
         exit $LASTEXITCODE
     }
 
-    Remove-TaskMetadataRecord -TasksPath $tasksPath -Tasks $tasks -Slug $Slug
+    if ($taskFoundInMetadata) {
+        Remove-TaskMetadataRecord -TasksPath $tasksPath -Tasks $tasks -Slug $Slug
+    }
 }
 
 function Merge-TaskBranch {
