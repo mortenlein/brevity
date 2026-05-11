@@ -1902,11 +1902,25 @@ function Show-TaskRun {
         Push-Location -LiteralPath $workerCommand.workingDirectory
         try {
             $argsForWorker = [string[]]@($workerCommand.arguments)
-            & $workerCommand.command @argsForWorker
+            $workerOutput = @(& $workerCommand.command @argsForWorker 2>&1)
             $exitCode = $LASTEXITCODE
+
+            foreach ($line in $workerOutput) {
+                Write-Host $line
+            }
+
             if ($exitCode -ne 0) {
+                $renderedOutput = ($workerOutput | ForEach-Object { [string]$_ }) -join [Environment]::NewLine
+
                 Write-Host ""
                 Write-Host "Worker failed with exit code $exitCode." -ForegroundColor Yellow
+
+                if ($renderedOutput -match "\[object Object\]") {
+                    Write-Host "Worker returned an object-shaped error rendered as [object Object]." -ForegroundColor Yellow
+                    Write-Host "The provider CLI likely lost structured error details before Brevity could display them." -ForegroundColor Gray
+                    Write-Host "Provider: $($workerCommand.provider)" -ForegroundColor Gray
+                    Write-Host "Command: $($workerCommand.command)" -ForegroundColor Gray
+                }
                 Write-Host "If the output contains 'QUOTA_EXHAUSTED', 'MODEL_CAPACITY_EXHAUSTED', or 'exhausted your capacity'," -ForegroundColor Gray
                 Write-Host "this is an infrastructure failure, not a task failure. Consider retrying later or switching" -ForegroundColor Gray
                 Write-Host "to a different worker profile." -ForegroundColor Gray
