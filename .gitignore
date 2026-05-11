@@ -2,3 +2,6 @@ references/
 prompt.md
 .brevity/planner-prompt.md
 .brevity/planner-backlog-prompt.md
+
+# Brevity runtime metadata
+.brevity/provider-health.json
