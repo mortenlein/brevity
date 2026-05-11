@@ -219,7 +219,7 @@ function Get-DefaultCodexConfig {
 function Get-DefaultGeminiConfig {
     return (New-Object PSObject -Property ([ordered]@{
         command = "gemini"
-        model = "gemini-2.5-pro"
+        model = "gemini-3-flash-preview"
         approvalMode = "yolo"
         skipTrust = $true
         env = New-Object PSObject -Property ([ordered]@{
@@ -2148,6 +2148,7 @@ switch ($Command.ToLowerInvariant()) {
         exit 1
     }
 }
+
 
 
 
