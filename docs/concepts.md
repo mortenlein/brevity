@@ -495,6 +495,47 @@ on how to proceed.
 Automatic retry and profile switching are planned for future versions of Brevity.
 In v0, these actions must be performed manually by the operator.
 
+## Workspace Lifecycle Hygiene
+
+Brevity promotes a high-velocity, high-hygiene lifecycle for AI-assisted work.
+Because AI workers can iterate rapidly, a workspace can quickly accumulate
+stale branches and worktrees if cleanup is treated as optional maintenance.
+
+### Short-lived Worktrees
+
+Worktrees are intended to be ephemeral. A worktree should exist only for the
+duration of a single task. Once the task is merged, the worktree has served
+its purpose and should be removed.
+
+### Persistent Vault Memory
+
+While worktrees and branches are short-lived, project knowledge is durable.
+Brevity uses the AI-Vault to store task specs, architecture notes, and
+decisions. This ensures that even if a worktree is deleted, the context and
+intent behind the work remain available for future tasks.
+
+### Aggressive Cleanup
+
+Cleanup is a core part of the Brevity task loop. The standard flow for every
+task ends with `Brevity task cleanup`. This command removes the worktree,
+deletes the branch, and clears the runtime metadata.
+
+Maintaining a clean `Brevity board` is essential for reasoning about the current
+state of the project. Tasks that are done or merged should not linger in the
+runtime state.
+
+### Recoverable Execution
+
+AI workers or model providers may fail during execution (e.g., due to timeouts,
+crashes, or capacity errors). These failures can leave a task in a partial state
+with runtime metadata still present.
+
+Brevity's lifecycle model is designed to be recoverable:
+-   If a worker fails, the worktree and branch remain intact.
+-   You can re-run the task with `Brevity task run <slug> --execute`.
+-   If a task becomes unrecoverable or is abandoned, use
+    `Brevity task cleanup <slug> --force` to reset the workspace state.
+
 ## Command Model
 
 
