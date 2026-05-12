@@ -228,10 +228,20 @@ function Get-DefaultGeminiConfig {
     }))
 }
 
+function Get-DefaultCopilotConfig {
+    return (New-Object PSObject -Property ([ordered]@{
+        command = "copilot"
+        allowAllTools = $true
+        allowAllPaths = $true
+        noAskUser = $true
+    }))
+}
+
 function Get-DefaultProvidersConfig {
     return (New-Object PSObject -Property ([ordered]@{
         codex = Get-DefaultCodexConfig
         gemini = Get-DefaultGeminiConfig
+        copilot = Get-DefaultCopilotConfig
     }))
 }
 
@@ -243,6 +253,11 @@ function Get-DefaultProviderHealthState {
             updatedAt = $null
         })
         gemini = New-Object PSObject -Property ([ordered]@{
+            status = "unknown"
+            note = ""
+            updatedAt = $null
+        })
+        copilot = New-Object PSObject -Property ([ordered]@{
             status = "unknown"
             note = ""
             updatedAt = $null
@@ -496,6 +511,7 @@ function Repair-ProviderConfigDefaults {
 
     $codexDefaults = Get-DefaultCodexConfig
     $geminiDefaults = Get-DefaultGeminiConfig
+    $copilotDefaults = Get-DefaultCopilotConfig
 
     $Results = Repair-ProviderConfigField -ProviderConfig $Config.providers.codex -Results $Results -ProviderName "codex" -Name "command" -ExpectedValue $codexDefaults.command
     $Results = Repair-ProviderConfigField -ProviderConfig $Config.providers.codex -Results $Results -ProviderName "codex" -Name "mode" -ExpectedValue $codexDefaults.mode
@@ -509,6 +525,11 @@ function Repair-ProviderConfigDefaults {
     $Results = Repair-ProviderConfigField -ProviderConfig $Config.providers.gemini -Results $Results -ProviderName "gemini" -Name "approvalMode" -ExpectedValue $geminiDefaults.approvalMode
     $Results = Repair-ProviderConfigField -ProviderConfig $Config.providers.gemini -Results $Results -ProviderName "gemini" -Name "skipTrust" -ExpectedValue $geminiDefaults.skipTrust
     $Results = Repair-ProviderConfigField -ProviderConfig $Config.providers.gemini -Results $Results -ProviderName "gemini" -Name "env" -ExpectedValue $geminiDefaults.env
+    $Results = Repair-ConfigObjectField -Config $Config.providers -Results $Results -Name "copilot"
+    $Results = Repair-ProviderConfigField -ProviderConfig $Config.providers.copilot -Results $Results -ProviderName "copilot" -Name "command" -ExpectedValue $copilotDefaults.command
+    $Results = Repair-ProviderConfigField -ProviderConfig $Config.providers.copilot -Results $Results -ProviderName "copilot" -Name "allowAllTools" -ExpectedValue $copilotDefaults.allowAllTools
+    $Results = Repair-ProviderConfigField -ProviderConfig $Config.providers.copilot -Results $Results -ProviderName "copilot" -Name "allowAllPaths" -ExpectedValue $copilotDefaults.allowAllPaths
+    $Results = Repair-ProviderConfigField -ProviderConfig $Config.providers.copilot -Results $Results -ProviderName "copilot" -Name "noAskUser" -ExpectedValue $copilotDefaults.noAskUser
 
     return $Results
 }
@@ -1433,6 +1454,15 @@ function Get-BrevityProfileMatrix {
             model = $null
             providerConfig = @{}
         }
+        "copilot" = @{
+            provider = "copilot"
+            costTier = "low"
+            capabilityTier = "default"
+            complexityFit = @("low", "medium", "high")
+            intendedUse = "GitHub Copilot CLI worker for all complexity levels."
+            model = $null
+            providerConfig = @{}
+        }
     }
 }
 
@@ -1462,7 +1492,7 @@ function Get-BrevityProfileConfig {
     $normalizedName = $Name.ToLowerInvariant()
 
     if (-not $profileMatrix.Contains($normalizedName)) {
-        throw "Unknown worker profile: $Name. Brevity v0 supports: gemini-lite, gemini-flash, gemini-pro, codex-fast, codex-balanced, codex-deep."
+        throw "Unknown worker profile: $Name. Brevity v0 supports: gemini-lite, gemini-flash, gemini-pro, codex-fast, codex-balanced, codex-deep, copilot."
     }
 
     return $profileMatrix[$normalizedName]
@@ -1505,8 +1535,11 @@ function Get-WorkerConfig {
     elseif ($normalizedProvider -eq "codex") {
         $providerDefaults = Get-DefaultCodexConfig
     }
+    elseif ($normalizedProvider -eq "copilot") {
+        $providerDefaults = Get-DefaultCopilotConfig
+    }
     else {
-        throw "Unsupported worker provider: $normalizedProvider. Brevity v0 supports providers 'codex' and 'gemini'."
+        throw "Unsupported worker provider: $normalizedProvider. Brevity v0 supports providers 'codex', 'gemini', and 'copilot'."
     }
 
     $providerConfig = $null
@@ -1782,6 +1815,40 @@ function New-WorkerCommand {
         }))
     }
 
+    if ([string]::Equals([string]$workerConfig.provider, "copilot", [System.StringComparison]::OrdinalIgnoreCase)) {
+        $arguments = @(
+            "-C",
+            $WorktreePath,
+            "--allow-all-tools",
+            "--allow-all-paths",
+            "--no-ask-user"
+        )
+
+        $displayArguments = @(
+            "-C",
+            $WorktreePath,
+            "--allow-all-tools",
+            "--allow-all-paths",
+            "--no-ask-user"
+        )
+
+        $displayCommand = Format-CommandLine -Parts (@([string]$workerConfig.command) + $displayArguments)
+        $promptPath = Join-Path $WorktreePath "prompt.md"
+        $display = "Get-Content -Raw $(Format-PowerShellLiteral -Value $promptPath) | $displayCommand"
+
+        return (New-Object PSObject -Property ([ordered]@{
+            provider = [string]$workerConfig.provider
+            command = [string]$workerConfig.command
+            arguments = $arguments
+            promptPath = $promptPath
+            executionPolicy = ""
+            workingDirectory = $WorktreePath
+            environment = [ordered]@{}
+            display = $display
+            useStdin = $true
+        }))
+    }
+
     $arguments = @(
         [string]$workerConfig.mode,
         "-C",
@@ -1901,9 +1968,24 @@ function Show-TaskRun {
 
         Push-Location -LiteralPath $workerCommand.workingDirectory
         try {
-            $argsForWorker = [string[]]@($workerCommand.arguments)
-            $workerOutput = @(& $workerCommand.command @argsForWorker 2>&1)
-            $exitCode = $LASTEXITCODE
+            if (Get-Member -InputObject $workerCommand -Name "useStdin" -MemberType NoteProperty -ErrorAction SilentlyContinue) {
+                if ($workerCommand.useStdin) {
+                    $promptContent = Get-Content -LiteralPath $workerCommand.promptPath -Raw
+                    $argsForWorker = [string[]]@($workerCommand.arguments)
+                    $workerOutput = @($promptContent | & $workerCommand.command @argsForWorker 2>&1)
+                    $exitCode = $LASTEXITCODE
+                }
+                else {
+                    $argsForWorker = [string[]]@($workerCommand.arguments)
+                    $workerOutput = @(& $workerCommand.command @argsForWorker 2>&1)
+                    $exitCode = $LASTEXITCODE
+                }
+            }
+            else {
+                $argsForWorker = [string[]]@($workerCommand.arguments)
+                $workerOutput = @(& $workerCommand.command @argsForWorker 2>&1)
+                $exitCode = $LASTEXITCODE
+            }
 
             foreach ($line in $workerOutput) {
                 Write-Host $line
