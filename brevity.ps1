@@ -1974,6 +1974,61 @@ function New-WorkerCommand {
     }))
 }
 
+function Invoke-WorkerCommand {
+    param(
+        [object]$WorkerCommand
+    )
+
+    $workerOutput = New-Object 'System.Collections.Generic.List[object]'
+    $previousNativeCommandUseErrorActionPreference = $null
+    $hasNativeCommandUseErrorActionPreference = Test-Path -LiteralPath "variable:PSNativeCommandUseErrorActionPreference"
+
+    if ($hasNativeCommandUseErrorActionPreference) {
+        $previousNativeCommandUseErrorActionPreference = $PSNativeCommandUseErrorActionPreference
+        $PSNativeCommandUseErrorActionPreference = $false
+    }
+
+    try {
+        if (Get-Member -InputObject $WorkerCommand -Name "useStdin" -MemberType NoteProperty -ErrorAction SilentlyContinue) {
+            if ($WorkerCommand.useStdin) {
+                $promptContent = Get-Content -LiteralPath $WorkerCommand.promptPath -Raw
+                $argsForWorker = [string[]]@($WorkerCommand.arguments)
+                $promptContent | & $WorkerCommand.command @argsForWorker 2>&1 | ForEach-Object {
+                    $workerOutput.Add($_)
+                    Write-Host $_
+                }
+                $exitCode = $LASTEXITCODE
+            }
+            else {
+                $argsForWorker = [string[]]@($WorkerCommand.arguments)
+                & $WorkerCommand.command @argsForWorker 2>&1 | ForEach-Object {
+                    $workerOutput.Add($_)
+                    Write-Host $_
+                }
+                $exitCode = $LASTEXITCODE
+            }
+        }
+        else {
+            $argsForWorker = [string[]]@($WorkerCommand.arguments)
+            & $WorkerCommand.command @argsForWorker 2>&1 | ForEach-Object {
+                $workerOutput.Add($_)
+                Write-Host $_
+            }
+            $exitCode = $LASTEXITCODE
+        }
+
+        return (New-Object PSObject -Property ([ordered]@{
+            output = @($workerOutput.ToArray())
+            exitCode = $exitCode
+        }))
+    }
+    finally {
+        if ($hasNativeCommandUseErrorActionPreference) {
+            $PSNativeCommandUseErrorActionPreference = $previousNativeCommandUseErrorActionPreference
+        }
+    }
+}
+
 function Show-TaskRun {
     param(
         [string]$Slug,
@@ -2061,28 +2116,9 @@ function Show-TaskRun {
 
         Push-Location -LiteralPath $workerCommand.workingDirectory
         try {
-            if (Get-Member -InputObject $workerCommand -Name "useStdin" -MemberType NoteProperty -ErrorAction SilentlyContinue) {
-                if ($workerCommand.useStdin) {
-                    $promptContent = Get-Content -LiteralPath $workerCommand.promptPath -Raw
-                    $argsForWorker = [string[]]@($workerCommand.arguments)
-                    $workerOutput = @($promptContent | & $workerCommand.command @argsForWorker 2>&1)
-                    $exitCode = $LASTEXITCODE
-                }
-                else {
-                    $argsForWorker = [string[]]@($workerCommand.arguments)
-                    $workerOutput = @(& $workerCommand.command @argsForWorker 2>&1)
-                    $exitCode = $LASTEXITCODE
-                }
-            }
-            else {
-                $argsForWorker = [string[]]@($workerCommand.arguments)
-                $workerOutput = @(& $workerCommand.command @argsForWorker 2>&1)
-                $exitCode = $LASTEXITCODE
-            }
-
-            foreach ($line in $workerOutput) {
-                Write-Host $line
-            }
+            $workerResult = Invoke-WorkerCommand -WorkerCommand $workerCommand
+            $workerOutput = @($workerResult.output)
+            $exitCode = $workerResult.exitCode
 
             if ($exitCode -ne 0) {
                 $renderedOutput = ($workerOutput | ForEach-Object { [string]$_ }) -join [Environment]::NewLine
