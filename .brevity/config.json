@@ -6,7 +6,7 @@
     "defaultProvider":  "gemini",
     "providers":  {
                       "codex":  {
-                                    "command":  "codex",
+                                    "command":  "codex.cmd",
                                     "mode":  "exec",
                                     "sandbox":  "workspace-write",
                                     "model":  null,
