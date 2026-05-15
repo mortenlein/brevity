@@ -1115,17 +1115,66 @@ function Apply-PlannerOutput {
 function Write-TaskPrompt {
     param(
         [string]$Path,
-        [string]$Slug
+        [string]$Slug,
+        [string]$SpecContents = "",
+        [string]$SpecPath = ""
     )
 
+    $normalizedSpec = ""
+    if (-not [string]::IsNullOrWhiteSpace($SpecContents)) {
+        $normalizedSpec = $SpecContents.Trim()
+    }
+
     $promptLines = @(
-        "Read AGENTS.md.",
+        "Read AGENTS.md first.",
         "",
-        "Task: $Slug",
+        "You are a bounded implementation worker in this Brevity task worktree.",
         "",
-        "Keep changes small.",
+        "# Task",
         "",
-        "Stop after patch + summary."
+        "Slug: $Slug",
+        "",
+        "# Task Spec",
+        ""
+    )
+
+    if ([string]::IsNullOrWhiteSpace($normalizedSpec)) {
+        $promptLines += @(
+            "No vault task spec was materialized for this task.",
+            "Use the task slug and repository instructions only. Do not invent unrelated scope."
+        )
+    }
+    else {
+        if (-not [string]::IsNullOrWhiteSpace($SpecPath)) {
+            $promptLines += "Source: $SpecPath"
+            $promptLines += ""
+        }
+        $promptLines += $normalizedSpec
+    }
+
+    $promptLines += @(
+        "",
+        "# Constraints",
+        "",
+        "- Keep changes small and focused on this task.",
+        "- Stay inside this task worktree.",
+        "- Do not merge branches.",
+        "- Do not clean up or remove worktrees.",
+        "- Do not add package managers, dependencies, generated projects, or web apps unless the task explicitly requires it.",
+        "- Prefer straightforward PowerShell and existing repository patterns.",
+        "",
+        "# Acceptance Checks",
+        "",
+        "- The requested behavior is implemented.",
+        "- Relevant local checks have been run, or any checks that could not be run are called out.",
+        "- The final summary names changed files and verification performed.",
+        "",
+        "# Worker Behavior",
+        "",
+        "- Inspect only the context needed to complete the task.",
+        "- Make the patch directly.",
+        "- Preserve unrelated user or repository changes.",
+        "- Stop after patch and concise summary."
     )
 
     Set-Content -LiteralPath $Path -Value $promptLines -Encoding ASCII
@@ -1344,6 +1393,41 @@ function Show-TaskSpec {
     Get-Content -LiteralPath $specPath
 }
 
+function Get-VaultTaskSpecPath {
+    param([string]$Slug)
+
+    $config = Read-BrevityConfig
+    return (Join-Path (Join-Path $config.vaultPath "tasks") "$Slug.md")
+}
+
+function Update-TaskPromptFromSpec {
+    param(
+        [string]$PromptPath,
+        [string]$Slug,
+        [string]$SpecPath = ""
+    )
+
+    $resolvedSpecPath = $SpecPath
+    if ([string]::IsNullOrWhiteSpace($resolvedSpecPath)) {
+        $resolvedSpecPath = Get-VaultTaskSpecPath -Slug $Slug
+    }
+    elseif (-not (Test-Path -LiteralPath $resolvedSpecPath)) {
+        $defaultSpecPath = Get-VaultTaskSpecPath -Slug $Slug
+        if (Test-Path -LiteralPath $defaultSpecPath) {
+            $resolvedSpecPath = $defaultSpecPath
+        }
+    }
+
+    if (Test-Path -LiteralPath $resolvedSpecPath) {
+        $specContents = Get-Content -LiteralPath $resolvedSpecPath -Raw
+        Write-TaskPrompt -Path $PromptPath -Slug $Slug -SpecContents $specContents -SpecPath $resolvedSpecPath
+        return $resolvedSpecPath
+    }
+
+    Write-TaskPrompt -Path $PromptPath -Slug $Slug
+    return ""
+}
+
 function Start-TaskWork {
     param([string]$Slug)
 
@@ -1389,11 +1473,20 @@ function Start-TaskWork {
         exit 1
     }
 
+    $specPath = ""
+    if (Get-Member -InputObject $task -Name "specPath" -MemberType NoteProperty -ErrorAction SilentlyContinue) {
+        $specPath = [string]$task.specPath
+    }
+
+    $materializedSpecPath = Update-TaskPromptFromSpec -PromptPath $task.promptPath -Slug $Slug -SpecPath $specPath
     $workerCommand = "codex -C $($task.worktreePath) -a never -s workspace-write"
 
     Write-Host "Task: $($task.slug)"
     Write-Host "Worktree: $($task.worktreePath)"
     Write-Host "Prompt: $($task.promptPath)"
+    if (-not [string]::IsNullOrWhiteSpace($materializedSpecPath)) {
+        Write-Host "Spec: $materializedSpecPath"
+    }
     Write-Host "Worker: $workerCommand"
     Write-Host "Read prompt.md and follow it exactly."
 }
@@ -2321,8 +2414,8 @@ function New-TaskWorktree {
         exit $LASTEXITCODE
     }
 
-    Write-TaskPrompt -Path $promptPath -Slug $Slug
-    Add-TaskMetadata -RepoRoot $repoRoot -Slug $Slug -Branch $branchName -WorktreePath $targetPath -PromptPath $promptPath
+    $specPath = Update-TaskPromptFromSpec -PromptPath $promptPath -Slug $Slug
+    Add-TaskMetadata -RepoRoot $repoRoot -Slug $Slug -Branch $branchName -WorktreePath $targetPath -PromptPath $promptPath -SpecPath $specPath
 
     Write-Host "Created task worktree"
     Write-Host "Path: $targetPath"
@@ -2342,7 +2435,7 @@ function Activate-TaskWorktree {
 
     $repoRoot = Get-RepositoryRoot
     $config = Read-BrevityConfig
-    $specPath = Join-Path (Join-Path $config.vaultPath "tasks") "$Slug.md"
+    $specPath = Get-VaultTaskSpecPath -Slug $Slug
 
     if (-not (Test-Path -LiteralPath $specPath)) {
         Write-Host "Vault task spec not found: $Slug" -ForegroundColor Red
@@ -2373,8 +2466,7 @@ function Activate-TaskWorktree {
         exit $LASTEXITCODE
     }
 
-    $specContents = Get-Content -LiteralPath $specPath -Raw
-    Set-Content -LiteralPath $promptPath -Value $specContents -Encoding ASCII
+    Update-TaskPromptFromSpec -PromptPath $promptPath -Slug $Slug -SpecPath $specPath | Out-Null
     Add-TaskMetadata -RepoRoot $repoRoot -Slug $Slug -Branch $branchName -WorktreePath $worktreePath -PromptPath $promptPath -SpecPath $specPath
 
     Write-Host "Activated task worktree"

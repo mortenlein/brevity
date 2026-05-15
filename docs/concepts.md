@@ -323,7 +323,7 @@ It creates branch `task/<slug>` and a worktree at:
 <worktreesRoot>\<projectName>-<slug>
 ```
 
-The task spec contents are copied into:
+The task spec contents are embedded in a bounded worker prompt at:
 
 ```text
 <worktreePath>\prompt.md
@@ -381,6 +381,11 @@ codex -C <worktreePath> -a never -s workspace-write
 
 The command also tells the operator to read `prompt.md` and follow it exactly.
 It does not automatically launch Codex or run planner automation.
+
+Before printing the command, Brevity refreshes `prompt.md` from the matching
+vault task spec when one exists. The prompt keeps the worker bounded by
+including the task slug, embedded spec contents, constraints, acceptance checks,
+and stop-after-summary instructions.
 
 `Brevity task run <slug> [--execute] [--profile <name>]` reads the same metadata file and finds the matching task
 record. It prints:

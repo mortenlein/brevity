@@ -369,7 +369,7 @@ and creates the matching branch:
 task/<slug>
 ```
 
-Brevity copies the vault task spec contents into:
+Brevity embeds the vault task spec contents in a bounded worker prompt at:
 
 ```text
 <worktreePath>\prompt.md
@@ -418,6 +418,11 @@ codex -C <worktreePath> -a never -s workspace-write
 
 It also prints `Read prompt.md and follow it exactly.` Brevity does not
 automatically launch Codex.
+
+Before printing the command, Brevity refreshes `prompt.md` from the matching
+vault task spec when one exists. The generated prompt includes the task slug,
+embedded spec contents, constraints, acceptance checks, and bounded worker
+instructions.
 
 The task run command reads the matching record from:
 
