@@ -1,1 +1,11 @@
-[]
+[
+    {
+        "slug":  "provider-awareness-smoke-v1",
+        "branch":  "task/provider-awareness-smoke-v1",
+        "worktreePath":  "C:\\dev\\worktrees\\active\\brevity-provider-awareness-smoke-v1",
+        "promptPath":  "C:\\dev\\worktrees\\active\\brevity-provider-awareness-smoke-v1\\prompt.md",
+        "specPath":  "",
+        "status":  "ready-for-worker",
+        "createdAt":  "2026-05-16T12:12:45.4088917Z"
+    }
+]

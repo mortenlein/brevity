@@ -2234,7 +2234,24 @@ function Show-TaskRun {
         Write-Host $_.Exception.Message -ForegroundColor Red
         exit 1
     }
+    $providerHealth = Read-ProviderHealth
+    $health = $providerHealth.health
+    $providerName = ([string]$workerCommand.provider).ToLowerInvariant()
 
+    if (Get-Member -InputObject $health -Name $providerName -MemberType NoteProperty -ErrorAction SilentlyContinue) {
+        $providerState = $health.$providerName
+        $providerStatus = [string]$providerState.status
+        $providerNote = [string]$providerState.note
+
+        if (-not [string]::IsNullOrWhiteSpace($providerStatus) -and
+            $providerStatus -ne "healthy" -and
+            $providerStatus -ne "unknown") {
+            Write-Host "Warning: provider '$providerName' is currently $providerStatus." -ForegroundColor Yellow
+            if (-not [string]::IsNullOrWhiteSpace($providerNote)) {
+                Write-Host "Provider note: $providerNote" -ForegroundColor Gray
+            }
+        }
+    }
     Write-Host "Task: $($task.slug)"
     Write-Host "Worktree: $($task.worktreePath)"
     Write-Host "Prompt: $($task.promptPath)"
