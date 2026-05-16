@@ -1365,7 +1365,31 @@ function Show-TaskStatus {
     }
 
     $tasks |
-        Select-Object slug, branch, status, worktreePath, promptPath |
+        ForEach-Object {
+            $runtimeStatus = Get-TaskField -Task $_ -Name "status"
+
+            $worktreePath = Get-TaskField -Task $_ -Name "worktreePath"
+            $promptPath = Get-TaskField -Task $_ -Name "promptPath"
+            $branch = Get-TaskField -Task $_ -Name "branch"
+
+            if (-not (Test-Path -LiteralPath $worktreePath)) {
+                $runtimeStatus = "stale-worktree"
+            }
+            elseif (-not (Test-Path -LiteralPath $promptPath)) {
+                $runtimeStatus = "stale-prompt"
+            }
+            elseif (-not (Test-GitBranchExists -Branch $branch)) {
+                $runtimeStatus = "stale-branch"
+            }
+
+            [pscustomobject]@{
+                slug = Get-TaskField -Task $_ -Name "slug"
+                branch = $branch
+                status = $runtimeStatus
+                worktreePath = $worktreePath
+                promptPath = $promptPath
+            }
+        } |
         Format-List
 }
 
