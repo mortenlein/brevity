@@ -2243,6 +2243,28 @@ function Show-TaskRun {
             $workerOutput = @($workerResult.output)
             $exitCode = $workerResult.exitCode
 
+            $logsRoot = Join-Path $repoRoot ".brevity\logs"
+            $taskLogsRoot = Join-Path $logsRoot $Slug
+            if (-not (Test-Path -LiteralPath $taskLogsRoot)) {
+                New-Item -ItemType Directory -Path $taskLogsRoot -Force | Out-Null
+            }
+
+            $timestamp = Get-Date -Format "yyyyMMdd-HHmmss"
+            $logPath = Join-Path $taskLogsRoot "$timestamp.log"
+
+            $logLines = @(
+                "Task: $Slug"
+                "Provider: $($workerCommand.provider)"
+                "Command: $($workerCommand.display)"
+                "WorkingDirectory: $($workerCommand.workingDirectory)"
+                "ExitCode: $exitCode"
+                ""
+                "Output:"
+            ) + ($workerOutput | ForEach-Object { [string]$_ })
+
+            $logLines | Set-Content -LiteralPath $logPath -Encoding UTF8
+            Write-Host "Worker log: $logPath" -ForegroundColor Gray
+
             if ($exitCode -ne 0) {
                 $renderedOutput = ($workerOutput | ForEach-Object { [string]$_ }) -join [Environment]::NewLine
 
