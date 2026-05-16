@@ -1356,6 +1356,29 @@ function Add-TaskMetadata {
     ConvertTo-Json -InputObject $tasks -Depth 4 | Set-Content -LiteralPath $tasksPath -Encoding ASCII
 }
 
+function Get-TaskRuntimeStatus {
+    param([object]$Task)
+
+    $runtimeStatus = Get-TaskField -Task $Task -Name "status"
+    $worktreePath = Get-TaskField -Task $Task -Name "worktreePath"
+    $promptPath = Get-TaskField -Task $Task -Name "promptPath"
+    $branch = Get-TaskField -Task $Task -Name "branch"
+
+    if (-not (Test-Path -LiteralPath $worktreePath)) {
+        return "stale-worktree"
+    }
+
+    if (-not (Test-Path -LiteralPath $promptPath)) {
+        return "stale-prompt"
+    }
+
+    if (-not (Test-GitBranchExists -Branch $branch)) {
+        return "stale-branch"
+    }
+
+    return $runtimeStatus
+}
+
 function Show-TaskStatus {
     $repoRoot = Get-RepositoryRoot
     $tasksPath = Join-Path $repoRoot ".brevity\tasks.json"
@@ -1385,24 +1408,9 @@ function Show-TaskStatus {
 
     $statusObjects = @(
         $tasks | ForEach-Object {
-            $runtimeStatus = Get-TaskField -Task $_ -Name "status"
-            $worktreePath = Get-TaskField -Task $_ -Name "worktreePath"
-            $promptPath = Get-TaskField -Task $_ -Name "promptPath"
-            $branch = Get-TaskField -Task $_ -Name "branch"
-
-            if (-not (Test-Path -LiteralPath $worktreePath)) {
-                $runtimeStatus = "stale-worktree"
-            }
-            elseif (-not (Test-Path -LiteralPath $promptPath)) {
-                $runtimeStatus = "stale-prompt"
-            }
-            elseif (-not (Test-GitBranchExists -Branch $branch)) {
-                $runtimeStatus = "stale-branch"
-            }
-
             [pscustomobject]@{
                 task = $_
-                status = $runtimeStatus
+                status = Get-TaskRuntimeStatus -Task $_
             }
         }
     )
@@ -1414,30 +1422,17 @@ function Show-TaskStatus {
     Write-Host "Tasks: $totalTasks total, $readyTasks ready, $staleTasks stale"
     Write-Host ""
 
-    $tasks |
+    $statusObjects |
         ForEach-Object {
-            $runtimeStatus = Get-TaskField -Task $_ -Name "status"
-
-            $worktreePath = Get-TaskField -Task $_ -Name "worktreePath"
-            $promptPath = Get-TaskField -Task $_ -Name "promptPath"
-            $branch = Get-TaskField -Task $_ -Name "branch"
-
-            if (-not (Test-Path -LiteralPath $worktreePath)) {
-                $runtimeStatus = "stale-worktree"
-            }
-            elseif (-not (Test-Path -LiteralPath $promptPath)) {
-                $runtimeStatus = "stale-prompt"
-            }
-            elseif (-not (Test-GitBranchExists -Branch $branch)) {
-                $runtimeStatus = "stale-branch"
-            }
+            $task = $_.task
+            $branch = Get-TaskField -Task $task -Name "branch"
 
             [pscustomobject]@{
-                slug = Get-TaskField -Task $_ -Name "slug"
+                slug = Get-TaskField -Task $task -Name "slug"
                 branch = $branch
-                status = $runtimeStatus
-                worktreePath = $worktreePath
-                promptPath = $promptPath
+                status = $_.status
+                worktreePath = Get-TaskField -Task $task -Name "worktreePath"
+                promptPath = Get-TaskField -Task $task -Name "promptPath"
             }
         } |
         Format-List
