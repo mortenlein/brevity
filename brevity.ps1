@@ -316,6 +316,36 @@ function Test-ProviderHealthStatus {
     return @(Get-SupportedProviderHealthStatuses) -contains $normalizedStatus
 }
 
+function Get-PreferredHealthyProfile {
+    param(
+        [object]$Health,
+        [string]$CurrentProvider
+    )
+
+    $preferredProfiles = @(
+        @{ provider = "gemini"; profile = "gemini-pro" },
+        @{ provider = "codex"; profile = "codex-balanced" },
+        @{ provider = "copilot"; profile = "copilot" }
+    )
+
+    foreach ($candidate in $preferredProfiles) {
+        if ($candidate.provider -eq $CurrentProvider) {
+            continue
+        }
+
+        if (-not (Get-Member -InputObject $Health -Name $candidate.provider -MemberType NoteProperty -ErrorAction SilentlyContinue)) {
+            continue
+        }
+
+        $status = [string]$Health.$($candidate.provider).status
+        if ([string]::IsNullOrWhiteSpace($status) -or $status -eq "healthy" -or $status -eq "unknown") {
+            return $candidate.profile
+        }
+    }
+
+    return $null
+}
+
 function Show-ProviderStatus {
     $providerHealth = Read-ProviderHealth
     $health = $providerHealth.health
@@ -2246,9 +2276,16 @@ function Show-TaskRun {
         if (-not [string]::IsNullOrWhiteSpace($providerStatus) -and
             $providerStatus -ne "healthy" -and
             $providerStatus -ne "unknown") {
+
             Write-Host "Warning: provider '$providerName' is currently $providerStatus." -ForegroundColor Yellow
+
             if (-not [string]::IsNullOrWhiteSpace($providerNote)) {
                 Write-Host "Provider note: $providerNote" -ForegroundColor Gray
+            }
+
+            $suggestedProfile = Get-PreferredHealthyProfile -Health $health -CurrentProvider $providerName
+            if (-not [string]::IsNullOrWhiteSpace($suggestedProfile)) {
+                Write-Host "Suggested alternative profile: $suggestedProfile" -ForegroundColor Gray
             }
         }
     }
