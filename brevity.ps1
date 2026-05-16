@@ -657,7 +657,7 @@ function Show-Help {
     Write-Host "  .\brevity.ps1 task activate <slug>"
     Write-Host "  .\brevity.ps1 task spec <slug>"
     Write-Host "  .\brevity.ps1 task start <slug>"
-    Write-Host "  .\brevity.ps1 task run <slug> [--execute] [--profile <name>] [--smoke]"
+    Write-Host "  .\brevity.ps1 task run <slug> [--execute] [--profile <name>] [--smoke] [--force-provider]"
     Write-Host "  .\brevity.ps1 task status"
     Write-Host "  .\brevity.ps1 task merge <slug>"
     Write-Host "  .\brevity.ps1 task cleanup <slug> [--force]"
@@ -2231,7 +2231,8 @@ function Show-TaskRun {
         [string]$Slug,
         [bool]$Execute = $false,
         [string]$ProfileName,
-        [bool]$Smoke = $false
+        [bool]$Smoke = $false,
+        [bool]$ForceProvider = $false
     )
 
     if ([string]::IsNullOrWhiteSpace($Slug)) {
@@ -2343,9 +2344,14 @@ function Show-TaskRun {
     if ($providerStatus -eq "unavailable") {
         Write-Host ""
         Write-Host "Provider '$providerName' is currently unavailable." -ForegroundColor Red
-        Write-Host "Execution blocked to avoid immediate worker failure." -ForegroundColor Red
-        Write-Host "Use a different profile or reset provider state manually." -ForegroundColor Gray
-        exit 1
+
+        if (-not $ForceProvider) {
+            Write-Host "Execution blocked to avoid immediate worker failure." -ForegroundColor Red
+            Write-Host "Use a different profile, reset provider state, or pass --force-provider." -ForegroundColor Gray
+            exit 1
+        }
+
+        Write-Host "Provider gate overridden with --force-provider." -ForegroundColor Yellow
     }
     Write-Host "Task: $($task.slug)"
     Write-Host "Worktree: $($task.worktreePath)"
@@ -3036,6 +3042,7 @@ switch ($Command.ToLowerInvariant()) {
                 $executeTask = $false
                 $profileName = $null
                 $smokeTask = $false
+                $forceProvider = $false
                 if ($null -ne $RemainingArgs) {
                     $skipNext = $false
                     for ($i = 0; $i -lt $RemainingArgs.Length; $i++) {
@@ -3050,6 +3057,9 @@ switch ($Command.ToLowerInvariant()) {
                         }
                         elseif ($arg -eq "--smoke") {
                             $smokeTask = $true
+                        }
+                        elseif ($arg -eq "--force-provider") {
+                            $forceProvider = $true
                         }
                         elseif ($arg -eq "--profile") {
                             if ($i + 1 -lt $RemainingArgs.Length) {
@@ -3072,7 +3082,7 @@ switch ($Command.ToLowerInvariant()) {
                     }
                 }
 
-                Show-TaskRun -Slug $taskSlug -Execute $executeTask -ProfileName $profileName -Smoke $smokeTask
+                Show-TaskRun -Slug $taskSlug -Execute $executeTask -ProfileName $profileName -Smoke $smokeTask -ForceProvider $forceProvider
             }
             "status" { Show-TaskStatus }
             "merge" {
