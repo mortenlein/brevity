@@ -681,7 +681,7 @@ function Show-Board {
     }
 
     $totalTasks = $tasks.Count
-    $readyTasks = @($tasks | Where-Object { (Get-TaskField -Task $_ -Name "status") -eq "ready-for-worker" }).Count
+    $readyTasks = @($tasks | Where-Object { (Get-TaskRuntimeStatus -Task $_) -eq "ready-for-worker" }).Count
 
     Write-Host "Tasks: $totalTasks total, $readyTasks ready"
     Write-Host ""
@@ -697,7 +697,7 @@ function Show-Board {
 
     $statuses = @()
     foreach ($knownStatus in $knownStatuses) {
-        $matchingTasks = @($tasks | Where-Object { (Get-TaskField -Task $_ -Name "status") -eq $knownStatus })
+        $matchingTasks = @($tasks | Where-Object { (Get-TaskRuntimeStatus -Task $_) -eq $knownStatus })
         if ($matchingTasks.Count -gt 0) {
             $statuses += $knownStatus
         }
@@ -705,14 +705,14 @@ function Show-Board {
 
     $otherStatuses = @(
         $tasks |
-            ForEach-Object { Get-TaskField -Task $_ -Name "status" } |
+            ForEach-Object { Get-TaskRuntimeStatus -Task $_} |
             Where-Object { -not [string]::IsNullOrWhiteSpace($_) -and ($knownStatuses -notcontains $_) } |
             Sort-Object -Unique
     )
 
     $statuses += $otherStatuses
 
-    $tasksWithoutStatus = @($tasks | Where-Object { [string]::IsNullOrWhiteSpace((Get-TaskField -Task $_ -Name "status")) })
+    $tasksWithoutStatus = @($tasks | Where-Object { [string]::IsNullOrWhiteSpace((Get-TaskRuntimeStatus -Task $_)) })
     if ($tasksWithoutStatus.Count -gt 0) {
         $statuses += "unknown"
     }
@@ -722,7 +722,7 @@ function Show-Board {
             $groupTasks = $tasksWithoutStatus
         }
         else {
-            $groupTasks = @($tasks | Where-Object { (Get-TaskField -Task $_ -Name "status") -eq $status })
+            $groupTasks = @($tasks | Where-Object { (Get-TaskRuntimeStatus -Task $_) -eq $status })
         }
 
         if ($groupTasks.Count -eq 0) {
