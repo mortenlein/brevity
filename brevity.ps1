@@ -1383,10 +1383,35 @@ function Show-TaskStatus {
         return
     }
 
-    $totalTasks = $tasks.Count
-    $readyTasks = @($tasks | Where-Object { (Get-TaskField -Task $_ -Name "status") -eq "ready-for-worker" }).Count
+    $statusObjects = @(
+        $tasks | ForEach-Object {
+            $runtimeStatus = Get-TaskField -Task $_ -Name "status"
+            $worktreePath = Get-TaskField -Task $_ -Name "worktreePath"
+            $promptPath = Get-TaskField -Task $_ -Name "promptPath"
+            $branch = Get-TaskField -Task $_ -Name "branch"
 
-    Write-Host "Tasks: $totalTasks total, $readyTasks ready"
+            if (-not (Test-Path -LiteralPath $worktreePath)) {
+                $runtimeStatus = "stale-worktree"
+            }
+            elseif (-not (Test-Path -LiteralPath $promptPath)) {
+                $runtimeStatus = "stale-prompt"
+            }
+            elseif (-not (Test-GitBranchExists -Branch $branch)) {
+                $runtimeStatus = "stale-branch"
+            }
+
+            [pscustomobject]@{
+                task = $_
+                status = $runtimeStatus
+            }
+        }
+    )
+
+    $totalTasks = $statusObjects.Count
+    $readyTasks = @($statusObjects | Where-Object { $_.status -eq "ready-for-worker" }).Count
+    $staleTasks = @($statusObjects | Where-Object { $_.status -like "stale-*" }).Count
+
+    Write-Host "Tasks: $totalTasks total, $readyTasks ready, $staleTasks stale"
     Write-Host ""
 
     $tasks |
