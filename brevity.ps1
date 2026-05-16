@@ -2340,6 +2340,13 @@ function Show-TaskRun {
             }
         }
     }
+    if ($providerStatus -eq "unavailable") {
+        Write-Host ""
+        Write-Host "Provider '$providerName' is currently unavailable." -ForegroundColor Red
+        Write-Host "Execution blocked to avoid immediate worker failure." -ForegroundColor Red
+        Write-Host "Use a different profile or reset provider state manually." -ForegroundColor Gray
+        exit 1
+    }
     Write-Host "Task: $($task.slug)"
     Write-Host "Worktree: $($task.worktreePath)"
     Write-Host "Prompt: $($task.promptPath)"
