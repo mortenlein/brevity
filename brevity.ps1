@@ -1108,6 +1108,19 @@ function Apply-PlannerOutput {
         exit 1
     }
 
+    $workerExecutable = [string]$workerCommand.command
+    if ([string]::IsNullOrWhiteSpace($workerExecutable)) {
+        Write-Host "Worker command is missing." -ForegroundColor Red
+        exit 1
+    }
+
+    $resolvedWorkerExecutable = Get-Command $workerExecutable -ErrorAction SilentlyContinue
+    if ($null -eq $resolvedWorkerExecutable) {
+        Write-Host "Worker executable not found: $workerExecutable" -ForegroundColor Red
+        Write-Host "Check provider config or PATH."
+        exit 1
+    }
+
     Write-Host "Created vault task specs:"
     $written | ForEach-Object { Write-Host $_ }
 }
