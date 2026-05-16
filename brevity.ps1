@@ -1383,6 +1383,12 @@ function Show-TaskStatus {
         return
     }
 
+    $totalTasks = $tasks.Count
+    $readyTasks = @($tasks | Where-Object { (Get-TaskField -Task $_ -Name "status") -eq "ready-for-worker" }).Count
+
+    Write-Host "Tasks: $totalTasks total, $readyTasks ready"
+    Write-Host ""
+
     $tasks |
         ForEach-Object {
             $runtimeStatus = Get-TaskField -Task $_ -Name "status"
