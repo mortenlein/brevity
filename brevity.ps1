@@ -2327,6 +2327,25 @@ function Show-TaskRun {
                 Write-Host "Provider: $($workerCommand.provider)" -ForegroundColor Gray
                 Write-Host "Command: $($workerCommand.command)" -ForegroundColor Gray
 
+                if ($failureKind -eq "quota-constrained") {
+                    Set-ProviderStatus `
+                        -ProviderName $workerCommand.provider `
+                        -Status "quota-constrained" `
+                        -Note "Automatically detected from worker runtime failure."
+                }
+                elseif ($failureKind -eq "capacity-degraded") {
+                    Set-ProviderStatus `
+                        -ProviderName $workerCommand.provider `
+                        -Status "capacity-degraded" `
+                        -Note "Automatically detected from worker runtime failure."
+                }
+                elseif ($failureKind -eq "worker-command-unavailable") {
+                    Set-ProviderStatus `
+                        -ProviderName $workerCommand.provider `
+                        -Status "unavailable" `
+                        -Note "Worker executable was unavailable during runtime."
+                }
+
                 exit $exitCode
             }
         }
