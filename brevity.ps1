@@ -386,6 +386,17 @@ function Show-ProviderStatus {
     }
 }
 
+function Reset-ProviderStatus {
+    param(
+        [string]$ProviderName
+    )
+
+    Set-ProviderStatus `
+        -ProviderName $ProviderName `
+        -Status "unknown" `
+        -Note "Provider state reset."
+}
+
 function Set-ProviderStatus {
     param(
         [string]$ProviderName,
@@ -608,6 +619,7 @@ function Show-Help {
     Write-Host "  .\brevity.ps1 board"
     Write-Host "  .\brevity.ps1 status [-DevRoot <path>]"
     Write-Host "  .\brevity.ps1 provider status"
+    Write-Host "  .\brevity.ps1 provider reset <provider>"
     Write-Host "  .\brevity.ps1 provider set <provider> <status> [-Note <note>]"
     Write-Host "  .\brevity.ps1 task new <slug> [-DevRoot <path>]"
     Write-Host "  .\brevity.ps1 task activate <slug>"
@@ -2854,6 +2866,21 @@ switch ($Command.ToLowerInvariant()) {
 
         switch ($Subcommand.ToLowerInvariant()) {
             "status" { Show-ProviderStatus }
+            "reset" {
+                $providerName = $null
+
+                if ($null -ne $RemainingArgs -and $RemainingArgs.Length -gt 0) {
+                    $providerName = [string]$RemainingArgs[0]
+                }
+
+                if ([string]::IsNullOrWhiteSpace($providerName)) {
+                    Write-Host "Missing provider name." -ForegroundColor Red
+                    Write-Host "Usage: .\brevity.ps1 provider reset <provider>"
+                    exit 1
+                }
+
+                Reset-ProviderStatus -ProviderName $providerName
+            }
             "set" {
                 $providerName = $null
                 $providerStatus = $null
