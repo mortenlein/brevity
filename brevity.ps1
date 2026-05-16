@@ -2126,6 +2126,18 @@ function Show-TaskRun {
         exit 1
     }
 
+    if (-not (Test-Path -LiteralPath $task.worktreePath)) {
+        Write-Host "Task worktree path does not exist for: $Slug" -ForegroundColor Red
+        Write-Host "Expected path: $($task.worktreePath)"
+        exit 1
+    }
+
+    if (-not (Test-Path -LiteralPath $task.promptPath)) {
+        Write-Host "Task prompt file does not exist for: $Slug" -ForegroundColor Red
+        Write-Host "Expected path: $($task.promptPath)"
+        exit 1
+    }
+
     try {
         $workerCommand = New-WorkerCommand -Config $config -WorktreePath $task.worktreePath -ProfileName $ProfileName
     }
