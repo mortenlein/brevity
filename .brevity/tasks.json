@@ -7,14 +7,5 @@
         "specPath":  "C:\\dev\\vaults\\AI-Vault\\10-Projects\\brevity\\tasks\\gemini-trust-docs.md",
         "status":  "ready-for-worker",
         "createdAt":  "2026-05-10T19:00:50.7394322Z"
-    },
-    {
-        "slug":  "prompt-materialization-v1",
-        "branch":  "task/prompt-materialization-v1",
-        "worktreePath":  "C:\\dev\\worktrees\\active\\brevity-prompt-materialization-v1",
-        "promptPath":  "C:\\dev\\worktrees\\active\\brevity-prompt-materialization-v1\\prompt.md",
-        "specPath":  "",
-        "status":  "ready-for-worker",
-        "createdAt":  "2026-05-15T20:52:56.4978699Z"
     }
 ]
