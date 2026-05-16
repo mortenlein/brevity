@@ -1,11 +1,1 @@
-[
-    {
-        "slug":  "smoke-mode-test-v1",
-        "branch":  "task/smoke-mode-test-v1",
-        "worktreePath":  "C:\\dev\\worktrees\\active\\brevity-smoke-mode-test-v1",
-        "promptPath":  "C:\\dev\\worktrees\\active\\brevity-smoke-mode-test-v1\\prompt.md",
-        "specPath":  "",
-        "status":  "ready-for-worker",
-        "createdAt":  "2026-05-16T10:46:13.5426246Z"
-    }
-]
+[]
