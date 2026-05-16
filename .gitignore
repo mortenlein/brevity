@@ -5,3 +5,4 @@ prompt.md
 
 # Brevity runtime metadata
 .brevity/provider-health.json
+.smoke-*
