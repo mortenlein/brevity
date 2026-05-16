@@ -2453,6 +2453,12 @@ function Show-TaskRun {
 
                 exit $exitCode
             }
+            if ($exitCode -eq 0 -and $workerCommand.provider -ne "smoke") {
+                Set-ProviderStatus `
+                    -ProviderName $workerCommand.provider `
+                    -Status "healthy" `
+                    -Note "Automatically marked healthy after successful worker execution."
+            }
         }
         finally {
             Pop-Location
