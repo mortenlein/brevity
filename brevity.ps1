@@ -739,6 +739,31 @@ function Read-BrevityTasks {
 function Show-Board {
     $tasks = @(Read-BrevityTasks)
 
+    $providerHealth = Read-ProviderHealth
+    $health = $providerHealth.health
+
+    $totalProviders = 0
+    $degradedProviders = 0
+    $unavailableProviders = 0
+
+    foreach ($property in $health.PSObject.Properties) {
+        $totalProviders++
+
+        $status = [string]$property.Value.status
+
+        if ($status -eq "quota-constrained" -or
+            $status -eq "capacity-degraded") {
+            $degradedProviders++
+        }
+
+        if ($status -eq "unavailable") {
+            $unavailableProviders++
+        }
+    }
+
+    Write-Host "Providers: $totalProviders total, $degradedProviders degraded, $unavailableProviders unavailable"
+    Write-Host ""
+
     if ($tasks.Count -eq 0) {
         Write-Host "No Brevity tasks found."
         return
