@@ -583,7 +583,7 @@ function Show-Help {
     Write-Host "  .\brevity.ps1 task activate <slug>"
     Write-Host "  .\brevity.ps1 task spec <slug>"
     Write-Host "  .\brevity.ps1 task start <slug>"
-    Write-Host "  .\brevity.ps1 task run <slug> [--execute] [--profile <name>]"
+    Write-Host "  .\brevity.ps1 task run <slug> [--execute] [--profile <name>] [--smoke]"
     Write-Host "  .\brevity.ps1 task status"
     Write-Host "  .\brevity.ps1 task merge <slug>"
     Write-Host "  .\brevity.ps1 task cleanup <slug> [--force]"
@@ -2104,7 +2104,8 @@ function Show-TaskRun {
     param(
         [string]$Slug,
         [bool]$Execute = $false,
-        [string]$ProfileName
+        [string]$ProfileName,
+        [bool]$Smoke = $false
     )
 
     if ([string]::IsNullOrWhiteSpace($Slug)) {
@@ -2163,7 +2164,26 @@ function Show-TaskRun {
     }
 
     try {
-        $workerCommand = New-WorkerCommand -Config $config -WorktreePath $task.worktreePath -ProfileName $ProfileName
+        if ($Smoke) {
+            $workerCommand = New-Object PSObject -Property ([ordered]@{
+                provider = "smoke"
+                command = "powershell"
+                arguments = @(
+                    "-NoProfile",
+                    "-ExecutionPolicy",
+                    "Bypass",
+                    "-Command",
+                    "Write-Output 'Brevity smoke OK'; Write-Output ((Get-Location).Path)"
+                )
+                executionPolicy = "Bypass"
+                workingDirectory = $task.worktreePath
+                environment = [ordered]@{}
+                display = "powershell -NoProfile -ExecutionPolicy Bypass -Command <brevity-smoke>"
+            })
+        }
+        else {
+            $workerCommand = New-WorkerCommand -Config $config -WorktreePath $task.worktreePath -ProfileName $ProfileName
+        }
     }
     catch {
         Write-Host $_.Exception.Message -ForegroundColor Red
@@ -2781,6 +2801,7 @@ switch ($Command.ToLowerInvariant()) {
                 $taskSlug = $null
                 $executeTask = $false
                 $profileName = $null
+                $smokeTask = $false
                 if ($null -ne $RemainingArgs) {
                     $skipNext = $false
                     for ($i = 0; $i -lt $RemainingArgs.Length; $i++) {
@@ -2792,6 +2813,9 @@ switch ($Command.ToLowerInvariant()) {
                         $arg = $RemainingArgs[$i]
                         if ($arg -eq "--execute") {
                             $executeTask = $true
+                        }
+                        elseif ($arg -eq "--smoke") {
+                            $smokeTask = $true
                         }
                         elseif ($arg -eq "--profile") {
                             if ($i + 1 -lt $RemainingArgs.Length) {
@@ -2808,13 +2832,13 @@ switch ($Command.ToLowerInvariant()) {
                         }
                         else {
                             Write-Host "Unknown argument for brevity task run: $arg" -ForegroundColor Red
-                            Write-Host "Usage: .\brevity.ps1 task run <slug> [--execute] [--profile <name>]"
+                            Write-Host "Usage: .\brevity.ps1 task run <slug> [--execute] [--profile <name>] [--smoke]"
                             exit 1
                         }
                     }
                 }
 
-                Show-TaskRun -Slug $taskSlug -Execute $executeTask -ProfileName $profileName
+                Show-TaskRun -Slug $taskSlug -Execute $executeTask -ProfileName $profileName -Smoke $smokeTask
             }
             "status" { Show-TaskStatus }
             "merge" {
