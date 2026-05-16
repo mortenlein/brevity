@@ -1795,6 +1795,21 @@ function Format-PowerShellLiteral {
     return "'" + ($Value -replace "'", "''") + "'"
 }
 
+function Split-ProcessOutputLines {
+    param([string]$Value)
+
+    if ([string]::IsNullOrEmpty($Value)) {
+        return @()
+    }
+
+    $lines = @($Value -split "\r?\n")
+    if ($Value -match "(\r?\n)$" -and $lines.Count -gt 0) {
+        return @($lines[0..($lines.Count - 2)])
+    }
+
+    return $lines
+}
+
 function ConvertTo-WorkerEnvironmentMap {
     param([object]$EnvironmentConfig)
 
@@ -1980,52 +1995,84 @@ function Invoke-WorkerCommand {
     )
 
     $workerOutput = New-Object 'System.Collections.Generic.List[object]'
-    $previousNativeCommandUseErrorActionPreference = $null
-    $hasNativeCommandUseErrorActionPreference = Test-Path -LiteralPath "variable:PSNativeCommandUseErrorActionPreference"
-
-    if ($hasNativeCommandUseErrorActionPreference) {
-        $previousNativeCommandUseErrorActionPreference = $PSNativeCommandUseErrorActionPreference
-        $PSNativeCommandUseErrorActionPreference = $false
-    }
-
+    $process = New-Object System.Diagnostics.Process
     try {
-        if (Get-Member -InputObject $WorkerCommand -Name "useStdin" -MemberType NoteProperty -ErrorAction SilentlyContinue) {
-            if ($WorkerCommand.useStdin) {
-                $promptContent = Get-Content -LiteralPath $WorkerCommand.promptPath -Raw
-                $argsForWorker = [string[]]@($WorkerCommand.arguments)
-                $promptContent | & $WorkerCommand.command @argsForWorker 2>&1 | ForEach-Object {
-                    $workerOutput.Add($_)
-                    Write-Host $_
-                }
-                $exitCode = $LASTEXITCODE
-            }
-            else {
-                $argsForWorker = [string[]]@($WorkerCommand.arguments)
-                & $WorkerCommand.command @argsForWorker 2>&1 | ForEach-Object {
-                    $workerOutput.Add($_)
-                    Write-Host $_
-                }
-                $exitCode = $LASTEXITCODE
+        $process.StartInfo.FileName = [string]$WorkerCommand.command
+        $process.StartInfo.WorkingDirectory = [string]$WorkerCommand.workingDirectory
+        $process.StartInfo.UseShellExecute = $false
+        $process.StartInfo.RedirectStandardOutput = $true
+        $process.StartInfo.RedirectStandardError = $true
+        $process.StartInfo.RedirectStandardInput = $false
+        $process.StartInfo.CreateNoWindow = $true
+
+        $argumentsForWorker = [string[]]@($WorkerCommand.arguments)
+        if (Get-Member -InputObject $process.StartInfo -Name "ArgumentList" -MemberType Property -ErrorAction SilentlyContinue) {
+            foreach ($argument in $argumentsForWorker) {
+                [void]$process.StartInfo.ArgumentList.Add([string]$argument)
             }
         }
         else {
-            $argsForWorker = [string[]]@($WorkerCommand.arguments)
-            & $WorkerCommand.command @argsForWorker 2>&1 | ForEach-Object {
-                $workerOutput.Add($_)
-                Write-Host $_
+            $process.StartInfo.Arguments = Format-CommandLine -Parts $argumentsForWorker
+        }
+
+        $workerEnvironment = [ordered]@{}
+        if (Get-Member -InputObject $WorkerCommand -Name "environment" -MemberType NoteProperty -ErrorAction SilentlyContinue) {
+            if ($null -ne $WorkerCommand.environment) {
+                $workerEnvironment = $WorkerCommand.environment
             }
-            $exitCode = $LASTEXITCODE
+        }
+
+        foreach ($name in @($workerEnvironment.Keys)) {
+            $process.StartInfo.EnvironmentVariables[[string]$name] = [string]$workerEnvironment[$name]
+        }
+
+        $useStdin = $false
+        if (Get-Member -InputObject $WorkerCommand -Name "useStdin" -MemberType NoteProperty -ErrorAction SilentlyContinue) {
+            $useStdin = [bool]$WorkerCommand.useStdin
+        }
+
+        if ($useStdin) {
+            $process.StartInfo.RedirectStandardInput = $true
+        }
+
+        if (-not $process.Start()) {
+            throw "Worker process did not start: $($WorkerCommand.command)"
+        }
+
+        $stdoutTask = $process.StandardOutput.ReadToEndAsync()
+        $stderrTask = $process.StandardError.ReadToEndAsync()
+
+        if ($useStdin) {
+            $promptContent = Get-Content -LiteralPath $WorkerCommand.promptPath -Raw
+            $process.StandardInput.Write($promptContent)
+            $process.StandardInput.Close()
+        }
+
+        $process.WaitForExit()
+        $stdout = $stdoutTask.Result
+        $stderr = $stderrTask.Result
+
+        if (-not [string]::IsNullOrEmpty($stdout)) {
+            foreach ($line in (Split-ProcessOutputLines -Value $stdout)) {
+                Write-Host $line
+                $workerOutput.Add($line)
+            }
+        }
+
+        if (-not [string]::IsNullOrEmpty($stderr)) {
+            foreach ($line in (Split-ProcessOutputLines -Value $stderr)) {
+                [Console]::Error.WriteLine([string]$line)
+                $workerOutput.Add([string]$line)
+            }
         }
 
         return (New-Object PSObject -Property ([ordered]@{
             output = @($workerOutput.ToArray())
-            exitCode = $exitCode
+            exitCode = $process.ExitCode
         }))
     }
     finally {
-        if ($hasNativeCommandUseErrorActionPreference) {
-            $PSNativeCommandUseErrorActionPreference = $previousNativeCommandUseErrorActionPreference
-        }
+        $process.Dispose()
     }
 }
 
@@ -2109,9 +2156,16 @@ function Show-TaskRun {
     }
 
     try {
-        foreach ($name in @($workerCommand.environment.Keys)) {
+        $workerEnvironment = [ordered]@{}
+        if (Get-Member -InputObject $workerCommand -Name "environment" -MemberType NoteProperty -ErrorAction SilentlyContinue) {
+            if ($null -ne $workerCommand.environment) {
+                $workerEnvironment = $workerCommand.environment
+            }
+        }
+
+        foreach ($name in @($workerEnvironment.Keys)) {
             $previousEnvironment[$name] = [Environment]::GetEnvironmentVariable($name, "Process")
-            [Environment]::SetEnvironmentVariable($name, $workerCommand.environment[$name], "Process")
+            [Environment]::SetEnvironmentVariable($name, $workerEnvironment[$name], "Process")
         }
 
         Push-Location -LiteralPath $workerCommand.workingDirectory
