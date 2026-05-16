@@ -345,20 +345,14 @@ function Get-PreferredHealthyProfile {
 
     return $null
 }
-
-function Show-ProviderStatus {
-    $providerHealth = Read-ProviderHealth
-    $health = $providerHealth.health
-
-    Write-Host "Provider health"
-    Write-Host "Path: $($providerHealth.path)"
-    Write-Host ""
+function Get-ProviderHealthSummary {
+    param([object]$Health)
 
     $totalProviders = 0
     $degradedProviders = 0
     $unavailableProviders = 0
 
-    foreach ($property in $health.PSObject.Properties) {
+    foreach ($property in $Health.PSObject.Properties) {
         $totalProviders++
 
         $status = [string]$property.Value.status
@@ -373,7 +367,23 @@ function Show-ProviderStatus {
         }
     }
 
-    Write-Host "Providers: $totalProviders total, $degradedProviders degraded, $unavailableProviders unavailable"
+    return [pscustomobject]@{
+        total = $totalProviders
+        degraded = $degradedProviders
+        unavailable = $unavailableProviders
+    }
+}
+
+function Show-ProviderStatus {
+    $providerHealth = Read-ProviderHealth
+    $health = $providerHealth.health
+
+    Write-Host "Provider health"
+    Write-Host "Path: $($providerHealth.path)"
+    Write-Host ""
+
+    $summary = Get-ProviderHealthSummary -Health $health
+    Write-Host "Providers: $($summary.total) total, $($summary.degraded) degraded, $($summary.unavailable) unavailable"
     Write-Host ""
 
     foreach ($providerName in @($health.PSObject.Properties.Name | Sort-Object)) {
@@ -742,26 +752,8 @@ function Show-Board {
     $providerHealth = Read-ProviderHealth
     $health = $providerHealth.health
 
-    $totalProviders = 0
-    $degradedProviders = 0
-    $unavailableProviders = 0
-
-    foreach ($property in $health.PSObject.Properties) {
-        $totalProviders++
-
-        $status = [string]$property.Value.status
-
-        if ($status -eq "quota-constrained" -or
-            $status -eq "capacity-degraded") {
-            $degradedProviders++
-        }
-
-        if ($status -eq "unavailable") {
-            $unavailableProviders++
-        }
-    }
-
-    Write-Host "Providers: $totalProviders total, $degradedProviders degraded, $unavailableProviders unavailable"
+    $summary = Get-ProviderHealthSummary -Health $health
+    Write-Host "Providers: $($summary.total) total, $($summary.degraded) degraded, $($summary.unavailable) unavailable"
     Write-Host ""
 
     if ($tasks.Count -eq 0) {
