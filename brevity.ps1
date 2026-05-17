@@ -2256,6 +2256,27 @@ function Show-ExecutionPolicyGuidance {
     Write-Host "Use Unblock-File only when you trust the local script contents."
 }
 
+function Get-TaskMetadataLockInfo {
+    param([string]$TasksPath)
+
+    $lockPath = Join-Path (Split-Path -Parent $TasksPath) "tasks.lock"
+    $exists = Test-Path -LiteralPath $lockPath
+    $ageMinutes = $null
+
+    if ($exists) {
+        $lockItem = Get-Item -LiteralPath $lockPath -ErrorAction SilentlyContinue
+        if ($null -ne $lockItem) {
+            $ageMinutes = ((Get-Date) - $lockItem.LastWriteTime).TotalMinutes
+        }
+    }
+
+    return [pscustomobject]@{
+        exists = $exists
+        path = $lockPath
+        ageMinutes = $ageMinutes
+    }
+}
+
 function Show-DoctorReport {
     param([bool]$Repair = $false)
 
@@ -2279,6 +2300,7 @@ function Show-DoctorReport {
     $staleTasks = @($runtimeTasks | Where-Object { $_.runtime.stale })
     $missingWorktreeTasks = @($runtimeTasks | Where-Object { $_.runtime.missingWorktree })
     $missingPromptTasks = @($runtimeTasks | Where-Object { $_.runtime.missingPrompt })
+    $lockInfo = Get-TaskMetadataLockInfo -TasksPath $tasksPath
 
     Write-Host "Brevity doctor"
     Write-Host "Repo: $repoRoot"
@@ -2342,17 +2364,44 @@ function Show-DoctorReport {
         $mergedTaskBranches | ForEach-Object { Write-Host $_ }
     }
 
+    Write-Section "Task metadata lock"
+    if (-not $lockInfo.exists) {
+        Write-Host "None"
+    }
+    else {
+        Write-Host "Path: $($lockInfo.path)"
+        if ($null -ne $lockInfo.ageMinutes) {
+            Write-Host ("Age: {0:N1} minutes" -f $lockInfo.ageMinutes)
+        }
+        Write-Host "If no Brevity process is active, an old lock may be stale."
+    }
+
     if ($Repair) {
         Write-Section "Repair"
+        $repaired = $false
+        if ($lockInfo.exists -and $null -ne $lockInfo.ageMinutes) {
+            if ($lockInfo.ageMinutes -ge 10) {
+                Remove-Item -LiteralPath $lockInfo.path -Force
+                Write-Host "Removed stale task metadata lock: $($lockInfo.path)"
+                $repaired = $true
+            }
+            else {
+                Write-Host ("Task metadata lock is fresh ({0:N1} minutes); not removing." -f $lockInfo.ageMinutes)
+            }
+        }
+
         $repairable = @($runtimeTasks | Where-Object { $_.runtime.missingWorktree -and $_.runtime.missingBranch })
         if ($repairable.Count -eq 0) {
-            Write-Host "No conservative repairs available."
+            if (-not $repaired) {
+                Write-Host "No conservative repairs available."
+            }
             return
         }
 
         foreach ($task in $repairable) {
             Remove-TaskMetadataRecord -TasksPath $tasksPath -Tasks $tasks -Slug $task.slug
             $tasks = @($tasks | Where-Object { $_.slug -ne $task.slug })
+            $repaired = $true
         }
     }
 }
