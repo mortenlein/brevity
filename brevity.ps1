@@ -759,6 +759,7 @@ function Show-Help {
     Write-Host "  .\brevity.ps1 init --repair [-DevRoot <path>]"
     Write-Host "  .\brevity.ps1 plan"
     Write-Host "  .\brevity.ps1 plan backlog"
+    Write-Host "  .\brevity.ps1 plan workers"
     Write-Host "  .\brevity.ps1 plan apply <file>"
     Write-Host "  .\brevity.ps1 board"
     Write-Host "  .\brevity.ps1 doctor [--repair]"
@@ -1988,6 +1989,100 @@ function Show-TaskStatus {
             }
         } |
         Format-List
+}
+
+function Show-WorkerPlan {
+    $tasks = @(Read-BrevityTasks)
+    Write-Host "Worker execution plan"
+
+    if ($tasks.Count -eq 0) {
+        Write-Host "No Brevity tasks found."
+        return
+    }
+
+    $runtimeTasks = @($tasks | ForEach-Object { Get-TaskRuntimeInfo -Task $_ })
+    $planItems = @($runtimeTasks | ForEach-Object {
+        $provider = $_.provider.resolved
+        if ([string]::IsNullOrWhiteSpace($provider)) {
+            $provider = "unknown"
+        }
+
+        $readiness = "blocked"
+        if ($_.metadataStatus -eq "merged") {
+            $readiness = "review"
+        }
+        elseif (-not $_.runtime.stale -and -not $_.provider.gated -and $_.metadataStatus -eq "ready-for-worker") {
+            $readiness = "runnable"
+        }
+        elseif ($_.runtime.stale) {
+            $readiness = "stale"
+        }
+        elseif ($_.provider.gated) {
+            $readiness = "provider-gated"
+        }
+
+        [pscustomobject]@{
+            slug = $_.slug
+            provider = $provider
+            providerHealth = $_.provider.health
+            status = $_.status
+            worktreeStatus = $(if ($_.worktree.exists) { $(if ($_.worktree.registered) { "registered" } else { "unregistered" }) } else { "missing" })
+            stale = $_.runtime.stale
+            readiness = $readiness
+            branch = $_.branch
+        }
+    })
+
+    $runnable = @($planItems | Where-Object { $_.readiness -eq "runnable" })
+    $review = @($planItems | Where-Object { $_.readiness -eq "review" })
+    $blocked = @($planItems | Where-Object { $_.readiness -ne "runnable" -and $_.readiness -ne "review" })
+
+    Write-Host "Tasks: $($planItems.Count) total, $($runnable.Count) runnable, $($blocked.Count) blocked, $($review.Count) ready for review"
+
+    Write-Section "Provider groups"
+    $planItems |
+        Sort-Object provider, readiness, slug |
+        Group-Object provider |
+        ForEach-Object {
+            Write-Host "$($_.Name): $($_.Count) task(s)"
+            $_.Group | ForEach-Object {
+                Write-Host "  $($_.slug) [$($_.readiness)] worktree=$($_.worktreeStatus) stale=$($_.stale) health=$($_.providerHealth)"
+            }
+        }
+
+    Write-Section "Proposed execution order"
+    if ($runnable.Count -eq 0) {
+        Write-Host "No runnable tasks."
+    }
+    else {
+        $index = 1
+        $runnable | Sort-Object provider, slug | ForEach-Object {
+            Write-Host "$index. $($_.slug) provider=$($_.provider) branch=$($_.branch)"
+            $index++
+        }
+    }
+
+    Write-Section "Review queue"
+    if ($review.Count -eq 0) {
+        Write-Host "No tasks ready for review."
+    }
+    else {
+        $index = 1
+        $review | Sort-Object slug | ForEach-Object {
+            Write-Host "$index. $($_.slug) branch=$($_.branch)"
+            $index++
+        }
+    }
+
+    Write-Section "Blocked tasks"
+    if ($blocked.Count -eq 0) {
+        Write-Host "None"
+    }
+    else {
+        $blocked | Sort-Object readiness, slug | ForEach-Object {
+            Write-Host "$($_.slug) [$($_.readiness)] status=$($_.status) worktree=$($_.worktreeStatus) provider=$($_.provider)"
+        }
+    }
 }
 
 function Get-GitTaskBranches {
@@ -3574,6 +3669,9 @@ switch ($Command.ToLowerInvariant()) {
         }
         elseif ($Subcommand.ToLowerInvariant() -eq "backlog") {
             New-BacklogPlanPrompt
+        }
+        elseif ($Subcommand.ToLowerInvariant() -eq "workers") {
+            Show-WorkerPlan
         }
         elseif ($Subcommand.ToLowerInvariant() -eq "apply") {
             $plannerOutputPath = $null
