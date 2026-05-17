@@ -1302,6 +1302,93 @@ function Write-VaultTaskSpec {
     return $specPath
 }
 
+function Test-PlannerApplyPreflight {
+    param(
+        [object[]]$Tasks,
+        [string]$TasksRoot,
+        [bool]$CreateWorktrees = $false
+    )
+
+    $errors = @()
+    $seenSlugs = @()
+    $repoName = Get-RepositoryName
+    $rootPath = Resolve-DevRoot $DevRoot
+    $existingTasks = @(Read-BrevityTasks)
+
+    foreach ($task in $Tasks) {
+        $title = Get-PlannerFieldValue -Task $task -Name "title"
+        $slug = Get-PlannerFieldValue -Task $task -Name "slug"
+        $status = Get-PlannerFieldValue -Task $task -Name "status"
+        $dependencies = Get-PlannerFieldValue -Task $task -Name "dependencies"
+        $workerPrompt = Get-PlannerFieldValue -Task $task -Name "workerPrompt"
+        $label = $(if ([string]::IsNullOrWhiteSpace($title)) { "<missing title>" } else { $title })
+
+        if ([string]::IsNullOrWhiteSpace($slug)) {
+            $errors += "Planner task '$label' is missing slug."
+            continue
+        }
+
+        if ($slug -notmatch '^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$') {
+            $errors += "Planner task '$label' has invalid slug '$slug'. Use lowercase letters, numbers, and hyphens."
+            continue
+        }
+
+        if ($seenSlugs -contains $slug) {
+            $errors += "Planner output contains duplicate slug: $slug"
+        }
+        else {
+            $seenSlugs += $slug
+        }
+
+        if ([string]::IsNullOrWhiteSpace($title)) {
+            $errors += "Planner task '$slug' is missing title."
+        }
+
+        if ($status -ne "planned") {
+            $errors += "Planner task '$slug' must have status: planned."
+        }
+
+        if ([string]::IsNullOrWhiteSpace($dependencies)) {
+            $errors += "Planner task '$slug' is missing dependencies."
+        }
+
+        if ([string]::IsNullOrWhiteSpace($workerPrompt)) {
+            $errors += "Planner task '$slug' is missing workerPrompt."
+        }
+
+        $specPath = Join-Path $TasksRoot "$slug.md"
+        if (Test-Path -LiteralPath $specPath) {
+            $errors += "Vault task spec already exists for '$slug': $specPath"
+        }
+
+        if ($CreateWorktrees) {
+            $existingTask = $existingTasks | Where-Object { $_.slug -eq $slug } | Select-Object -First 1
+            if ($null -ne $existingTask) {
+                $errors += "Task metadata already exists for '$slug'."
+            }
+
+            $worktreePath = Join-Path $rootPath "worktrees\active\$repoName-$slug"
+            if (Test-Path -LiteralPath $worktreePath) {
+                $errors += "Task worktree path already exists for '$slug': $worktreePath"
+            }
+
+            $branchName = "task/$slug"
+            if (Test-GitBranchExists -Branch $branchName) {
+                $errors += "Task branch already exists for '$slug': $branchName"
+            }
+        }
+    }
+
+    if ($errors.Count -eq 0) {
+        return $true
+    }
+
+    Write-Host "Planner apply preflight failed." -ForegroundColor Red
+    Write-Host "No task specs or worktrees were created."
+    $errors | ForEach-Object { Write-Host "- $_" -ForegroundColor Red }
+    return $false
+}
+
 function Apply-PlannerOutput {
     param(
         [string]$Path,
@@ -1315,6 +1402,10 @@ function Apply-PlannerOutput {
 
     if ($tasks.Count -eq 0) {
         Write-Host "Planner output did not contain any tasks." -ForegroundColor Red
+        exit 1
+    }
+
+    if (-not (Test-PlannerApplyPreflight -Tasks $tasks -TasksRoot $tasksRoot -CreateWorktrees ($CreateWorktrees -or $StartWorkers))) {
         exit 1
     }
 
