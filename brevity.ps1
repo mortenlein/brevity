@@ -862,6 +862,82 @@ function Read-BrevityTasks {
     return @($parsedTasks)
 }
 
+function Read-TaskMetadataFile {
+    param([string]$TasksPath)
+
+    if (-not (Test-Path -LiteralPath $TasksPath)) {
+        return @()
+    }
+
+    $rawTasks = Get-Content -LiteralPath $TasksPath -Raw
+    if ([string]::IsNullOrWhiteSpace($rawTasks)) {
+        return @()
+    }
+
+    $parsedTasks = $rawTasks | ConvertFrom-Json
+    if ($null -eq $parsedTasks) {
+        return @()
+    }
+
+    return @($parsedTasks)
+}
+
+function Write-TaskMetadataFile {
+    param(
+        [string]$TasksPath,
+        [object[]]$Tasks
+    )
+
+    if ($Tasks.Count -eq 0) {
+        Set-Content -LiteralPath $TasksPath -Value "[]" -Encoding ASCII
+    }
+    else {
+        ConvertTo-Json -InputObject $Tasks -Depth 4 | Set-Content -LiteralPath $TasksPath -Encoding ASCII
+    }
+}
+
+function Invoke-TaskMetadataLock {
+    param(
+        [string]$TasksPath,
+        [scriptblock]$ScriptBlock
+    )
+
+    $brevityRoot = Split-Path -Parent $TasksPath
+    if (-not (Test-Path -LiteralPath $brevityRoot)) {
+        New-Item -ItemType Directory -Path $brevityRoot | Out-Null
+    }
+
+    $lockPath = Join-Path $brevityRoot "tasks.lock"
+    $lockStream = $null
+
+    for ($attempt = 0; $attempt -lt 50; $attempt++) {
+        try {
+            $lockStream = [System.IO.File]::Open($lockPath, [System.IO.FileMode]::CreateNew, [System.IO.FileAccess]::Write, [System.IO.FileShare]::None)
+            $lockBytes = [System.Text.Encoding]::ASCII.GetBytes("pid=$PID utc=$((Get-Date).ToUniversalTime().ToString("o"))")
+            $lockStream.Write($lockBytes, 0, $lockBytes.Length)
+            $lockStream.Flush()
+            break
+        }
+        catch [System.IO.IOException] {
+            Start-Sleep -Milliseconds 100
+        }
+    }
+
+    if ($null -eq $lockStream) {
+        Write-Host "Unable to acquire task metadata lock: $lockPath" -ForegroundColor Red
+        Write-Host "Another Brevity process may be updating .brevity\tasks.json. Retry shortly, or inspect/remove the lock file if no Brevity process is running." -ForegroundColor Yellow
+        exit 1
+    }
+
+    try {
+        & $ScriptBlock
+    }
+    finally {
+        $lockStream.Dispose()
+        Remove-Item -LiteralPath $lockPath -Force -ErrorAction SilentlyContinue
+    }
+}
+
 function Find-BrevityTaskBySlug {
     param([string]$Slug)
 
@@ -1644,17 +1720,6 @@ function Add-TaskMetadata {
     }
 
     $tasksPath = Join-Path $brevityRoot "tasks.json"
-    $tasks = @()
-    if (Test-Path -LiteralPath $tasksPath) {
-        $rawTasks = Get-Content -LiteralPath $tasksPath -Raw
-        if (-not [string]::IsNullOrWhiteSpace($rawTasks)) {
-            $parsedTasks = $rawTasks | ConvertFrom-Json
-            if ($null -ne $parsedTasks) {
-                $tasks = @($parsedTasks)
-            }
-        }
-    }
-
     $taskRecord = New-Object PSObject -Property ([ordered]@{
         slug = $Slug
         branch = $Branch
@@ -1665,8 +1730,11 @@ function Add-TaskMetadata {
         createdAt = (Get-Date).ToUniversalTime().ToString("o")
     })
 
-    $tasks = @($tasks) + $taskRecord
-    ConvertTo-Json -InputObject $tasks -Depth 4 | Set-Content -LiteralPath $tasksPath -Encoding ASCII
+    Invoke-TaskMetadataLock -TasksPath $tasksPath -ScriptBlock {
+        $tasks = @(Read-TaskMetadataFile -TasksPath $tasksPath)
+        $tasks = @($tasks) + $taskRecord
+        Write-TaskMetadataFile -TasksPath $tasksPath -Tasks $tasks
+    }
 }
 
 function Get-TaskRuntimeWorktreeInfo {
@@ -3316,12 +3384,10 @@ function Remove-TaskMetadataRecord {
         [string]$Slug
     )
 
-    $remainingTasks = @($Tasks | Where-Object { $_.slug -ne $Slug })
-    if ($remainingTasks.Count -eq 0) {
-        Set-Content -LiteralPath $TasksPath -Value "[]" -Encoding ASCII
-    }
-    else {
-        ConvertTo-Json -InputObject $remainingTasks -Depth 4 | Set-Content -LiteralPath $TasksPath -Encoding ASCII
+    Invoke-TaskMetadataLock -TasksPath $TasksPath -ScriptBlock {
+        $currentTasks = @(Read-TaskMetadataFile -TasksPath $TasksPath)
+        $remainingTasks = @($currentTasks | Where-Object { $_.slug -ne $Slug })
+        Write-TaskMetadataFile -TasksPath $TasksPath -Tasks $remainingTasks
     }
 
     Write-Host "Removed task metadata: $Slug"
@@ -3519,13 +3585,16 @@ function Merge-TaskBranch {
         exit $LASTEXITCODE
     }
 
-    foreach ($taskRecord in $tasks) {
-        if ($taskRecord.slug -eq $Slug) {
-            $taskRecord.status = "merged"
+    Invoke-TaskMetadataLock -TasksPath $tasksPath -ScriptBlock {
+        $currentTasks = @(Read-TaskMetadataFile -TasksPath $tasksPath)
+        foreach ($taskRecord in $currentTasks) {
+            if ($taskRecord.slug -eq $Slug) {
+                $taskRecord.status = "merged"
+            }
         }
+        Write-TaskMetadataFile -TasksPath $tasksPath -Tasks $currentTasks
     }
 
-    ConvertTo-Json -InputObject $tasks -Depth 4 | Set-Content -LiteralPath $tasksPath -Encoding ASCII
     Write-Host "Updated task status to merged: $Slug"
 }
 
