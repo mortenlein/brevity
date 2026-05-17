@@ -418,6 +418,44 @@ function Show-ProviderStatus {
     }
 }
 
+
+function Show-ProviderDocs {
+    Write-Host "Provider health lifecycle"
+    Write-Host ""
+    Write-Host "Brevity treats provider availability as runtime infrastructure state."
+    Write-Host "Provider failures should not corrupt task state, worktrees, merge state, or cleanup semantics."
+    Write-Host ""
+    Write-Host "Statuses:"
+    Write-Host "  healthy            Provider is available for normal worker execution."
+    Write-Host "  capacity-degraded  Provider works, but may be slow, overloaded, or intermittently unavailable."
+    Write-Host "  quota-constrained  Provider is blocked or risky because of quota, credits, or usage limits."
+    Write-Host "  unavailable        Provider should not be selected automatically."
+    Write-Host "  unknown            No recent health signal has been recorded."
+    Write-Host ""
+    Write-Host "Gating behavior:"
+    Write-Host "  healthy and unknown providers are allowed by default."
+    Write-Host "  degraded providers may warn before execution."
+    Write-Host "  quota-constrained and unavailable providers should be gated unless explicitly overridden."
+    Write-Host ""
+    Write-Host "Override behavior:"
+    Write-Host "  Use --force-provider when you intentionally want to run a task despite provider gating."
+    Write-Host "  Forced runs should preserve task metadata and execution logs like normal runs."
+    Write-Host ""
+    Write-Host "Auto-recovery:"
+    Write-Host "  Worker output may update provider health when infrastructure failures are detected."
+    Write-Host "  Capacity and quota failures are provider/runtime failures, not implementation failures."
+    Write-Host ""
+    Write-Host "Operational philosophy:"
+    Write-Host "  The human remains merge authority."
+    Write-Host "  Provider health is advisory state for orchestration decisions."
+    Write-Host "  Brevity should fail early with actionable messages instead of damaging task state."
+    Write-Host ""
+    Write-Host "Related commands:"
+    Write-Host "  .\brevity.ps1 provider status"
+    Write-Host "  .\brevity.ps1 provider set <provider> <status> [-Note <note>]"
+    Write-Host "  .\brevity.ps1 provider reset <provider>"
+}
+
 function Reset-ProviderStatus {
     param(
         [string]$ProviderName
@@ -651,6 +689,7 @@ function Show-Help {
     Write-Host "  .\brevity.ps1 board"
     Write-Host "  .\brevity.ps1 status [-DevRoot <path>]"
     Write-Host "  .\brevity.ps1 provider status"
+    Write-Host "  .\brevity.ps1 provider docs"
     Write-Host "  .\brevity.ps1 provider reset <provider>"
     Write-Host "  .\brevity.ps1 provider set <provider> <status> [-Note <note>]"
     Write-Host "  .\brevity.ps1 task new <slug> [-DevRoot <path>]"
@@ -744,6 +783,17 @@ function Read-BrevityTasks {
     }
 
     return @($parsedTasks)
+}
+
+function Find-BrevityTaskBySlug {
+    param([string]$Slug)
+
+    if ([string]::IsNullOrWhiteSpace($Slug)) {
+        return $null
+    }
+
+    $tasks = @(Read-BrevityTasks)
+    return ($tasks | Where-Object { $_.slug -eq $Slug } | Select-Object -First 1)
 }
 
 function Show-Board {
@@ -1593,18 +1643,74 @@ function Get-TaskRuntimeStateFlags {
 
     $branch = Get-TaskField -Task $Task -Name "branch"
     $branchExists = (-not [string]::IsNullOrWhiteSpace($branch)) -and (Test-GitBranchExists -Branch $branch)
-    $stale = ((-not $Worktree.exists) -or (-not $Prompt.exists) -or (-not $branchExists))
+
+    $missingWorktree = -not $Worktree.exists
+    $unregisteredWorktree = ($Worktree.exists -and (-not $Worktree.registered))
+    $missingPrompt = -not $Prompt.exists
+    $missingBranch = -not $branchExists
+    $stale = ($missingWorktree -or $unregisteredWorktree -or $missingPrompt -or $missingBranch)
+
+    $issues = @()
+    if ($missingWorktree) { $issues += "missing-worktree" }
+    if ($unregisteredWorktree) { $issues += "unregistered-worktree" }
+    if ($missingPrompt) { $issues += "missing-prompt" }
+    if ($missingBranch) { $issues += "missing-branch" }
 
     return [pscustomobject]@{
         stale = $stale
         merged = $false
         orphaned = $false
         branchExists = $branchExists
+        missingWorktree = $missingWorktree
+        unregisteredWorktree = $unregisteredWorktree
+        missingPrompt = $missingPrompt
+        missingBranch = $missingBranch
+        issues = $issues
     }
 }
 
 function Get-TaskRuntimeInfo {
-    param([object]$Task)
+    param(
+        [object]$Task = $null,
+        [string]$Slug = ""
+    )
+
+    if ($null -eq $Task -and -not [string]::IsNullOrWhiteSpace($Slug)) {
+        $Task = Find-BrevityTaskBySlug -Slug $Slug
+    }
+
+    if ($null -eq $Task) {
+        if ([string]::IsNullOrWhiteSpace($Slug)) {
+            $Slug = ""
+        }
+
+        $emptyTask = [pscustomobject]@{
+            slug = $Slug
+            branch = $(if ([string]::IsNullOrWhiteSpace($Slug)) { "" } else { "task/$Slug" })
+            worktreePath = ""
+            promptPath = ""
+            status = "missing-metadata"
+        }
+
+        $worktree = Get-TaskRuntimeWorktreeInfo -Task $emptyTask
+        $prompt = Get-TaskRuntimePromptInfo -Task $emptyTask
+        $provider = Get-TaskRuntimeProviderInfo
+        $execution = Get-TaskRuntimeExecutionInfo -Slug $Slug
+        $runtime = Get-TaskRuntimeStateFlags -Task $emptyTask -Worktree $worktree -Prompt $prompt
+
+        return [pscustomobject]@{
+            slug = $Slug
+            branch = Get-TaskField -Task $emptyTask -Name "branch"
+            status = "missing-metadata"
+            metadataStatus = ""
+            taskExists = $false
+            worktree = $worktree
+            prompt = $prompt
+            provider = $provider
+            runtime = $runtime
+            execution = $execution
+        }
+    }
 
     $metadataStatus = Get-TaskField -Task $Task -Name "status"
     $slug = Get-TaskField -Task $Task -Name "slug"
@@ -1616,13 +1722,16 @@ function Get-TaskRuntimeInfo {
     $runtime = Get-TaskRuntimeStateFlags -Task $Task -Worktree $worktree -Prompt $prompt
 
     $runtimeStatus = $metadataStatus
-    if (-not $worktree.exists) {
+    if ($runtime.missingWorktree) {
         $runtimeStatus = "stale-worktree"
     }
-    elseif (-not $prompt.exists) {
+    elseif ($runtime.unregisteredWorktree) {
+        $runtimeStatus = "stale-unregistered-worktree"
+    }
+    elseif ($runtime.missingPrompt) {
         $runtimeStatus = "stale-prompt"
     }
-    elseif (-not $runtime.branchExists) {
+    elseif ($runtime.missingBranch) {
         $runtimeStatus = "stale-branch"
     }
 
@@ -1631,7 +1740,7 @@ function Get-TaskRuntimeInfo {
         branch = $branch
         status = $runtimeStatus
         metadataStatus = $metadataStatus
-        taskExists = ($null -ne $Task)
+        taskExists = $true
         worktree = $worktree
         prompt = $prompt
         provider = $provider
@@ -1644,6 +1753,18 @@ function Get-TaskRuntimeStatus {
     param([object]$Task)
 
     return (Get-TaskRuntimeInfo -Task $Task).status
+}
+
+function Get-StaleTasks {
+    $tasks = @(Read-BrevityTasks)
+    return @($tasks | ForEach-Object { Get-TaskRuntimeInfo -Task $_ } | Where-Object { $_.runtime.stale })
+}
+
+function Test-TaskRuntimeState {
+    param([string]$Slug)
+
+    $runtimeInfo = Get-TaskRuntimeInfo -Slug $Slug
+    return (-not $runtimeInfo.runtime.stale)
 }
 
 function Show-TaskStatus {
@@ -2785,23 +2906,27 @@ function Remove-TaskWorktree {
         }
     }
 
-    if ([string]::IsNullOrWhiteSpace($task.worktreePath)) {
+    $runtimeInfo = Get-TaskRuntimeInfo -Task $task
+
+    if ([string]::IsNullOrWhiteSpace($runtimeInfo.worktree.path) -and -not $Force) {
         Write-Host "Task metadata is missing worktreePath for: $Slug" -ForegroundColor Red
+        Write-Host "Use --force only if you want to remove metadata/branch state despite incomplete metadata." -ForegroundColor Yellow
         exit 1
     }
 
-    if ([string]::IsNullOrWhiteSpace($task.branch)) {
+    if ([string]::IsNullOrWhiteSpace($runtimeInfo.branch)) {
         Write-Host "Task metadata is missing branch for: $Slug" -ForegroundColor Red
         exit 1
     }
-
-    $runtimeInfo = Get-TaskRuntimeInfo -Task $task
 
     Write-Host "Cleaning up Brevity task: $Slug"
     Write-Host "Worktree: $($runtimeInfo.worktree.path)"
     Write-Host "Branch: $($runtimeInfo.branch)"
     if ($runtimeInfo.runtime.stale) {
         Write-Host "Runtime: stale" -ForegroundColor Yellow
+        if ($runtimeInfo.runtime.issues.Count -gt 0) {
+            Write-Host "Issues: $($runtimeInfo.runtime.issues -join ', ')" -ForegroundColor Yellow
+        }
     }
     if ($Force) {
         Write-Host "Force: enabled"
@@ -2811,7 +2936,7 @@ function Remove-TaskWorktree {
     $worktreeRegistered = $runtimeInfo.worktree.registered
 
     if ((-not $worktreeExists) -or (-not $worktreeRegistered)) {
-        Write-Host "Warning: recorded worktree is missing or not registered with Git: $($task.worktreePath)" -ForegroundColor Yellow
+        Write-Host "Warning: recorded worktree is missing or not registered with Git: $($runtimeInfo.worktree.path)" -ForegroundColor Yellow
         Write-Host "Continuing to branch removal."
     }
     elseif ($Force) {
@@ -3082,12 +3207,14 @@ switch ($Command.ToLowerInvariant()) {
         if ([string]::IsNullOrWhiteSpace($Subcommand)) {
             Write-Host "Missing brevity provider command." -ForegroundColor Red
             Write-Host "Usage: .\brevity.ps1 provider status"
+            Write-Host "Usage: .\brevity.ps1 provider docs"
             Write-Host "Usage: .\brevity.ps1 provider set <provider> <status> [-Note <note>]"
             exit 1
         }
 
         switch ($Subcommand.ToLowerInvariant()) {
             "status" { Show-ProviderStatus }
+            "docs" { Show-ProviderDocs }
             "reset" {
                 $providerName = $null
 
