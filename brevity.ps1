@@ -761,10 +761,12 @@ function Show-Board {
         return
     }
 
-    $totalTasks = $tasks.Count
-    $readyTasks = @($tasks | Where-Object { (Get-TaskRuntimeStatus -Task $_) -eq "ready-for-worker" }).Count
+    $runtimeTasks = @($tasks | ForEach-Object { Get-TaskRuntimeInfo -Task $_ })
+    $totalTasks = $runtimeTasks.Count
+    $readyTasks = @($runtimeTasks | Where-Object { $_.status -eq "ready-for-worker" }).Count
+    $staleTasks = @($runtimeTasks | Where-Object { $_.runtime.stale }).Count
 
-    Write-Host "Tasks: $totalTasks total, $readyTasks ready"
+    Write-Host "Tasks: $totalTasks total, $readyTasks ready, $staleTasks stale"
     Write-Host ""
 
     $knownStatuses = @(
@@ -778,22 +780,22 @@ function Show-Board {
 
     $statuses = @()
     foreach ($knownStatus in $knownStatuses) {
-        $matchingTasks = @($tasks | Where-Object { (Get-TaskRuntimeStatus -Task $_) -eq $knownStatus })
+        $matchingTasks = @($runtimeTasks | Where-Object { $_.status -eq $knownStatus })
         if ($matchingTasks.Count -gt 0) {
             $statuses += $knownStatus
         }
     }
 
     $otherStatuses = @(
-        $tasks |
-            ForEach-Object { Get-TaskRuntimeStatus -Task $_} |
+        $runtimeTasks |
+            ForEach-Object { $_.status } |
             Where-Object { -not [string]::IsNullOrWhiteSpace($_) -and ($knownStatuses -notcontains $_) } |
             Sort-Object -Unique
     )
 
     $statuses += $otherStatuses
 
-    $tasksWithoutStatus = @($tasks | Where-Object { [string]::IsNullOrWhiteSpace((Get-TaskRuntimeStatus -Task $_)) })
+    $tasksWithoutStatus = @($runtimeTasks | Where-Object { [string]::IsNullOrWhiteSpace($_.status) })
     if ($tasksWithoutStatus.Count -gt 0) {
         $statuses += "unknown"
     }
@@ -803,7 +805,7 @@ function Show-Board {
             $groupTasks = $tasksWithoutStatus
         }
         else {
-            $groupTasks = @($tasks | Where-Object { (Get-TaskRuntimeStatus -Task $_) -eq $status })
+            $groupTasks = @($runtimeTasks | Where-Object { $_.status -eq $status })
         }
 
         if ($groupTasks.Count -eq 0) {
@@ -812,9 +814,12 @@ function Show-Board {
 
         Write-Section $status
         foreach ($task in $groupTasks) {
-            Write-Host "slug: $((Get-TaskField -Task $task -Name "slug"))"
-            Write-Host "branch: $((Get-TaskField -Task $task -Name "branch"))"
-            Write-Host "worktreePath: $((Get-TaskField -Task $task -Name "worktreePath"))"
+            Write-Host "slug: $($task.slug)"
+            Write-Host "branch: $($task.branch)"
+            Write-Host "worktreePath: $($task.worktree.path)"
+            if ($task.runtime.stale) {
+                Write-Host "runtime: stale" -ForegroundColor Yellow
+            }
             Write-Host ""
         }
     }
@@ -1437,83 +1442,237 @@ function Add-TaskMetadata {
     ConvertTo-Json -InputObject $tasks -Depth 4 | Set-Content -LiteralPath $tasksPath -Encoding ASCII
 }
 
+function Get-TaskRuntimeWorktreeInfo {
+    param([object]$Task)
+
+    $worktreePath = Get-TaskField -Task $Task -Name "worktreePath"
+    $exists = (-not [string]::IsNullOrWhiteSpace($worktreePath)) -and (Test-Path -LiteralPath $worktreePath)
+    $registered = $false
+    $hasGit = $false
+    $clean = $null
+    $currentBranch = ""
+
+    if ($exists) {
+        try {
+            $registered = Test-GitWorktreeRegistered -WorktreePath $worktreePath
+        }
+        catch {
+            $registered = $false
+        }
+
+        $gitDir = Join-Path $worktreePath ".git"
+        $hasGit = Test-Path -LiteralPath $gitDir
+
+        $previousErrorActionPreference = $ErrorActionPreference
+        $ErrorActionPreference = "Continue"
+        $currentBranch = (& git -C $worktreePath rev-parse --abbrev-ref HEAD 2>$null)
+        $branchExitCode = $LASTEXITCODE
+        $statusOutput = @(& git -C $worktreePath status --porcelain 2>$null)
+        $statusExitCode = $LASTEXITCODE
+        $ErrorActionPreference = $previousErrorActionPreference
+
+        if ($branchExitCode -ne 0) {
+            $currentBranch = ""
+        }
+
+        if ($statusExitCode -eq 0) {
+            $clean = ($statusOutput.Count -eq 0)
+        }
+    }
+
+    return [pscustomobject]@{
+        exists = $exists
+        path = $worktreePath
+        registered = $registered
+        hasGit = $hasGit
+        clean = $clean
+        currentBranch = [string]$currentBranch
+    }
+}
+
+function Get-TaskRuntimePromptInfo {
+    param([object]$Task)
+
+    $promptPath = Get-TaskField -Task $Task -Name "promptPath"
+    $exists = (-not [string]::IsNullOrWhiteSpace($promptPath)) -and (Test-Path -LiteralPath $promptPath)
+
+    return [pscustomobject]@{
+        exists = $exists
+        path = $promptPath
+    }
+}
+
+function Get-TaskRuntimeProviderInfo {
+    $repoRoot = Get-RepositoryRoot
+    $configPath = Join-Path $repoRoot ".brevity\config.json"
+    $healthPath = Join-Path $repoRoot ".brevity\provider-health.json"
+
+    $resolvedProvider = ""
+    if (Test-Path -LiteralPath $configPath) {
+        try {
+            $config = Get-Content -LiteralPath $configPath -Raw | ConvertFrom-Json
+            if ($null -ne $config -and (Get-Member -InputObject $config -Name "defaultProvider" -MemberType NoteProperty -ErrorAction SilentlyContinue)) {
+                $resolvedProvider = [string]$config.defaultProvider
+            }
+        }
+        catch {
+            $resolvedProvider = ""
+        }
+    }
+
+    $healthStatus = "unknown"
+    if ((-not [string]::IsNullOrWhiteSpace($resolvedProvider)) -and (Test-Path -LiteralPath $healthPath)) {
+        try {
+            $health = Get-Content -LiteralPath $healthPath -Raw | ConvertFrom-Json
+            if ($null -ne $health -and (Get-Member -InputObject $health -Name $resolvedProvider -MemberType NoteProperty -ErrorAction SilentlyContinue)) {
+                $providerHealth = $health.$resolvedProvider
+                if ($null -ne $providerHealth -and (Get-Member -InputObject $providerHealth -Name "status" -MemberType NoteProperty -ErrorAction SilentlyContinue)) {
+                    $healthStatus = [string]$providerHealth.status
+                }
+            }
+        }
+        catch {
+            $healthStatus = "unknown"
+        }
+    }
+
+    if ([string]::IsNullOrWhiteSpace($healthStatus)) {
+        $healthStatus = "unknown"
+    }
+
+    return [pscustomobject]@{
+        resolved = $resolvedProvider
+        health = $healthStatus
+        available = ($healthStatus -ne "unavailable")
+        gated = ($healthStatus -eq "unavailable" -or $healthStatus -eq "quota-constrained" -or $healthStatus -eq "capacity-degraded")
+    }
+}
+
+function Get-TaskRuntimeExecutionInfo {
+    param([string]$Slug)
+
+    $repoRoot = Get-RepositoryRoot
+    $taskLogsRoot = Join-Path (Join-Path $repoRoot ".brevity\logs") $Slug
+    $latestLog = $null
+    $lastExitCode = $null
+    $lastFailureType = $null
+
+    if (Test-Path -LiteralPath $taskLogsRoot) {
+        $latestLog = Get-ChildItem -LiteralPath $taskLogsRoot -Filter "*.log" -File -ErrorAction SilentlyContinue |
+            Sort-Object LastWriteTime -Descending |
+            Select-Object -First 1
+
+        if ($null -ne $latestLog) {
+            $exitCodeLine = Get-Content -LiteralPath $latestLog.FullName -ErrorAction SilentlyContinue |
+                Where-Object { $_ -like "ExitCode:*" } |
+                Select-Object -First 1
+
+            if (-not [string]::IsNullOrWhiteSpace($exitCodeLine)) {
+                $lastExitCode = ($exitCodeLine -replace "^ExitCode:\s*", "")
+                if ($lastExitCode -ne "0") {
+                    $lastFailureType = "worker-failed"
+                }
+            }
+        }
+    }
+
+    return [pscustomobject]@{
+        hasLog = ($null -ne $latestLog)
+        lastLogPath = $(if ($null -ne $latestLog) { $latestLog.FullName } else { "" })
+        lastExitCode = $lastExitCode
+        lastFailureType = $lastFailureType
+    }
+}
+
+function Get-TaskRuntimeStateFlags {
+    param(
+        [object]$Task,
+        [object]$Worktree,
+        [object]$Prompt
+    )
+
+    $branch = Get-TaskField -Task $Task -Name "branch"
+    $branchExists = (-not [string]::IsNullOrWhiteSpace($branch)) -and (Test-GitBranchExists -Branch $branch)
+    $stale = ((-not $Worktree.exists) -or (-not $Prompt.exists) -or (-not $branchExists))
+
+    return [pscustomobject]@{
+        stale = $stale
+        merged = $false
+        orphaned = $false
+        branchExists = $branchExists
+    }
+}
+
+function Get-TaskRuntimeInfo {
+    param([object]$Task)
+
+    $metadataStatus = Get-TaskField -Task $Task -Name "status"
+    $slug = Get-TaskField -Task $Task -Name "slug"
+    $branch = Get-TaskField -Task $Task -Name "branch"
+    $worktree = Get-TaskRuntimeWorktreeInfo -Task $Task
+    $prompt = Get-TaskRuntimePromptInfo -Task $Task
+    $provider = Get-TaskRuntimeProviderInfo
+    $execution = Get-TaskRuntimeExecutionInfo -Slug $slug
+    $runtime = Get-TaskRuntimeStateFlags -Task $Task -Worktree $worktree -Prompt $prompt
+
+    $runtimeStatus = $metadataStatus
+    if (-not $worktree.exists) {
+        $runtimeStatus = "stale-worktree"
+    }
+    elseif (-not $prompt.exists) {
+        $runtimeStatus = "stale-prompt"
+    }
+    elseif (-not $runtime.branchExists) {
+        $runtimeStatus = "stale-branch"
+    }
+
+    return [pscustomobject]@{
+        slug = $slug
+        branch = $branch
+        status = $runtimeStatus
+        metadataStatus = $metadataStatus
+        taskExists = ($null -ne $Task)
+        worktree = $worktree
+        prompt = $prompt
+        provider = $provider
+        runtime = $runtime
+        execution = $execution
+    }
+}
+
 function Get-TaskRuntimeStatus {
     param([object]$Task)
 
-    $runtimeStatus = Get-TaskField -Task $Task -Name "status"
-    $worktreePath = Get-TaskField -Task $Task -Name "worktreePath"
-    $promptPath = Get-TaskField -Task $Task -Name "promptPath"
-    $branch = Get-TaskField -Task $Task -Name "branch"
-
-    if (-not (Test-Path -LiteralPath $worktreePath)) {
-        return "stale-worktree"
-    }
-
-    if (-not (Test-Path -LiteralPath $promptPath)) {
-        return "stale-prompt"
-    }
-
-    if (-not (Test-GitBranchExists -Branch $branch)) {
-        return "stale-branch"
-    }
-
-    return $runtimeStatus
+    return (Get-TaskRuntimeInfo -Task $Task).status
 }
 
 function Show-TaskStatus {
-    $repoRoot = Get-RepositoryRoot
-    $tasksPath = Join-Path $repoRoot ".brevity\tasks.json"
-
-    if (-not (Test-Path -LiteralPath $tasksPath)) {
-        Write-Host "No Brevity tasks found."
-        return
-    }
-
-    $rawTasks = Get-Content -LiteralPath $tasksPath -Raw
-    if ([string]::IsNullOrWhiteSpace($rawTasks)) {
-        Write-Host "No Brevity tasks found."
-        return
-    }
-
-    $parsedTasks = $rawTasks | ConvertFrom-Json
-    if ($null -eq $parsedTasks) {
-        Write-Host "No Brevity tasks found."
-        return
-    }
-
-    $tasks = @($parsedTasks)
+    $tasks = @(Read-BrevityTasks)
     if ($tasks.Count -eq 0) {
         Write-Host "No Brevity tasks found."
         return
     }
 
-    $statusObjects = @(
-        $tasks | ForEach-Object {
-            [pscustomobject]@{
-                task = $_
-                status = Get-TaskRuntimeStatus -Task $_
-            }
-        }
-    )
+    $runtimeTasks = @($tasks | ForEach-Object { Get-TaskRuntimeInfo -Task $_ })
 
-    $totalTasks = $statusObjects.Count
-    $readyTasks = @($statusObjects | Where-Object { $_.status -eq "ready-for-worker" }).Count
-    $staleTasks = @($statusObjects | Where-Object { $_.status -like "stale-*" }).Count
+    $totalTasks = $runtimeTasks.Count
+    $readyTasks = @($runtimeTasks | Where-Object { $_.status -eq "ready-for-worker" }).Count
+    $staleTasks = @($runtimeTasks | Where-Object { $_.runtime.stale }).Count
 
     Write-Host "Tasks: $totalTasks total, $readyTasks ready, $staleTasks stale"
     Write-Host ""
 
-    $statusObjects |
+    $runtimeTasks |
         ForEach-Object {
-            $task = $_.task
-            $branch = Get-TaskField -Task $task -Name "branch"
-
             [pscustomobject]@{
-                slug = Get-TaskField -Task $task -Name "slug"
-                branch = $branch
+                slug = $_.slug
+                branch = $_.branch
                 status = $_.status
-                worktreePath = Get-TaskField -Task $task -Name "worktreePath"
-                promptPath = Get-TaskField -Task $task -Name "promptPath"
+                worktreePath = $_.worktree.path
+                promptPath = $_.prompt.path
+                provider = $_.provider.resolved
+                providerHealth = $_.provider.health
+                lastExitCode = $_.execution.lastExitCode
             }
         } |
         Format-List
@@ -2636,15 +2795,20 @@ function Remove-TaskWorktree {
         exit 1
     }
 
+    $runtimeInfo = Get-TaskRuntimeInfo -Task $task
+
     Write-Host "Cleaning up Brevity task: $Slug"
-    Write-Host "Worktree: $($task.worktreePath)"
-    Write-Host "Branch: $($task.branch)"
+    Write-Host "Worktree: $($runtimeInfo.worktree.path)"
+    Write-Host "Branch: $($runtimeInfo.branch)"
+    if ($runtimeInfo.runtime.stale) {
+        Write-Host "Runtime: stale" -ForegroundColor Yellow
+    }
     if ($Force) {
         Write-Host "Force: enabled"
     }
 
-    $worktreeExists = Test-Path -LiteralPath $task.worktreePath
-    $worktreeRegistered = Test-GitWorktreeRegistered -WorktreePath $task.worktreePath
+    $worktreeExists = $runtimeInfo.worktree.exists
+    $worktreeRegistered = $runtimeInfo.worktree.registered
 
     if ((-not $worktreeExists) -or (-not $worktreeRegistered)) {
         Write-Host "Warning: recorded worktree is missing or not registered with Git: $($task.worktreePath)" -ForegroundColor Yellow
