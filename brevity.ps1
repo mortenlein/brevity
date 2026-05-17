@@ -2095,6 +2095,7 @@ function Show-WorkerPlan {
             providerHealth = $_.provider.health
             status = $_.status
             worktreeStatus = $(if ($_.worktree.exists) { $(if ($_.worktree.registered) { "registered" } else { "unregistered" }) } else { "missing" })
+            worktreePath = $_.worktree.path
             stale = $_.runtime.stale
             readiness = $readiness
             branch = $_.branch
@@ -2106,6 +2107,32 @@ function Show-WorkerPlan {
     $blocked = @($planItems | Where-Object { $_.readiness -ne "runnable" -and $_.readiness -ne "review" })
 
     Write-Host "Tasks: $($planItems.Count) total, $($runnable.Count) runnable, $($blocked.Count) blocked, $($review.Count) ready for review"
+
+    Write-Section "Execution groups"
+    Write-Host "Runnable group: $($runnable.Count) task(s)"
+    Write-Host "Blocked group: $($blocked.Count) task(s)"
+    Write-Host "Review queue: $($review.Count) task(s)"
+
+    Write-Section "Provider capacity"
+    if ($planItems.Count -eq 0) {
+        Write-Host "No provider load."
+    }
+    else {
+        $planItems |
+            Group-Object provider |
+            Sort-Object Name |
+            ForEach-Object {
+                $providerHealth = ($_.Group | Select-Object -First 1).providerHealth
+                $providerRunnable = @($_.Group | Where-Object { $_.readiness -eq "runnable" }).Count
+                Write-Host "$($_.Name): $providerRunnable runnable / $($_.Count) total task(s), health=$providerHealth"
+                if ($providerHealth -eq "capacity-degraded" -or $providerHealth -eq "quota-constrained" -or $providerHealth -eq "unavailable") {
+                    Write-Host "  Warning: provider health may limit parallel execution." -ForegroundColor Yellow
+                }
+                elseif ($providerRunnable -gt 1) {
+                    Write-Host "  Candidate parallel group; provider capacity is not enforced yet."
+                }
+            }
+    }
 
     Write-Section "Provider groups"
     $planItems |
@@ -2127,6 +2154,37 @@ function Show-WorkerPlan {
         $runnable | Sort-Object provider, slug | ForEach-Object {
             Write-Host "$index. $($_.slug) provider=$($_.provider) branch=$($_.branch)"
             $index++
+        }
+    }
+
+    Write-Section "Parallel safety"
+    if ($runnable.Count -lt 2) {
+        Write-Host "No runnable task pairs to compare."
+    }
+    else {
+        $conflicts = @()
+        for ($i = 0; $i -lt $runnable.Count; $i++) {
+            for ($j = $i + 1; $j -lt $runnable.Count; $j++) {
+                $left = $runnable[$i]
+                $right = $runnable[$j]
+                $leftPath = ConvertTo-DoctorComparablePath -Path $left.worktreePath
+                $rightPath = ConvertTo-DoctorComparablePath -Path $right.worktreePath
+
+                if ([string]::IsNullOrWhiteSpace($leftPath) -or [string]::IsNullOrWhiteSpace($rightPath)) {
+                    continue
+                }
+
+                if ($leftPath -eq $rightPath -or $leftPath.StartsWith("$rightPath\") -or $rightPath.StartsWith("$leftPath\")) {
+                    $conflicts += "$($left.slug) <-> $($right.slug): overlapping worktree paths"
+                }
+            }
+        }
+
+        if ($conflicts.Count -eq 0) {
+            Write-Host "Runnable tasks have distinct worktree paths."
+        }
+        else {
+            $conflicts | ForEach-Object { Write-Host $_ -ForegroundColor Yellow }
         }
     }
 
