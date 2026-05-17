@@ -761,6 +761,7 @@ function Show-Help {
     Write-Host "  .\brevity.ps1 plan backlog"
     Write-Host "  .\brevity.ps1 plan apply <file>"
     Write-Host "  .\brevity.ps1 board"
+    Write-Host "  .\brevity.ps1 doctor [--repair]"
     Write-Host "  .\brevity.ps1 status [-DevRoot <path>]"
     Write-Host "  .\brevity.ps1 provider status"
     Write-Host "  .\brevity.ps1 provider docs"
@@ -1895,6 +1896,192 @@ function Show-TaskStatus {
             }
         } |
         Format-List
+}
+
+function Get-GitTaskBranches {
+    $previousErrorActionPreference = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    $branches = @(& git for-each-ref --format="%(refname:short)" refs/heads/task 2>$null)
+    $gitExitCode = $LASTEXITCODE
+    $ErrorActionPreference = $previousErrorActionPreference
+
+    if ($gitExitCode -ne 0) {
+        return @()
+    }
+
+    return @($branches | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+}
+
+function Get-MergedTaskBranches {
+    $previousErrorActionPreference = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    $branches = @(& git for-each-ref --merged HEAD --format="%(refname:short)" refs/heads/task 2>$null)
+    $gitExitCode = $LASTEXITCODE
+    $ErrorActionPreference = $previousErrorActionPreference
+
+    if ($gitExitCode -ne 0) {
+        return @()
+    }
+
+    return @($branches | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+}
+
+function Get-GitWorktreeRecords {
+    $previousErrorActionPreference = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    $worktreeList = @(& git worktree list --porcelain 2>$null)
+    $gitExitCode = $LASTEXITCODE
+    $ErrorActionPreference = $previousErrorActionPreference
+
+    if ($gitExitCode -ne 0) {
+        return @()
+    }
+
+    $records = @()
+    $currentPath = ""
+    $currentBranch = ""
+
+    foreach ($line in $worktreeList) {
+        if ($line.StartsWith("worktree ")) {
+            if (-not [string]::IsNullOrWhiteSpace($currentPath)) {
+                $records += [pscustomobject]@{
+                    path = $currentPath
+                    branch = $currentBranch
+                }
+            }
+
+            $currentPath = $line.Substring("worktree ".Length)
+            $currentBranch = ""
+        }
+        elseif ($line.StartsWith("branch ")) {
+            $currentBranch = $line.Substring("branch ".Length) -replace "^refs/heads/", ""
+        }
+    }
+
+    if (-not [string]::IsNullOrWhiteSpace($currentPath)) {
+        $records += [pscustomobject]@{
+            path = $currentPath
+            branch = $currentBranch
+        }
+    }
+
+    return @($records)
+}
+
+function ConvertTo-DoctorComparablePath {
+    param([string]$Path)
+
+    if ([string]::IsNullOrWhiteSpace($Path)) {
+        return ""
+    }
+
+    $resolvedPath = $Path
+    if (Test-Path -LiteralPath $Path) {
+        $resolvedPath = (Resolve-Path -LiteralPath $Path).Path
+    }
+
+    return $resolvedPath.Replace("/", "\").TrimEnd("\").ToLowerInvariant()
+}
+
+function Show-DoctorReport {
+    param([bool]$Repair = $false)
+
+    $repoRoot = Get-RepositoryRoot
+    $tasksPath = Join-Path $repoRoot ".brevity\tasks.json"
+    $tasks = @(Read-BrevityTasks)
+    $runtimeTasks = @($tasks | ForEach-Object { Get-TaskRuntimeInfo -Task $_ })
+    $metadataBranches = @($runtimeTasks | ForEach-Object { $_.branch } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+    $metadataWorktrees = @($runtimeTasks | ForEach-Object { ConvertTo-DoctorComparablePath -Path $_.worktree.path } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+    $taskBranches = @(Get-GitTaskBranches)
+    $mergedBranches = @(Get-MergedTaskBranches)
+    $worktreeRecords = @(Get-GitWorktreeRecords)
+
+    $orphanedBranches = @($taskBranches | Where-Object { $metadataBranches -notcontains $_ })
+    $orphanedWorktrees = @($worktreeRecords | Where-Object {
+        $record = $_
+        $recordPath = ConvertTo-DoctorComparablePath -Path $record.path
+        (-not [string]::IsNullOrWhiteSpace($record.branch)) -and $record.branch.StartsWith("task/") -and ($metadataWorktrees -notcontains $recordPath)
+    })
+    $mergedTaskBranches = @($mergedBranches | Where-Object { $metadataBranches -contains $_ })
+    $staleTasks = @($runtimeTasks | Where-Object { $_.runtime.stale })
+    $missingWorktreeTasks = @($runtimeTasks | Where-Object { $_.runtime.missingWorktree })
+    $missingPromptTasks = @($runtimeTasks | Where-Object { $_.runtime.missingPrompt })
+
+    Write-Host "Brevity doctor"
+    Write-Host "Repo: $repoRoot"
+    Write-Host "Tasks: $($runtimeTasks.Count) tracked, $($staleTasks.Count) stale"
+    Write-Host "Branches: $($taskBranches.Count) task branches, $($orphanedBranches.Count) orphaned, $($mergedTaskBranches.Count) merged tracked"
+    Write-Host "Worktrees: $($worktreeRecords.Count) registered, $($orphanedWorktrees.Count) orphaned task worktrees"
+
+    Write-Section "Stale task metadata"
+    if ($staleTasks.Count -eq 0) {
+        Write-Host "None"
+    }
+    else {
+        foreach ($task in $staleTasks) {
+            Write-Host "$($task.slug): $($task.status)"
+            if ($task.runtime.issues.Count -gt 0) {
+                Write-Host "  Issues: $($task.runtime.issues -join ', ')"
+            }
+            Write-Host "  Worktree: $($task.worktree.path)"
+            Write-Host "  Prompt: $($task.prompt.path)"
+            Write-Host "  Branch: $($task.branch)"
+        }
+    }
+
+    Write-Section "Missing worktrees"
+    if ($missingWorktreeTasks.Count -eq 0) {
+        Write-Host "None"
+    }
+    else {
+        $missingWorktreeTasks | ForEach-Object { Write-Host "$($_.slug): $($_.worktree.path)" }
+    }
+
+    Write-Section "Missing prompt files"
+    if ($missingPromptTasks.Count -eq 0) {
+        Write-Host "None"
+    }
+    else {
+        $missingPromptTasks | ForEach-Object { Write-Host "$($_.slug): $($_.prompt.path)" }
+    }
+
+    Write-Section "Orphaned branches"
+    if ($orphanedBranches.Count -eq 0) {
+        Write-Host "None"
+    }
+    else {
+        $orphanedBranches | ForEach-Object { Write-Host $_ }
+    }
+
+    Write-Section "Orphaned worktrees"
+    if ($orphanedWorktrees.Count -eq 0) {
+        Write-Host "None"
+    }
+    else {
+        $orphanedWorktrees | ForEach-Object { Write-Host "$($_.branch): $($_.path)" }
+    }
+
+    Write-Section "Merged task branches"
+    if ($mergedTaskBranches.Count -eq 0) {
+        Write-Host "None"
+    }
+    else {
+        $mergedTaskBranches | ForEach-Object { Write-Host $_ }
+    }
+
+    if ($Repair) {
+        Write-Section "Repair"
+        $repairable = @($runtimeTasks | Where-Object { $_.runtime.missingWorktree -and $_.runtime.missingBranch })
+        if ($repairable.Count -eq 0) {
+            Write-Host "No conservative repairs available."
+            return
+        }
+
+        foreach ($task in $repairable) {
+            Remove-TaskMetadataRecord -TasksPath $tasksPath -Tasks $tasks -Slug $task.slug
+            $tasks = @($tasks | Where-Object { $_.slug -ne $task.slug })
+        }
+    }
 }
 
 function Show-TaskSpec {
@@ -3313,6 +3500,34 @@ switch ($Command.ToLowerInvariant()) {
     }
     "board" {
         Show-Board
+    }
+    "doctor" {
+        $repair = $false
+        if (-not [string]::IsNullOrWhiteSpace($Subcommand)) {
+            if ($Subcommand -eq "--repair") {
+                $repair = $true
+            }
+            else {
+                Write-Host "Unknown brevity doctor argument: $Subcommand" -ForegroundColor Red
+                Write-Host "Usage: .\brevity.ps1 doctor [--repair]"
+                exit 1
+            }
+        }
+
+        if ($null -ne $RemainingArgs) {
+            foreach ($doctorArg in $RemainingArgs) {
+                if ($doctorArg -eq "--repair") {
+                    $repair = $true
+                }
+                else {
+                    Write-Host "Unknown brevity doctor argument: $doctorArg" -ForegroundColor Red
+                    Write-Host "Usage: .\brevity.ps1 doctor [--repair]"
+                    exit 1
+                }
+            }
+        }
+
+        Show-DoctorReport -Repair $repair
     }
     "onboard" {
         Write-NotImplemented "onboard"
