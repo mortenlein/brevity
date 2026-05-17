@@ -762,6 +762,7 @@ function Show-Help {
     Write-Host "  .\brevity.ps1 plan apply <file>"
     Write-Host "  .\brevity.ps1 board"
     Write-Host "  .\brevity.ps1 doctor [--repair]"
+    Write-Host "  .\brevity.ps1 doctor execution-policy"
     Write-Host "  .\brevity.ps1 status [-DevRoot <path>]"
     Write-Host "  .\brevity.ps1 provider status"
     Write-Host "  .\brevity.ps1 provider docs"
@@ -2072,6 +2073,24 @@ function ConvertTo-DoctorComparablePath {
     }
 
     return $resolvedPath.Replace("/", "\").TrimEnd("\").ToLowerInvariant()
+}
+
+function Show-ExecutionPolicyGuidance {
+    Write-Host "PowerShell execution policy guidance"
+    Write-Host ""
+    Write-Host "Brevity does not change execution policy or unblock files automatically."
+    Write-Host "For local development, use one of these explicit options:"
+    Write-Host ""
+    Write-Host "  Set-ExecutionPolicy -Scope Process Bypass"
+    Write-Host "  .\brevity.ps1 doctor"
+    Write-Host ""
+    Write-Host "  Unblock-File .\brevity.ps1"
+    Write-Host "  .\brevity.ps1 doctor"
+    Write-Host ""
+    Write-Host "  powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\brevity.ps1 doctor"
+    Write-Host ""
+    Write-Host "Use process-scoped bypass for a temporary shell session."
+    Write-Host "Use Unblock-File only when you trust the local script contents."
 }
 
 function Show-DoctorReport {
@@ -3594,13 +3613,18 @@ switch ($Command.ToLowerInvariant()) {
     }
     "doctor" {
         $repair = $false
+        $showExecutionPolicy = $false
         if (-not [string]::IsNullOrWhiteSpace($Subcommand)) {
             if ($Subcommand -eq "--repair") {
                 $repair = $true
             }
+            elseif ($Subcommand -eq "execution-policy") {
+                $showExecutionPolicy = $true
+            }
             else {
                 Write-Host "Unknown brevity doctor argument: $Subcommand" -ForegroundColor Red
                 Write-Host "Usage: .\brevity.ps1 doctor [--repair]"
+                Write-Host "Usage: .\brevity.ps1 doctor execution-policy"
                 exit 1
             }
         }
@@ -3610,12 +3634,21 @@ switch ($Command.ToLowerInvariant()) {
                 if ($doctorArg -eq "--repair") {
                     $repair = $true
                 }
+                elseif ($doctorArg -eq "execution-policy") {
+                    $showExecutionPolicy = $true
+                }
                 else {
                     Write-Host "Unknown brevity doctor argument: $doctorArg" -ForegroundColor Red
                     Write-Host "Usage: .\brevity.ps1 doctor [--repair]"
+                    Write-Host "Usage: .\brevity.ps1 doctor execution-policy"
                     exit 1
                 }
             }
+        }
+
+        if ($showExecutionPolicy) {
+            Show-ExecutionPolicyGuidance
+            exit 0
         }
 
         Show-DoctorReport -Repair $repair
