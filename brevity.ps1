@@ -456,6 +456,80 @@ function Show-ProviderDocs {
     Write-Host "  .\brevity.ps1 provider reset <provider>"
 }
 
+
+function Get-ProviderProfileSummary {
+    param(
+        [string]$ProfileName = ""
+    )
+
+    $config = Read-BrevityConfig
+    $profiles = @()
+
+    if ($null -ne $config -and (Get-Member -InputObject $config -Name "profiles" -MemberType NoteProperty -ErrorAction SilentlyContinue)) {
+        foreach ($profileProperty in $config.profiles.PSObject.Properties) {
+            $profile = $profileProperty.Value
+            $providerName = ""
+            if ($null -ne $profile -and (Get-Member -InputObject $profile -Name "provider" -MemberType NoteProperty -ErrorAction SilentlyContinue)) {
+                $providerName = [string]$profile.provider
+            }
+
+            if ([string]::IsNullOrWhiteSpace($providerName)) {
+                $providerName = [string]$config.defaultProvider
+            }
+
+            $profiles += [PSCustomObject]@{
+                name = $profileProperty.Name
+                provider = $providerName
+                capabilities = @("worker")
+                fallbackCandidates = @()
+            }
+        }
+    }
+
+    if ($profiles.Count -eq 0) {
+        $defaultProvider = "codex"
+        if ($null -ne $config -and (Get-Member -InputObject $config -Name "defaultProvider" -MemberType NoteProperty -ErrorAction SilentlyContinue)) {
+            $defaultProvider = [string]$config.defaultProvider
+        }
+
+        $profiles += [PSCustomObject]@{
+            name = "default"
+            provider = $defaultProvider
+            capabilities = @("worker")
+            fallbackCandidates = @()
+        }
+    }
+
+    if (-not [string]::IsNullOrWhiteSpace($ProfileName)) {
+        $profiles = @($profiles | Where-Object { $_.name -eq $ProfileName })
+    }
+
+    return @($profiles)
+}
+
+function Show-ProviderProfiles {
+    param(
+        [string]$ProfileName = ""
+    )
+
+    $profiles = @(Get-ProviderProfileSummary -ProfileName $ProfileName)
+
+    if ($profiles.Count -eq 0) {
+        Write-Host "No provider profile matched: $ProfileName" -ForegroundColor Yellow
+        return
+    }
+
+    Write-Host "Provider profiles"
+    Write-Host ""
+    foreach ($profile in $profiles) {
+        Write-Host "name: $($profile.name)"
+        Write-Host "provider: $($profile.provider)"
+        Write-Host "capabilities: $(@($profile.capabilities) -join ', ')"
+        Write-Host "fallbackCandidates: $(@($profile.fallbackCandidates) -join ', ')"
+        Write-Host ""
+    }
+}
+
 function Reset-ProviderStatus {
     param(
         [string]$ProviderName
@@ -1228,7 +1302,11 @@ function Write-VaultTaskSpec {
 }
 
 function Apply-PlannerOutput {
-    param([string]$Path)
+    param(
+        [string]$Path,
+        [bool]$CreateWorktrees = $false,
+        [bool]$StartWorkers = $false
+    )
 
     $config = Read-BrevityConfig
     $tasksRoot = Join-Path $config.vaultPath "tasks"
@@ -1265,6 +1343,24 @@ function Apply-PlannerOutput {
 
     Write-Host "Created vault task specs:"
     $written | ForEach-Object { Write-Host $_ }
+
+    if ($CreateWorktrees -or $StartWorkers) {
+        Write-Host ""
+        Write-Host "Materializing planner tasks:"
+        foreach ($task in $tasks) {
+            $slug = [string]$task.slug
+            if ([string]::IsNullOrWhiteSpace($slug)) {
+                Write-Host "Skipping planner task without slug." -ForegroundColor Yellow
+                continue
+            }
+
+            New-TaskWorktree -Root $DevRoot -Slug $slug
+
+            if ($StartWorkers) {
+                Start-TaskWork -Slug $slug
+            }
+        }
+    }
 }
 
 function Write-TaskPrompt {
@@ -1765,6 +1861,21 @@ function Test-TaskRuntimeState {
 
     $runtimeInfo = Get-TaskRuntimeInfo -Slug $Slug
     return (-not $runtimeInfo.runtime.stale)
+}
+
+
+function Show-TaskRuntimeInfoCommand {
+    param(
+        [string]$Slug
+    )
+
+    if ([string]::IsNullOrWhiteSpace($Slug)) {
+        Write-Host "Missing task slug." -ForegroundColor Red
+        Write-Host "Usage: .\brevity.ps1 task runtime-info <slug>"
+        exit 1
+    }
+
+    Get-TaskRuntimeInfo -Slug $Slug | ConvertTo-Json -Depth 10
 }
 
 function Show-TaskStatus {
@@ -3182,14 +3293,30 @@ switch ($Command.ToLowerInvariant()) {
         }
         elseif ($Subcommand.ToLowerInvariant() -eq "apply") {
             $plannerOutputPath = $null
+            $createWorktrees = $false
+            $startWorkers = $false
+
             if ($null -ne $RemainingArgs) {
                 foreach ($planArg in $RemainingArgs) {
-                    $plannerOutputPath = [string]$planArg
-                    break
+                    if ($planArg -eq "--create-worktrees") {
+                        $createWorktrees = $true
+                    }
+                    elseif ($planArg -eq "--start") {
+                        $createWorktrees = $true
+                        $startWorkers = $true
+                    }
+                    elseif ([string]::IsNullOrWhiteSpace($plannerOutputPath)) {
+                        $plannerOutputPath = [string]$planArg
+                    }
+                    else {
+                        Write-Host "Unknown argument for brevity plan apply: $planArg" -ForegroundColor Red
+                        Write-Host "Usage: .\brevity.ps1 plan apply <file> [--create-worktrees] [--start]"
+                        exit 1
+                    }
                 }
             }
 
-            Apply-PlannerOutput -Path $plannerOutputPath
+            Apply-PlannerOutput -Path $plannerOutputPath -CreateWorktrees $createWorktrees -StartWorkers $startWorkers
         }
         else {
             Write-Host "Unknown brevity plan command: $Subcommand" -ForegroundColor Red
@@ -3208,6 +3335,7 @@ switch ($Command.ToLowerInvariant()) {
             Write-Host "Missing brevity provider command." -ForegroundColor Red
             Write-Host "Usage: .\brevity.ps1 provider status"
             Write-Host "Usage: .\brevity.ps1 provider docs"
+            Write-Host "Usage: .\brevity.ps1 provider profiles [--profile <name>]"
             Write-Host "Usage: .\brevity.ps1 provider set <provider> <status> [-Note <note>]"
             exit 1
         }
@@ -3215,6 +3343,31 @@ switch ($Command.ToLowerInvariant()) {
         switch ($Subcommand.ToLowerInvariant()) {
             "status" { Show-ProviderStatus }
             "docs" { Show-ProviderDocs }
+            "profiles" {
+                $profileName = ""
+                if ($null -ne $RemainingArgs) {
+                    for ($i = 0; $i -lt $RemainingArgs.Length; $i++) {
+                        $profileArg = $RemainingArgs[$i]
+                        if ($profileArg -eq "--profile") {
+                            if ($i + 1 -lt $RemainingArgs.Length) {
+                                $profileName = [string]$RemainingArgs[$i + 1]
+                                $i++
+                            }
+                            else {
+                                Write-Host "Missing value for --profile." -ForegroundColor Red
+                                exit 1
+                            }
+                        }
+                        else {
+                            Write-Host "Unknown argument for brevity provider profiles: $profileArg" -ForegroundColor Red
+                            Write-Host "Usage: .\brevity.ps1 provider profiles [--profile <name>]"
+                            exit 1
+                        }
+                    }
+                }
+
+                Show-ProviderProfiles -ProfileName $profileName
+            }
             "reset" {
                 $providerName = $null
 
@@ -3376,6 +3529,17 @@ switch ($Command.ToLowerInvariant()) {
                 Show-TaskRun -Slug $taskSlug -Execute $executeTask -ProfileName $profileName -Smoke $smokeTask -ForceProvider $forceProvider
             }
             "status" { Show-TaskStatus }
+            "runtime-info" {
+                $taskSlug = $null
+                if ($null -ne $RemainingArgs) {
+                    foreach ($taskArg in $RemainingArgs) {
+                        $taskSlug = [string]$taskArg
+                        break
+                    }
+                }
+
+                Show-TaskRuntimeInfoCommand -Slug $taskSlug
+            }
             "merge" {
                 $taskSlug = $null
                 if ($null -ne $RemainingArgs) {
