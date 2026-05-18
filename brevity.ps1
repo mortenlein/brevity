@@ -1348,6 +1348,40 @@ function Get-TaskWorkerRunHistory {
     })
 }
 
+function Get-TaskWorkerRunHistorySummary {
+    param([string]$Slug)
+
+    $repoRoot = Get-RepositoryRoot
+    $taskLogsRoot = Join-Path (Join-Path $repoRoot ".brevity\logs") $Slug
+    $runCount = 0
+    if (Test-Path -LiteralPath $taskLogsRoot) {
+        $runCount = @(Get-ChildItem -LiteralPath $taskLogsRoot -Filter "*.log" -File -ErrorAction SilentlyContinue).Count
+    }
+
+    $latestRun = @(Get-TaskWorkerRunHistory -Slug $Slug -Count 1 | Select-Object -First 1)
+    if ($latestRun.Count -eq 0) {
+        return [pscustomobject]@{
+            runCount = $runCount
+            latestRunId = $null
+            latestRunLogPath = $null
+            latestRunLogWriteTime = $null
+            latestRunExitCode = $null
+            latestRunProvider = $null
+            latestRunProfile = $null
+        }
+    }
+
+    return [pscustomobject]@{
+        runCount = $runCount
+        latestRunId = $latestRun[0].runId
+        latestRunLogPath = $latestRun[0].logPath
+        latestRunLogWriteTime = $latestRun[0].lastWriteTimeUtc
+        latestRunExitCode = $latestRun[0].exitCode
+        latestRunProvider = $latestRun[0].provider
+        latestRunProfile = $latestRun[0].profile
+    }
+}
+
 function Show-TaskRuns {
     param(
         [string]$Slug,
@@ -3021,6 +3055,8 @@ function Get-SessionSummaryData {
 function ConvertTo-RuntimeStateTaskSummary {
     param([object]$Task)
 
+    $runHistory = Get-TaskWorkerRunHistorySummary -Slug $Task.slug
+
     return [pscustomobject]@{
         slug = $Task.slug
         branch = $Task.branch
@@ -3045,6 +3081,13 @@ function ConvertTo-RuntimeStateTaskSummary {
         lastProvider = $Task.execution.lastProvider
         lastProfile = $Task.execution.lastProfile
         lastRunId = $Task.execution.lastRunId
+        runCount = $runHistory.runCount
+        latestRunId = $runHistory.latestRunId
+        latestRunLogPath = $runHistory.latestRunLogPath
+        latestRunLogWriteTime = $runHistory.latestRunLogWriteTime
+        latestRunExitCode = $runHistory.latestRunExitCode
+        latestRunProvider = $runHistory.latestRunProvider
+        latestRunProfile = $runHistory.latestRunProfile
     }
 }
 
