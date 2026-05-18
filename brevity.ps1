@@ -777,6 +777,8 @@ function Show-Help {
     Write-Host "  .\brevity.ps1 task spec <slug>"
     Write-Host "  .\brevity.ps1 task start <slug>"
     Write-Host "  .\brevity.ps1 task run <slug> [--execute] [--profile <name>] [--smoke] [--force-provider]"
+    Write-Host "  .\brevity.ps1 task context refresh <slug>"
+    Write-Host "  .\brevity.ps1 task context status <slug>"
     Write-Host "  .\brevity.ps1 task status"
     Write-Host "  .\brevity.ps1 task merge <slug>"
     Write-Host "  .\brevity.ps1 task cleanup <slug> [--force]"
@@ -2130,6 +2132,67 @@ function Show-TaskRuntimeInfoCommand {
     }
 
     Get-TaskRuntimeInfo -Slug $Slug | ConvertTo-Json -Depth 10
+}
+
+function Get-RequiredTaskForContextCommand {
+    param(
+        [string]$Slug,
+        [string]$Usage
+    )
+
+    if ([string]::IsNullOrWhiteSpace($Slug)) {
+        Write-Host "Missing task slug." -ForegroundColor Red
+        Write-Host $Usage
+        exit 1
+    }
+
+    $task = Find-BrevityTaskBySlug -Slug $Slug
+    if ($null -eq $task) {
+        Write-Host "Task not found: $Slug" -ForegroundColor Red
+        Write-Host "Use .\brevity.ps1 task status to list known tasks."
+        exit 1
+    }
+
+    $worktreePath = Get-TaskField -Task $task -Name "worktreePath"
+    if ([string]::IsNullOrWhiteSpace($worktreePath)) {
+        Write-Host "Task metadata is missing worktreePath for: $Slug" -ForegroundColor Red
+        exit 1
+    }
+
+    if (-not (Test-Path -LiteralPath $worktreePath -PathType Container)) {
+        Write-Host "Task worktree path does not exist for: $Slug" -ForegroundColor Red
+        Write-Host "Expected path: $worktreePath"
+        exit 1
+    }
+
+    return $task
+}
+
+function Show-TaskContextStatus {
+    param([string]$Slug)
+
+    $task = Get-RequiredTaskForContextCommand -Slug $Slug -Usage "Usage: .\brevity.ps1 task context status <slug>"
+    $context = Get-TaskRuntimeContextInfo -Task $task
+
+    Write-Host "Task: $Slug"
+    Write-Host "Context: $($context.path)"
+    Write-Host "Exists: $($context.exists)"
+    Write-Host "Materialized files: $($context.materializedFileCount)"
+    Write-Host "Missing managed files: $(@($context.missingFiles).Count)"
+}
+
+function Refresh-TaskContext {
+    param([string]$Slug)
+
+    $task = Get-RequiredTaskForContextCommand -Slug $Slug -Usage "Usage: .\brevity.ps1 task context refresh <slug>"
+    Copy-TaskWorkspaceContext -WorktreePath (Get-TaskField -Task $task -Name "worktreePath") | Out-Null
+    $context = Get-TaskRuntimeContextInfo -Task $task
+
+    Write-Host "Refreshed task context"
+    Write-Host "Task: $Slug"
+    Write-Host "Context: $($context.path)"
+    Write-Host "Refreshed files: $($context.materializedFileCount)"
+    Write-Host "Missing managed files: $(@($context.missingFiles).Count)"
 }
 
 function Show-TaskStatus {
@@ -4472,6 +4535,42 @@ switch ($Command.ToLowerInvariant()) {
                 }
 
                 Show-TaskRuntimeInfoCommand -Slug $taskSlug
+            }
+            "context" {
+                $contextCommand = $null
+                $taskSlug = $null
+                if ($null -ne $RemainingArgs) {
+                    if ($RemainingArgs.Length -ge 1) {
+                        $contextCommand = [string]$RemainingArgs[0]
+                    }
+                    if ($RemainingArgs.Length -ge 2) {
+                        $taskSlug = [string]$RemainingArgs[1]
+                    }
+                    if ($RemainingArgs.Length -gt 2) {
+                        Write-Host "Unknown argument for brevity task context: $($RemainingArgs[2])" -ForegroundColor Red
+                        Write-Host "Usage: .\brevity.ps1 task context refresh <slug>"
+                        Write-Host "Usage: .\brevity.ps1 task context status <slug>"
+                        exit 1
+                    }
+                }
+
+                if ([string]::IsNullOrWhiteSpace($contextCommand)) {
+                    Write-Host "Missing task context command." -ForegroundColor Red
+                    Write-Host "Usage: .\brevity.ps1 task context refresh <slug>"
+                    Write-Host "Usage: .\brevity.ps1 task context status <slug>"
+                    exit 1
+                }
+
+                switch ($contextCommand.ToLowerInvariant()) {
+                    "refresh" { Refresh-TaskContext -Slug $taskSlug }
+                    "status" { Show-TaskContextStatus -Slug $taskSlug }
+                    default {
+                        Write-Host "Unknown brevity task context command: $contextCommand" -ForegroundColor Red
+                        Write-Host "Usage: .\brevity.ps1 task context refresh <slug>"
+                        Write-Host "Usage: .\brevity.ps1 task context status <slug>"
+                        exit 1
+                    }
+                }
             }
             "merge" {
                 $taskSlug = $null
