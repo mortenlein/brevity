@@ -2821,6 +2821,158 @@ function ConvertTo-RuntimeStateTaskSummary {
     }
 }
 
+function ConvertTo-JsonSafeValue {
+    param(
+        [object]$Value,
+        [int]$Depth = 0,
+        [int]$MaxDepth = 8,
+        [int]$MaxArrayItems = 200
+    )
+
+    if ($null -eq $Value) {
+        return $null
+    }
+
+    if ($Depth -ge $MaxDepth) {
+        return ([string]$Value)
+    }
+
+    if ($Value -is [string] -or $Value -is [bool] -or $Value -is [char]) {
+        return $Value
+    }
+
+    if ($Value -is [byte] -or
+        $Value -is [int16] -or
+        $Value -is [int] -or
+        $Value -is [int64] -or
+        $Value -is [single] -or
+        $Value -is [double] -or
+        $Value -is [decimal]) {
+        return $Value
+    }
+
+    if ($Value -is [datetime]) {
+        return $Value.ToString("o")
+    }
+
+    if ($Value -is [System.Collections.IDictionary]) {
+        $safeMap = @{}
+        foreach ($key in @($Value.Keys | Select-Object -First $MaxArrayItems)) {
+            $safeMap[[string]$key] = ConvertTo-JsonSafeValue -Value $Value[$key] -Depth ($Depth + 1) -MaxDepth $MaxDepth -MaxArrayItems $MaxArrayItems
+        }
+        return ,$safeMap
+    }
+
+    if ($Value -is [System.Collections.IEnumerable] -and $Value -isnot [System.Management.Automation.PSCustomObject]) {
+        $safeItems = @()
+        foreach ($item in @($Value | Select-Object -First $MaxArrayItems)) {
+            $safeItems += ConvertTo-JsonSafeValue -Value $item -Depth ($Depth + 1) -MaxDepth $MaxDepth -MaxArrayItems $MaxArrayItems
+        }
+        return ,$safeItems
+    }
+
+    $safeObject = @{}
+    foreach ($property in @($Value.PSObject.Properties | Where-Object { $_.MemberType -eq "NoteProperty" } | Select-Object -First $MaxArrayItems)) {
+        $safeObject[$property.Name] = ConvertTo-JsonSafeValue -Value $property.Value -Depth ($Depth + 1) -MaxDepth $MaxDepth -MaxArrayItems $MaxArrayItems
+    }
+
+    if ($safeObject.Count -eq 0) {
+        return ([string]$Value)
+    }
+
+    return ,$safeObject
+}
+
+function ConvertTo-BoundedJson {
+    param([object]$Value)
+
+    return ConvertTo-JsonLiteral -Value (ConvertTo-JsonSafeValue -Value $Value)
+}
+
+function ConvertTo-JsonEscapedString {
+    param([string]$Value)
+
+    if ($null -eq $Value) {
+        return '""'
+    }
+
+    $builder = New-Object System.Text.StringBuilder
+    [void]$builder.Append('"')
+    foreach ($character in $Value.ToCharArray()) {
+        $code = [int][char]$character
+        if ($code -eq 34) {
+            [void]$builder.Append('\"')
+            continue
+        }
+        if ($code -eq 92) {
+            [void]$builder.Append('\\')
+            continue
+        }
+
+        switch ($character) {
+            "`b" { [void]$builder.Append('\b'); continue }
+            "`f" { [void]$builder.Append('\f'); continue }
+            "`n" { [void]$builder.Append('\n'); continue }
+            "`r" { [void]$builder.Append('\r'); continue }
+            "`t" { [void]$builder.Append('\t'); continue }
+        }
+
+        if ($code -lt 32) {
+            [void]$builder.Append(('\u{0:x4}' -f $code))
+        }
+        else {
+            [void]$builder.Append($character)
+        }
+    }
+    [void]$builder.Append('"')
+    return $builder.ToString()
+}
+
+function ConvertTo-JsonLiteral {
+    param([object]$Value)
+
+    if ($null -eq $Value) {
+        return "null"
+    }
+
+    if ($Value -is [string] -or $Value -is [char]) {
+        return ConvertTo-JsonEscapedString -Value ([string]$Value)
+    }
+
+    if ($Value -is [bool]) {
+        if ($Value) { return "true" }
+        return "false"
+    }
+
+    if ($Value -is [byte] -or
+        $Value -is [int16] -or
+        $Value -is [int] -or
+        $Value -is [int64] -or
+        $Value -is [single] -or
+        $Value -is [double] -or
+        $Value -is [decimal]) {
+        return ([System.Convert]::ToString($Value, [System.Globalization.CultureInfo]::InvariantCulture))
+    }
+
+    if ($Value -is [System.Collections.IDictionary]) {
+        $properties = @()
+        foreach ($key in $Value.Keys) {
+            $properties += "$(ConvertTo-JsonEscapedString -Value ([string]$key)):$(ConvertTo-JsonLiteral -Value $Value[$key])"
+        }
+        return "{" + ($properties -join ",") + "}"
+    }
+
+    if ($Value -is [System.Collections.IEnumerable]) {
+        $items = @()
+        foreach ($item in $Value) {
+            $items += ConvertTo-JsonLiteral -Value $item
+        }
+        return "[" + ($items -join ",") + "]"
+    }
+
+    return ConvertTo-JsonEscapedString -Value ([string]$Value)
+}
+
 function Get-RuntimeStateData {
     $repoRoot = Get-RepositoryRoot
     $config = Read-BrevityConfig
@@ -2908,7 +3060,7 @@ function Show-RuntimeState {
     $state = Get-RuntimeStateData
 
     if ($Json) {
-        $state | ConvertTo-Json -Depth 12
+        Write-Output (ConvertTo-BoundedJson -Value $state)
         return
     }
 
