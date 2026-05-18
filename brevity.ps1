@@ -3319,6 +3319,42 @@ function Get-OrphanedTaskBranchCleanupClassification {
     }
 }
 
+function ConvertTo-CleanupCandidateSafeIdPart {
+    param([string]$Value)
+
+    if ([string]::IsNullOrWhiteSpace($Value)) {
+        return "unknown"
+    }
+
+    $normalized = ([string]$Value).Trim().ToLowerInvariant() -replace "\\", "/"
+    $safe = $normalized -replace "[^a-z0-9._/-]+", "-"
+    $safe = $safe -replace "[/]+", "-"
+    $safe = $safe -replace "-+", "-"
+    $safe = $safe.Trim("-._")
+
+    if ([string]::IsNullOrWhiteSpace($safe)) {
+        return "unknown"
+    }
+
+    return $safe
+}
+
+function Get-OrphanedTaskWorktreeCleanupCandidateId {
+    param([object]$Worktree)
+
+    if (-not [string]::IsNullOrWhiteSpace([string]$Worktree.branch)) {
+        return "orphan-worktree:$(ConvertTo-CleanupCandidateSafeIdPart -Value $Worktree.branch)"
+    }
+
+    return "orphan-worktree:$(ConvertTo-CleanupCandidateSafeIdPart -Value (ConvertTo-DoctorComparablePath -Path $Worktree.path))"
+}
+
+function Get-OrphanedTaskBranchCleanupCandidateId {
+    param([object]$Branch)
+
+    return "orphan-branch:$(ConvertTo-CleanupCandidateSafeIdPart -Value $Branch.branch)"
+}
+
 function ConvertTo-OrphanedTaskWorktreeCleanupCandidate {
     param([object]$Worktree)
 
@@ -3339,6 +3375,7 @@ function ConvertTo-OrphanedTaskWorktreeCleanupCandidate {
     }
 
     return [pscustomobject]@{
+        id = Get-OrphanedTaskWorktreeCleanupCandidateId -Worktree $Worktree
         path = $Worktree.path
         branch = $Worktree.branch
         severity = $classification.severity
@@ -3357,6 +3394,7 @@ function ConvertTo-OrphanedTaskBranchCleanupCandidate {
     $classification = Get-OrphanedTaskBranchCleanupClassification -Branch $Branch
 
     return [pscustomobject]@{
+        id = Get-OrphanedTaskBranchCleanupCandidateId -Branch $Branch
         branch = $Branch.branch
         severity = $classification.severity
         category = $classification.category
