@@ -335,6 +335,18 @@ It also writes a placeholder worker prompt to:
 <dev-root>\worktrees\active\<repo-name>-<slug>\prompt.md
 ```
 
+and copies selected project memory into:
+
+```text
+<dev-root>\worktrees\active\<repo-name>-<slug>\.brevity\context\
+```
+
+The local context folder may include `project.md`, `architecture.md`,
+`decisions.md`, `current-state.md`, and `roadmap.md`. Missing files are skipped.
+Workers should read these materialized files instead of external vault paths.
+The vault remains durable memory; the worktree remains the bounded execution
+context.
+
 and records task metadata in the source repository at:
 
 ```text
@@ -373,6 +385,12 @@ Brevity embeds the vault task spec contents in a bounded worker prompt at:
 
 ```text
 <worktreePath>\prompt.md
+```
+
+It also materializes selected project memory into:
+
+```text
+<worktreePath>\.brevity\context\
 ```
 
 The original vault task spec is not modified or deleted. Brevity records runtime
@@ -420,9 +438,10 @@ It also prints `Read prompt.md and follow it exactly.` Brevity does not
 automatically launch Codex.
 
 Before printing the command, Brevity refreshes `prompt.md` from the matching
-vault task spec when one exists. The generated prompt includes the task slug,
-embedded spec contents, constraints, acceptance checks, and bounded worker
-instructions.
+vault task spec when one exists and refreshes `.brevity\context` from selected
+project memory files. The generated prompt includes the task slug, embedded spec
+contents, local context guidance, constraints, acceptance checks, and bounded
+worker instructions.
 
 The task run command reads the matching record from:
 
@@ -449,6 +468,9 @@ includes `-s` when sandbox is not blank or `none`. Set
 Set `providers.gemini.env` to an object of environment variables, such as
 `GOOGLE_API_KEY`, when Gemini authentication should be scoped to the worker
 process. Dry runs print configured variable names but mask values.
+Before printing or executing the worker command, Brevity refreshes `prompt.md`
+from the vault task spec when available and refreshes `.brevity\context` from
+selected project memory files.
 By default, this is a dry run and does not execute the worker, change task
 status, or record metrics.
 When `--execute` is used, Brevity applies `codex.executionPolicy` from

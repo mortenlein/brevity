@@ -1617,6 +1617,12 @@ function Write-TaskPrompt {
 
     $promptLines += @(
         "",
+        "# Local Context",
+        "",
+        "Brevity materializes selected durable project memory into this worktree before worker execution.",
+        "Read local context files from `.brevity\context\` when they exist.",
+        "Do not read external vault paths directly; the vault is durable memory, and this worktree is the bounded execution context.",
+        "",
         "# Constraints",
         "",
         "- Keep changes small and focused on this task.",
@@ -2642,6 +2648,55 @@ function Get-VaultTaskSpecPath {
     return (Join-Path (Join-Path $config.vaultPath "tasks") "$Slug.md")
 }
 
+function Copy-TaskWorkspaceContext {
+    param(
+        [string]$WorktreePath
+    )
+
+    if ([string]::IsNullOrWhiteSpace($WorktreePath)) {
+        return @()
+    }
+
+    $config = Read-BrevityConfig
+    if ($null -eq $config -or [string]::IsNullOrWhiteSpace($config.vaultPath)) {
+        return @()
+    }
+
+    if (-not (Test-Path -LiteralPath $WorktreePath)) {
+        return @()
+    }
+
+    $contextRoot = Join-Path $WorktreePath ".brevity\context"
+    if (-not (Test-Path -LiteralPath $contextRoot)) {
+        New-Item -ItemType Directory -Path $contextRoot -Force | Out-Null
+    }
+
+    $candidateFiles = @(
+        "project.md",
+        "architecture.md",
+        "decisions.md",
+        "current-state.md",
+        "roadmap.md"
+    )
+
+    $copied = @()
+    foreach ($fileName in $candidateFiles) {
+        $sourcePath = Join-Path $config.vaultPath $fileName
+        $targetPath = Join-Path $contextRoot $fileName
+        if (-not (Test-Path -LiteralPath $sourcePath -PathType Leaf)) {
+            if (Test-Path -LiteralPath $targetPath -PathType Leaf) {
+                Remove-Item -LiteralPath $targetPath -Force
+            }
+            continue
+        }
+
+        Copy-Item -LiteralPath $sourcePath -Destination $targetPath -Force
+        $copied += $targetPath
+    }
+
+    return @($copied)
+}
+
 function Update-TaskPromptFromSpec {
     param(
         [string]$PromptPath,
@@ -2720,6 +2775,7 @@ function Start-TaskWork {
         $specPath = [string]$task.specPath
     }
 
+    $contextFiles = @(Copy-TaskWorkspaceContext -WorktreePath $task.worktreePath)
     $materializedSpecPath = Update-TaskPromptFromSpec -PromptPath $task.promptPath -Slug $Slug -SpecPath $specPath
     $workerCommand = "codex -C $($task.worktreePath) -a never -s workspace-write"
 
@@ -2729,6 +2785,7 @@ function Start-TaskWork {
     if (-not [string]::IsNullOrWhiteSpace($materializedSpecPath)) {
         Write-Host "Spec: $materializedSpecPath"
     }
+    Write-Host "Context: $(Join-Path $task.worktreePath ".brevity\context") ($($contextFiles.Count) file(s))"
     Write-Host "Worker: $workerCommand"
     Write-Host "Read prompt.md and follow it exactly."
 }
@@ -3231,6 +3288,23 @@ function New-WorkerCommand {
     }))
 }
 
+function Resolve-WorkerExecutablePath {
+    param(
+        [string]$Command
+    )
+
+    if ([string]::IsNullOrWhiteSpace($Command)) {
+        return $Command
+    }
+
+    $resolved = Get-Command -Name $Command -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+    if ($null -ne $resolved -and -not [string]::IsNullOrWhiteSpace($resolved.Source)) {
+        return [string]$resolved.Source
+    }
+
+    return $Command
+}
+
 function Invoke-WorkerCommand {
     param(
         [object]$WorkerCommand
@@ -3239,7 +3313,7 @@ function Invoke-WorkerCommand {
     $workerOutput = New-Object 'System.Collections.Generic.List[object]'
     $process = New-Object System.Diagnostics.Process
     try {
-        $process.StartInfo.FileName = [string]$WorkerCommand.command
+        $process.StartInfo.FileName = Resolve-WorkerExecutablePath -Command ([string]$WorkerCommand.command)
         $process.StartInfo.WorkingDirectory = [string]$WorkerCommand.workingDirectory
         $process.StartInfo.UseShellExecute = $false
         $process.StartInfo.RedirectStandardOutput = $true
@@ -3382,6 +3456,14 @@ function Show-TaskRun {
         exit 1
     }
 
+    $specPath = ""
+    if (Get-Member -InputObject $task -Name "specPath" -MemberType NoteProperty -ErrorAction SilentlyContinue) {
+        $specPath = [string]$task.specPath
+    }
+
+    Update-TaskPromptFromSpec -PromptPath $task.promptPath -Slug $Slug -SpecPath $specPath | Out-Null
+    $contextFiles = @(Copy-TaskWorkspaceContext -WorktreePath $task.worktreePath)
+
     try {
         if ($Smoke) {
             $workerCommand = New-Object PSObject -Property ([ordered]@{
@@ -3450,6 +3532,7 @@ function Show-TaskRun {
     Write-Host "Task: $($task.slug)"
     Write-Host "Worktree: $($task.worktreePath)"
     Write-Host "Prompt: $($task.promptPath)"
+    Write-Host "Context: $(Join-Path $task.worktreePath ".brevity\context") ($($contextFiles.Count) file(s))"
     Write-Host "Provider: $($workerCommand.provider)"
     Write-Host "Worker: $($workerCommand.display)"
     if (-not [string]::IsNullOrWhiteSpace($workerCommand.executionPolicy)) {
@@ -3889,6 +3972,7 @@ function New-TaskWorktree {
         exit $LASTEXITCODE
     }
 
+    $contextFiles = @(Copy-TaskWorkspaceContext -WorktreePath $targetPath)
     $specPath = Update-TaskPromptFromSpec -PromptPath $promptPath -Slug $Slug
     Add-TaskMetadata -RepoRoot $repoRoot -Slug $Slug -Branch $branchName -WorktreePath $targetPath -PromptPath $promptPath -SpecPath $specPath
 
@@ -3896,6 +3980,7 @@ function New-TaskWorktree {
     Write-Host "Path: $targetPath"
     Write-Host "Branch: $branchName"
     Write-Host "Prompt: $promptPath"
+    Write-Host "Context: $(Join-Path $targetPath ".brevity\context") ($($contextFiles.Count) file(s))"
     Write-Host "Metadata: $(Join-Path $repoRoot ".brevity\tasks.json")"
 }
 
@@ -3941,6 +4026,7 @@ function Activate-TaskWorktree {
         exit $LASTEXITCODE
     }
 
+    $contextFiles = @(Copy-TaskWorkspaceContext -WorktreePath $worktreePath)
     Update-TaskPromptFromSpec -PromptPath $promptPath -Slug $Slug -SpecPath $specPath | Out-Null
     Add-TaskMetadata -RepoRoot $repoRoot -Slug $Slug -Branch $branchName -WorktreePath $worktreePath -PromptPath $promptPath -SpecPath $specPath
 
@@ -3949,6 +4035,7 @@ function Activate-TaskWorktree {
     Write-Host "Path: $worktreePath"
     Write-Host "Branch: $branchName"
     Write-Host "Prompt: $promptPath"
+    Write-Host "Context: $(Join-Path $worktreePath ".brevity\context") ($($contextFiles.Count) file(s))"
     Write-Host "Spec: $specPath"
     Write-Host "Metadata: $(Join-Path $repoRoot ".brevity\tasks.json")"
 }

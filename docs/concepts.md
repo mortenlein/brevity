@@ -383,9 +383,10 @@ The command also tells the operator to read `prompt.md` and follow it exactly.
 It does not automatically launch Codex or run planner automation.
 
 Before printing the command, Brevity refreshes `prompt.md` from the matching
-vault task spec when one exists. The prompt keeps the worker bounded by
-including the task slug, embedded spec contents, constraints, acceptance checks,
-and stop-after-summary instructions.
+vault task spec when one exists and refreshes `.brevity\context` in the
+worktree from selected project memory files. The prompt keeps the worker bounded
+by including the task slug, embedded spec contents, local context guidance,
+constraints, acceptance checks, and stop-after-summary instructions.
 
 `Brevity task run <slug> [--execute] [--profile <name>]` reads the same metadata file and finds the matching task
 record. It prints:
@@ -424,6 +425,13 @@ change the user's machine policy. By default, Brevity prints the command only.
 With `--execute`, Brevity runs the generated command. It does not update task
 status, record metrics, run planner automation, or support other AI providers
 yet. Setting another provider returns a clear unsupported-provider error.
+
+Before a worker handoff, Brevity materializes only selected durable project
+memory files into the task worktree at `.brevity\context\`: `project.md`,
+`architecture.md`, `decisions.md`, `current-state.md`, and `roadmap.md`. Missing
+files are skipped. Workers read those local files instead of external vault
+paths, preserving the split between vault durable memory and bounded worktree
+execution context.
 
 ## Gemini Trust
 
