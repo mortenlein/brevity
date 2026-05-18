@@ -464,8 +464,17 @@ function Get-ProviderProfileSummary {
 
     $config = Read-BrevityConfig
     $profileMatrix = Get-BrevityProfileMatrix
+    $profileAliases = Get-BrevityProfileAliases
     $complexityDefaults = Get-BrevityComplexityProfileDefaults
     $profiles = @()
+    $resolvedProfileName = $ProfileName
+    $matchedAlias = ""
+
+    if (-not [string]::IsNullOrWhiteSpace($ProfileName)) {
+        $resolvedProfile = Resolve-BrevityProfileName -Name $ProfileName
+        $resolvedProfileName = $resolvedProfile.CanonicalName
+        $matchedAlias = $resolvedProfile.AliasName
+    }
 
     foreach ($matrixProfileName in $profileMatrix.Keys) {
         $profile = $profileMatrix[$matrixProfileName]
@@ -517,6 +526,9 @@ function Get-ProviderProfileSummary {
 
         $profiles += [PSCustomObject]@{
             name = $matrixProfileName
+            canonicalName = $matrixProfileName
+            aliases = @($profileAliases.Keys | Where-Object { $profileAliases[$_] -eq $matrixProfileName })
+            matchedAlias = $matchedAlias
             valid = $true
             provider = $providerName
             model = $modelName
@@ -529,7 +541,7 @@ function Get-ProviderProfileSummary {
     }
 
     if (-not [string]::IsNullOrWhiteSpace($ProfileName)) {
-        $profiles = @($profiles | Where-Object { $_.name -eq $ProfileName })
+        $profiles = @($profiles | Where-Object { $_.name -eq $resolvedProfileName })
     }
 
     return @($profiles)
@@ -541,7 +553,21 @@ function Show-ProviderProfiles {
         [bool]$Json = $false
     )
 
-    $profiles = @(Get-ProviderProfileSummary -ProfileName $ProfileName)
+    try {
+        $profiles = @(Get-ProviderProfileSummary -ProfileName $ProfileName)
+    }
+    catch {
+        if ($Json) {
+            [PSCustomObject]@{
+                valid = $false
+                error = $_.Exception.Message
+            } | ConvertTo-Json -Depth 10
+            return
+        }
+
+        Write-Host $_.Exception.Message -ForegroundColor Red
+        return
+    }
 
     if ($Json) {
         $profiles | ConvertTo-Json -Depth 10
@@ -557,8 +583,14 @@ function Show-ProviderProfiles {
     Write-Host "Provider profiles"
     Write-Host "Valid profiles: $((Get-ProviderProfileSummary | ForEach-Object { $_.name }) -join ', ')"
     Write-Host ""
+    if (-not [string]::IsNullOrWhiteSpace($ProfileName) -and $profiles.Count -gt 0 -and $profiles[0].matchedAlias) {
+        Write-Host "Resolved profile alias: $($profiles[0].matchedAlias) -> $($profiles[0].canonicalName)"
+        Write-Host ""
+    }
     foreach ($profile in $profiles) {
         Write-Host "name: $($profile.name)"
+        Write-Host "canonicalName: $($profile.canonicalName)"
+        Write-Host "aliases: $(@($profile.aliases) -join ', ')"
         Write-Host "valid: $($profile.valid)"
         Write-Host "provider: $($profile.provider)"
         Write-Host "model: $($profile.model)"
@@ -3153,17 +3185,51 @@ function Get-BrevityComplexityProfileDefaults {
     }
 }
 
+function Get-BrevityProfileAliases {
+    return [ordered]@{
+        "gemini-fast" = "gemini-flash"
+        "gemini-balanced" = "gemini-pro"
+        "gemini-default" = "gemini-flash"
+        "codex-default" = "codex-balanced"
+        "codex-standard" = "codex-balanced"
+        "codex-pro" = "codex-deep"
+    }
+}
+
+function Resolve-BrevityProfileName {
+    param([string]$Name)
+
+    $profileMatrix = Get-BrevityProfileMatrix
+    $profileAliases = Get-BrevityProfileAliases
+    $normalizedName = $Name.ToLowerInvariant()
+    $canonicalName = $normalizedName
+    $aliasName = ""
+
+    if ($profileAliases.Contains($normalizedName)) {
+        $canonicalName = $profileAliases[$normalizedName]
+        $aliasName = $normalizedName
+    }
+
+    if (-not $profileMatrix.Contains($canonicalName)) {
+        $validNames = @($profileMatrix.Keys) + @($profileAliases.Keys)
+        throw "Unknown worker profile: $Name. Brevity v0 supports: $($validNames -join ', ')."
+    }
+
+    return [PSCustomObject]@{
+        Name = $Name
+        CanonicalName = $canonicalName
+        AliasName = $aliasName
+        IsAlias = (-not [string]::IsNullOrWhiteSpace($aliasName))
+    }
+}
+
 function Get-BrevityProfileConfig {
     param([string]$Name)
 
     $profileMatrix = Get-BrevityProfileMatrix
-    $normalizedName = $Name.ToLowerInvariant()
+    $resolvedProfile = Resolve-BrevityProfileName -Name $Name
 
-    if (-not $profileMatrix.Contains($normalizedName)) {
-        throw "Unknown worker profile: $Name. Brevity v0 supports: gemini-lite, gemini-flash, gemini-pro, codex-fast, codex-balanced, codex-deep, copilot."
-    }
-
-    return $profileMatrix[$normalizedName]
+    return $profileMatrix[$resolvedProfile.CanonicalName]
 }
 
 function Get-WorkerConfig {
@@ -3737,6 +3803,19 @@ function Show-TaskRun {
         $specPath = [string]$task.specPath
     }
 
+    $resolvedProfile = $null
+    $effectiveProfileName = $ProfileName
+    if (-not [string]::IsNullOrWhiteSpace($ProfileName)) {
+        try {
+            $resolvedProfile = Resolve-BrevityProfileName -Name $ProfileName
+            $effectiveProfileName = $resolvedProfile.CanonicalName
+        }
+        catch {
+            Write-Host $_.Exception.Message -ForegroundColor Red
+            exit 1
+        }
+    }
+
     Update-TaskPromptFromSpec -PromptPath $task.promptPath -Slug $Slug -SpecPath $specPath | Out-Null
     $contextFiles = @(Copy-TaskWorkspaceContext -WorktreePath $task.worktreePath)
 
@@ -3759,7 +3838,7 @@ function Show-TaskRun {
             })
         }
         else {
-            $workerCommand = New-WorkerCommand -Config $config -WorktreePath $task.worktreePath -ProfileName $ProfileName
+            $workerCommand = New-WorkerCommand -Config $config -WorktreePath $task.worktreePath -ProfileName $effectiveProfileName
         }
     }
     catch {
@@ -3809,6 +3888,9 @@ function Show-TaskRun {
     Write-Host "Worktree: $($task.worktreePath)"
     Write-Host "Prompt: $($task.promptPath)"
     Write-Host "Context: $(Join-Path $task.worktreePath ".brevity\context") ($($contextFiles.Count) file(s))"
+    if ($null -ne $resolvedProfile -and $resolvedProfile.IsAlias) {
+        Write-Host "Resolved profile alias: $($resolvedProfile.AliasName) -> $($resolvedProfile.CanonicalName)"
+    }
     Write-Host "Provider: $($workerCommand.provider)"
     Write-Host "Worker: $($workerCommand.display)"
     if (-not [string]::IsNullOrWhiteSpace($workerCommand.executionPolicy)) {
