@@ -841,6 +841,7 @@ function Show-Help {
     Write-Host "  .\brevity.ps1 memory note <message>"
     Write-Host "  .\brevity.ps1 logs recent [--count <n>]"
     Write-Host "  .\brevity.ps1 logs task <slug> [--tail <n>]"
+    Write-Host "  .\brevity.ps1 runtime state --json"
     Write-Host "  .\brevity.ps1 session summary [--json]"
     Write-Host "  .\brevity.ps1 status [-DevRoot <path>]"
     Write-Host "  .\brevity.ps1 provider status"
@@ -2635,6 +2636,121 @@ function Get-SessionSummaryData {
         suggestedNextActions = $suggestedNextActions
         runtimeEventMessage = "tracked=$($taskCounts.tracked) runnable=$($taskCounts.runnable) stale=$($taskCounts.stale) providerGated=$($taskCounts.providerGated)"
     }
+}
+
+function ConvertTo-RuntimeStateTaskSummary {
+    param([object]$Task)
+
+    return [pscustomobject]@{
+        slug = $Task.slug
+        branch = $Task.branch
+        status = $Task.status
+        metadataStatus = $Task.metadataStatus
+        provider = $Task.provider.resolved
+        providerHealth = $Task.provider.health
+        providerGated = $Task.provider.gated
+        worktreePath = $Task.worktree.path
+        worktreeExists = $Task.worktree.exists
+        worktreeRegistered = $Task.worktree.registered
+        promptPath = $Task.prompt.path
+        promptExists = $Task.prompt.exists
+        stale = $Task.runtime.stale
+        issues = @($Task.runtime.issues)
+        lastExitCode = $Task.execution.lastExitCode
+        lastLogPath = $Task.execution.lastLogPath
+    }
+}
+
+function Get-RuntimeStateData {
+    $repoRoot = Get-RepositoryRoot
+    $config = Read-BrevityConfig
+    $providerHealth = Read-ProviderHealth
+    $providerSummary = Get-ProviderHealthSummary -Health $providerHealth.health
+    $tasks = @(Read-BrevityTasks)
+    $runtimeTasks = @($tasks | ForEach-Object { Get-TaskRuntimeInfo -Task $_ })
+    $worktreeRecords = @(Get-GitWorktreeRecords)
+    $orphanedTaskWorktrees = @(Get-OrphanedTaskWorktreeRecords -RuntimeTasks $runtimeTasks -WorktreeRecords $worktreeRecords -ActiveWorktreesRoot $config.worktreesRoot)
+    $tasksPath = Join-Path $repoRoot ".brevity\tasks.json"
+    $lockInfo = Get-TaskMetadataLockInfo -TasksPath $tasksPath
+    $runtimeLogPath = Join-Path $config.vaultPath "runtime-log.md"
+    $recentRuntimeMemory = @()
+    if (Test-Path -LiteralPath $runtimeLogPath) {
+        $recentRuntimeMemory = @(Get-Content -LiteralPath $runtimeLogPath -Tail 5)
+    }
+
+    $runnableTasks = @($runtimeTasks | Where-Object { -not $_.runtime.stale -and -not $_.provider.gated -and $_.metadataStatus -eq "ready-for-worker" })
+    $staleTasks = @($runtimeTasks | Where-Object { $_.runtime.stale })
+    $providerGatedTasks = @($runtimeTasks | Where-Object { $_.provider.gated })
+    $blockedTasks = @($runtimeTasks | Where-Object { $_.runtime.stale -or $_.provider.gated })
+    $reviewTasks = @($runtimeTasks | Where-Object { $_.metadataStatus -eq "merged" })
+
+    $suggestedNextActions = @("No immediate runtime action suggested.")
+    if ($lockInfo.exists -and $null -ne $lockInfo.ageMinutes -and $lockInfo.ageMinutes -ge 10) {
+        $suggestedNextActions = @("Run .\brevity.ps1 doctor --repair to remove a stale task metadata lock after confirming no Brevity process is active.")
+    }
+    elseif ($staleTasks.Count -gt 0) {
+        $suggestedNextActions = @("Run .\brevity.ps1 doctor to inspect stale task metadata.")
+    }
+    elseif ($runtimeTasks.Count -eq 0 -and $worktreeRecords.Count -gt 0) {
+        $suggestedNextActions = @(Get-OrphanedWorktreeGuidance -TrackedTaskCount $runtimeTasks.Count -RegisteredWorktreeCount $worktreeRecords.Count -OrphanedTaskWorktreeCount $orphanedTaskWorktrees.Count)
+    }
+    elseif ($orphanedTaskWorktrees.Count -gt 0) {
+        $suggestedNextActions = @(Get-OrphanedWorktreeGuidance -TrackedTaskCount $runtimeTasks.Count -RegisteredWorktreeCount $worktreeRecords.Count -OrphanedTaskWorktreeCount $orphanedTaskWorktrees.Count)
+    }
+    elseif ($providerGatedTasks.Count -gt 0 -or $providerSummary.degraded -gt 0 -or $providerSummary.unavailable -gt 0) {
+        $suggestedNextActions = @("Run .\brevity.ps1 provider status and choose a healthy worker profile before launching more work.")
+    }
+    elseif ($runnableTasks.Count -gt 0) {
+        $suggestedNextActions = @("Run .\brevity.ps1 plan workers to review execution grouping before starting workers.")
+    }
+
+    return [pscustomobject]@{
+        schema = "brevity.runtime-state.v1"
+        repoRoot = $repoRoot
+        generatedAt = (Get-Date).ToString("o")
+        providers = [pscustomobject]@{
+            summary = $providerSummary
+            health = $providerHealth.health
+        }
+        taskCounts = [pscustomobject]@{
+            tracked = $runtimeTasks.Count
+            runnable = $runnableTasks.Count
+            blocked = $blockedTasks.Count
+            stale = $staleTasks.Count
+            providerGated = $providerGatedTasks.Count
+            review = $reviewTasks.Count
+        }
+        tasks = @($runtimeTasks | Sort-Object slug | ForEach-Object { ConvertTo-RuntimeStateTaskSummary -Task $_ })
+        groups = [pscustomobject]@{
+            runnable = @($runnableTasks | Sort-Object slug | ForEach-Object { $_.slug })
+            blocked = @($blockedTasks | Sort-Object slug | ForEach-Object { $_.slug })
+            stale = @($staleTasks | Sort-Object slug | ForEach-Object { $_.slug })
+            providerGated = @($providerGatedTasks | Sort-Object slug | ForEach-Object { $_.slug })
+            review = @($reviewTasks | Sort-Object slug | ForEach-Object { $_.slug })
+        }
+        orphanedTaskWorktrees = $orphanedTaskWorktrees
+        lock = $lockInfo
+        activeWorktreeCount = $worktreeRecords.Count
+        activeWorktrees = $worktreeRecords
+        runtimeMemory = [pscustomobject]@{
+            path = $runtimeLogPath
+            exists = (Test-Path -LiteralPath $runtimeLogPath)
+            recentCount = $recentRuntimeMemory.Count
+            recentEntries = $recentRuntimeMemory
+        }
+        suggestedNextActions = $suggestedNextActions
+    }
+}
+
+function Show-RuntimeState {
+    param([switch]$Json)
+
+    if (-not $Json) {
+        Write-Host "Usage: .\brevity.ps1 runtime state --json"
+        exit 1
+    }
+
+    Get-RuntimeStateData | ConvertTo-Json -Depth 12
 }
 
 function Show-SessionSummary {
@@ -4736,6 +4852,38 @@ switch ($Command.ToLowerInvariant()) {
                 Write-Host "Unknown brevity logs command: $Subcommand" -ForegroundColor Red
                 Write-Host "Usage: .\brevity.ps1 logs recent [--count <n>]"
                 Write-Host "Usage: .\brevity.ps1 logs task <slug> [--tail <n>]"
+                exit 1
+            }
+        }
+    }
+    "runtime" {
+        if ([string]::IsNullOrWhiteSpace($Subcommand)) {
+            Write-Host "Missing brevity runtime command." -ForegroundColor Red
+            Write-Host "Usage: .\brevity.ps1 runtime state --json"
+            exit 1
+        }
+
+        switch ($Subcommand.ToLowerInvariant()) {
+            "state" {
+                $json = $false
+                if ($null -ne $RemainingArgs) {
+                    foreach ($runtimeArg in $RemainingArgs) {
+                        if ($runtimeArg -eq "--json") {
+                            $json = $true
+                        }
+                        else {
+                            Write-Host "Unknown brevity runtime state argument: $runtimeArg" -ForegroundColor Red
+                            Write-Host "Usage: .\brevity.ps1 runtime state --json"
+                            exit 1
+                        }
+                    }
+                }
+
+                Show-RuntimeState -Json:$json
+            }
+            default {
+                Write-Host "Unknown brevity runtime command: $Subcommand" -ForegroundColor Red
+                Write-Host "Usage: .\brevity.ps1 runtime state --json"
                 exit 1
             }
         }
