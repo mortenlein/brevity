@@ -1858,6 +1858,46 @@ function Get-TaskRuntimePromptInfo {
     }
 }
 
+function Get-TaskRuntimeContextInfo {
+    param([object]$Task)
+
+    $worktreePath = Get-TaskField -Task $Task -Name "worktreePath"
+    $contextPath = ""
+    if (-not [string]::IsNullOrWhiteSpace($worktreePath)) {
+        $contextPath = Join-Path $worktreePath ".brevity\context"
+    }
+
+    $exists = (-not [string]::IsNullOrWhiteSpace($contextPath)) -and (Test-Path -LiteralPath $contextPath -PathType Container)
+    $managedFiles = @(Get-ManagedContextFileNames)
+    $materializedFiles = @()
+    $missingFiles = @()
+    $lastWriteTimeUtc = $null
+
+    foreach ($fileName in $managedFiles) {
+        $filePath = $(if ([string]::IsNullOrWhiteSpace($contextPath)) { "" } else { Join-Path $contextPath $fileName })
+        if ($exists -and (Test-Path -LiteralPath $filePath -PathType Leaf)) {
+            $fileItem = Get-Item -LiteralPath $filePath
+            $materializedFiles += $fileName
+            if ($null -eq $lastWriteTimeUtc -or $fileItem.LastWriteTimeUtc -gt $lastWriteTimeUtc) {
+                $lastWriteTimeUtc = $fileItem.LastWriteTimeUtc
+            }
+        }
+        else {
+            $missingFiles += $fileName
+        }
+    }
+
+    return [pscustomobject]@{
+        exists = $exists
+        path = $contextPath
+        materializedFileCount = $materializedFiles.Count
+        managedFiles = $managedFiles
+        materializedFiles = $materializedFiles
+        missingFiles = $missingFiles
+        newestMaterializedFileWriteTimeUtc = $(if ($null -ne $lastWriteTimeUtc) { $lastWriteTimeUtc.ToString("o") } else { $null })
+    }
+}
+
 function Get-TaskRuntimeProviderInfo {
     $repoRoot = Get-RepositoryRoot
     $configPath = Join-Path $repoRoot ".brevity\config.json"
@@ -2000,6 +2040,7 @@ function Get-TaskRuntimeInfo {
 
         $worktree = Get-TaskRuntimeWorktreeInfo -Task $emptyTask
         $prompt = Get-TaskRuntimePromptInfo -Task $emptyTask
+        $context = Get-TaskRuntimeContextInfo -Task $emptyTask
         $provider = Get-TaskRuntimeProviderInfo
         $execution = Get-TaskRuntimeExecutionInfo -Slug $Slug
         $runtime = Get-TaskRuntimeStateFlags -Task $emptyTask -Worktree $worktree -Prompt $prompt
@@ -2012,6 +2053,7 @@ function Get-TaskRuntimeInfo {
             taskExists = $false
             worktree = $worktree
             prompt = $prompt
+            context = $context
             provider = $provider
             runtime = $runtime
             execution = $execution
@@ -2023,6 +2065,7 @@ function Get-TaskRuntimeInfo {
     $branch = Get-TaskField -Task $Task -Name "branch"
     $worktree = Get-TaskRuntimeWorktreeInfo -Task $Task
     $prompt = Get-TaskRuntimePromptInfo -Task $Task
+    $context = Get-TaskRuntimeContextInfo -Task $Task
     $provider = Get-TaskRuntimeProviderInfo
     $execution = Get-TaskRuntimeExecutionInfo -Slug $slug
     $runtime = Get-TaskRuntimeStateFlags -Task $Task -Worktree $worktree -Prompt $prompt
@@ -2049,6 +2092,7 @@ function Get-TaskRuntimeInfo {
         taskExists = $true
         worktree = $worktree
         prompt = $prompt
+        context = $context
         provider = $provider
         runtime = $runtime
         execution = $execution
@@ -2648,6 +2692,16 @@ function Get-VaultTaskSpecPath {
     return (Join-Path (Join-Path $config.vaultPath "tasks") "$Slug.md")
 }
 
+function Get-ManagedContextFileNames {
+    return @(
+        "project.md",
+        "architecture.md",
+        "decisions.md",
+        "current-state.md",
+        "roadmap.md"
+    )
+}
+
 function Copy-TaskWorkspaceContext {
     param(
         [string]$WorktreePath
@@ -2671,16 +2725,8 @@ function Copy-TaskWorkspaceContext {
         New-Item -ItemType Directory -Path $contextRoot -Force | Out-Null
     }
 
-    $candidateFiles = @(
-        "project.md",
-        "architecture.md",
-        "decisions.md",
-        "current-state.md",
-        "roadmap.md"
-    )
-
     $copied = @()
-    foreach ($fileName in $candidateFiles) {
+    foreach ($fileName in @(Get-ManagedContextFileNames)) {
         $sourcePath = Join-Path $config.vaultPath $fileName
         $targetPath = Join-Path $contextRoot $fileName
         if (-not (Test-Path -LiteralPath $sourcePath -PathType Leaf)) {
