@@ -852,6 +852,7 @@ function Show-Help {
     Write-Host "  .\brevity.ps1 task spec <slug>"
     Write-Host "  .\brevity.ps1 task start <slug>"
     Write-Host "  .\brevity.ps1 task run <slug> [--execute] [--profile <name>] [--smoke] [--force-provider]"
+    Write-Host "  .\brevity.ps1 task runtime-info <slug>"
     Write-Host "  .\brevity.ps1 task context refresh <slug>"
     Write-Host "  .\brevity.ps1 task context status <slug>"
     Write-Host "  .\brevity.ps1 task status"
