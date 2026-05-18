@@ -766,8 +766,8 @@ function Show-Help {
     Write-Host "  .\brevity.ps1 doctor [--repair]"
     Write-Host "  .\brevity.ps1 doctor execution-policy"
     Write-Host "  .\brevity.ps1 memory note <message>"
-    Write-Host "  .\brevity.ps1 logs recent"
-    Write-Host "  .\brevity.ps1 logs task <slug>"
+    Write-Host "  .\brevity.ps1 logs recent [--count <n>]"
+    Write-Host "  .\brevity.ps1 logs task <slug> [--tail <n>]"
     Write-Host "  .\brevity.ps1 session summary [--json]"
     Write-Host "  .\brevity.ps1 status [-DevRoot <path>]"
     Write-Host "  .\brevity.ps1 provider status"
@@ -1036,7 +1036,35 @@ function Get-LatestTaskWorkerLog {
         Select-Object -First 1)
 }
 
+function Resolve-PositiveIntegerOption {
+    param(
+        [string]$Name,
+        [string]$Value,
+        [string]$Usage
+    )
+
+    if ([string]::IsNullOrWhiteSpace($Value) -or $Value -notmatch '^\d+$') {
+        Write-Host "Invalid value for ${Name}: $Value" -ForegroundColor Red
+        Write-Host $Usage
+        exit 1
+    }
+
+    $parsed = 0
+    if (-not [int]::TryParse($Value, [ref]$parsed) -or $parsed -le 0) {
+        Write-Host "Invalid value for ${Name}: $Value" -ForegroundColor Red
+        Write-Host $Usage
+        exit 1
+    }
+
+    return $parsed
+}
+
 function Show-RecentLogs {
+    param(
+        [int]$RuntimeCount = 8,
+        [int]$WorkerCount = 5
+    )
+
     $config = Read-BrevityConfig
     $runtimeLogPath = Join-Path $config.vaultPath "runtime-log.md"
 
@@ -1045,7 +1073,7 @@ function Show-RecentLogs {
 
     Write-Section "Runtime Memory"
     if (Test-Path -LiteralPath $runtimeLogPath) {
-        $runtimeLines = @(Get-Content -LiteralPath $runtimeLogPath -Tail 8)
+        $runtimeLines = @(Get-Content -LiteralPath $runtimeLogPath -Tail $RuntimeCount)
         if ($runtimeLines.Count -eq 0) {
             Write-Host "No runtime memory entries found."
         }
@@ -1059,7 +1087,7 @@ function Show-RecentLogs {
 
     Write-Host ""
     Write-Section "Worker Logs"
-    $logs = @(Get-RecentWorkerLogs -Count 5)
+    $logs = @(Get-RecentWorkerLogs -Count $WorkerCount)
     if ($logs.Count -eq 0) {
         Write-Host "No worker logs found."
         return
@@ -1072,11 +1100,14 @@ function Show-RecentLogs {
 }
 
 function Show-TaskLogs {
-    param([string]$Slug)
+    param(
+        [string]$Slug,
+        [int]$Tail = 20
+    )
 
     if ([string]::IsNullOrWhiteSpace($Slug)) {
         Write-Host "Missing task slug." -ForegroundColor Red
-        Write-Host "Usage: .\brevity.ps1 logs task <slug>"
+        Write-Host "Usage: .\brevity.ps1 logs task <slug> [--tail <n>]"
         exit 1
     }
 
@@ -1096,7 +1127,7 @@ function Show-TaskLogs {
     Write-Host "Latest worker log: $($latestLog.FullName)"
     Write-Host ""
     Write-Section "Tail"
-    Get-Content -LiteralPath $latestLog.FullName -Tail 20 | ForEach-Object { Write-Host $_ }
+    Get-Content -LiteralPath $latestLog.FullName -Tail $Tail | ForEach-Object { Write-Host $_ }
 }
 
 function Show-Board {
@@ -4391,42 +4422,74 @@ switch ($Command.ToLowerInvariant()) {
     "logs" {
         if ([string]::IsNullOrWhiteSpace($Subcommand)) {
             Write-Host "Missing brevity logs command." -ForegroundColor Red
-            Write-Host "Usage: .\brevity.ps1 logs recent"
-            Write-Host "Usage: .\brevity.ps1 logs task <slug>"
+            Write-Host "Usage: .\brevity.ps1 logs recent [--count <n>]"
+            Write-Host "Usage: .\brevity.ps1 logs task <slug> [--tail <n>]"
             exit 1
         }
 
         switch ($Subcommand.ToLowerInvariant()) {
             "recent" {
-                if ($null -ne $RemainingArgs -and $RemainingArgs.Length -gt 0) {
-                    Write-Host "Unknown argument for brevity logs recent: $($RemainingArgs[0])" -ForegroundColor Red
-                    Write-Host "Usage: .\brevity.ps1 logs recent"
-                    exit 1
-                }
-
-                Show-RecentLogs
-            }
-            "task" {
-                $taskSlug = $null
-                if ($null -ne $RemainingArgs) {
-                    foreach ($logsArg in $RemainingArgs) {
-                        if ([string]::IsNullOrWhiteSpace($taskSlug)) {
-                            $taskSlug = [string]$logsArg
-                        }
-                        else {
-                            Write-Host "Unknown argument for brevity logs task: $logsArg" -ForegroundColor Red
-                            Write-Host "Usage: .\brevity.ps1 logs task <slug>"
+                $count = $null
+                $index = 0
+                while ($null -ne $RemainingArgs -and $index -lt $RemainingArgs.Length) {
+                    $logsArg = [string]$RemainingArgs[$index]
+                    if ($logsArg -eq "--count") {
+                        if ($index + 1 -ge $RemainingArgs.Length) {
+                            Write-Host "Missing value for --count." -ForegroundColor Red
+                            Write-Host "Usage: .\brevity.ps1 logs recent [--count <n>]"
                             exit 1
                         }
+
+                        $count = Resolve-PositiveIntegerOption -Name "--count" -Value ([string]$RemainingArgs[$index + 1]) -Usage "Usage: .\brevity.ps1 logs recent [--count <n>]"
+                        $index += 2
+                    }
+                    else {
+                        Write-Host "Unknown argument for brevity logs recent: $logsArg" -ForegroundColor Red
+                        Write-Host "Usage: .\brevity.ps1 logs recent [--count <n>]"
+                        exit 1
                     }
                 }
 
-                Show-TaskLogs -Slug $taskSlug
+                if ($null -eq $count) {
+                    Show-RecentLogs
+                }
+                else {
+                    Show-RecentLogs -RuntimeCount $count -WorkerCount $count
+                }
+            }
+            "task" {
+                $taskSlug = $null
+                $tail = 20
+                $index = 0
+                while ($null -ne $RemainingArgs -and $index -lt $RemainingArgs.Length) {
+                    $logsArg = [string]$RemainingArgs[$index]
+                    if ($logsArg -eq "--tail") {
+                        if ($index + 1 -ge $RemainingArgs.Length) {
+                            Write-Host "Missing value for --tail." -ForegroundColor Red
+                            Write-Host "Usage: .\brevity.ps1 logs task <slug> [--tail <n>]"
+                            exit 1
+                        }
+
+                        $tail = Resolve-PositiveIntegerOption -Name "--tail" -Value ([string]$RemainingArgs[$index + 1]) -Usage "Usage: .\brevity.ps1 logs task <slug> [--tail <n>]"
+                        $index += 2
+                    }
+                    elseif ([string]::IsNullOrWhiteSpace($taskSlug)) {
+                        $taskSlug = $logsArg
+                        $index++
+                    }
+                    else {
+                        Write-Host "Unknown argument for brevity logs task: $logsArg" -ForegroundColor Red
+                        Write-Host "Usage: .\brevity.ps1 logs task <slug> [--tail <n>]"
+                        exit 1
+                    }
+                }
+
+                Show-TaskLogs -Slug $taskSlug -Tail $tail
             }
             default {
                 Write-Host "Unknown brevity logs command: $Subcommand" -ForegroundColor Red
-                Write-Host "Usage: .\brevity.ps1 logs recent"
-                Write-Host "Usage: .\brevity.ps1 logs task <slug>"
+                Write-Host "Usage: .\brevity.ps1 logs recent [--count <n>]"
+                Write-Host "Usage: .\brevity.ps1 logs task <slug> [--tail <n>]"
                 exit 1
             }
         }

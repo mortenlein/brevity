@@ -93,11 +93,14 @@ is supplied.
 
 `Brevity logs recent` gives a concise operator view of recent runtime activity.
 It tails the vault `runtime-log.md` file and lists the most recent worker log
-files under `.brevity\logs` without changing either log format.
+files under `.brevity\logs` without changing either log format. Use
+`--count <n>` to control both recent runtime-memory entries and worker-log
+entries.
 
 `Brevity logs task <slug>` prints the latest worker log path for one task and a
-small tail of that log. If no worker log exists for the task, it reports the
-expected log folder cleanly. The command is read-only.
+small tail of that log. Use `--tail <n>` to control the number of worker-log
+lines shown. If no worker log exists for the task, it reports the expected log
+folder cleanly. The command is read-only.
 
 `config.json` records:
 
@@ -676,10 +679,10 @@ Brevity is designed around these commands:
 - `Brevity board` groups Brevity task metadata by status.
 - `Brevity onboard` prepares an existing repo and AI-Vault project memory.
 - `Brevity status` reports repos, worktrees, and vault presence.
-- `Brevity logs recent` shows recent vault runtime memory and recent worker log
-  files.
-- `Brevity logs task <slug>` shows the latest worker log path and a small tail
-  for a task.
+- `Brevity logs recent [--count <n>]` shows recent vault runtime memory and
+  recent worker log files.
+- `Brevity logs task <slug> [--tail <n>]` shows the latest worker log path and
+  a small tail for a task.
 - `Brevity task new` creates an isolated worktree and task branch.
 - `Brevity task activate` creates a task worktree from a vault task spec.
 - `Brevity task spec` prints a vault-backed task spec by slug.

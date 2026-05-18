@@ -130,6 +130,8 @@ Brevity v0 supports:
 .\brevity.ps1 plan backlog
 .\brevity.ps1 plan apply <file>
 .\brevity.ps1 board
+.\brevity.ps1 logs recent [--count <n>]
+.\brevity.ps1 logs task <slug> [--tail <n>]
 .\brevity.ps1 status [-DevRoot <path>]
 .\brevity.ps1 provider status
 .\brevity.ps1 provider set <provider> <status> [-Note <note>]
