@@ -1087,6 +1087,25 @@ function Write-TaskMetadataFile {
     }
 }
 
+function Set-ObjectNoteProperty {
+    param(
+        [object]$Target,
+        [string]$Name,
+        [object]$Value
+    )
+
+    if ($null -eq $Target -or [string]::IsNullOrWhiteSpace($Name)) {
+        return
+    }
+
+    if (Get-Member -InputObject $Target -Name $Name -MemberType NoteProperty -ErrorAction SilentlyContinue) {
+        $Target.$Name = $Value
+    }
+    else {
+        Add-Member -InputObject $Target -MemberType NoteProperty -Name $Name -Value $Value
+    }
+}
+
 function Invoke-TaskMetadataLock {
     param(
         [string]$TasksPath,
@@ -2311,23 +2330,60 @@ function Get-TaskRuntimeProviderInfo {
 }
 
 function Get-TaskRuntimeExecutionInfo {
-    param([string]$Slug)
+    param(
+        [string]$Slug,
+        [object]$Task = $null
+    )
 
     $repoRoot = Get-RepositoryRoot
     $taskLogsRoot = Join-Path (Join-Path $repoRoot ".brevity\logs") $Slug
     $latestLog = $null
+    $lastRunStartedAt = $null
+    $lastRunFinishedAt = $null
     $lastExitCode = $null
     $lastFailureType = $null
+    $lastProvider = $null
+    $lastProfile = $null
+
+    if ($null -ne $Task -and (Get-Member -InputObject $Task -Name "workerLifecycle" -MemberType NoteProperty -ErrorAction SilentlyContinue)) {
+        $lifecycle = $Task.workerLifecycle
+        if ($null -ne $lifecycle) {
+            foreach ($fieldName in @("lastRunStartedAt", "lastRunFinishedAt", "lastExitCode", "lastFailureType", "lastLogPath", "lastProvider", "lastProfile")) {
+                if (-not (Get-Member -InputObject $lifecycle -Name $fieldName -MemberType NoteProperty -ErrorAction SilentlyContinue)) {
+                    continue
+                }
+
+                switch ($fieldName) {
+                    "lastRunStartedAt" { $lastRunStartedAt = $lifecycle.lastRunStartedAt }
+                    "lastRunFinishedAt" { $lastRunFinishedAt = $lifecycle.lastRunFinishedAt }
+                    "lastExitCode" { $lastExitCode = $lifecycle.lastExitCode }
+                    "lastFailureType" { $lastFailureType = $lifecycle.lastFailureType }
+                    "lastLogPath" {
+                        if (-not [string]::IsNullOrWhiteSpace([string]$lifecycle.lastLogPath)) {
+                            $latestLog = [pscustomobject]@{ FullName = [string]$lifecycle.lastLogPath }
+                        }
+                    }
+                    "lastProvider" { $lastProvider = $lifecycle.lastProvider }
+                    "lastProfile" { $lastProfile = $lifecycle.lastProfile }
+                }
+            }
+        }
+    }
 
     if (Test-Path -LiteralPath $taskLogsRoot) {
-        $latestLog = Get-ChildItem -LiteralPath $taskLogsRoot -Filter "*.log" -File -ErrorAction SilentlyContinue |
+        $latestLogFromDisk = Get-ChildItem -LiteralPath $taskLogsRoot -Filter "*.log" -File -ErrorAction SilentlyContinue |
             Sort-Object LastWriteTime -Descending |
             Select-Object -First 1
 
-        if ($null -ne $latestLog) {
-            $exitCodeLine = Get-Content -LiteralPath $latestLog.FullName -ErrorAction SilentlyContinue |
-                Where-Object { $_ -like "ExitCode:*" } |
-                Select-Object -First 1
+        if ($null -ne $latestLogFromDisk) {
+            $latestLog = $latestLogFromDisk
+            $logLines = @(Get-Content -LiteralPath $latestLog.FullName -ErrorAction SilentlyContinue)
+            $exitCodeLine = $logLines | Where-Object { $_ -like "ExitCode:*" } | Select-Object -First 1
+            $startedAtLine = $logLines | Where-Object { $_ -like "StartedAt:*" } | Select-Object -First 1
+            $finishedAtLine = $logLines | Where-Object { $_ -like "FinishedAt:*" } | Select-Object -First 1
+            $failureTypeLine = $logLines | Where-Object { $_ -like "FailureType:*" } | Select-Object -First 1
+            $providerLine = $logLines | Where-Object { $_ -like "Provider:*" } | Select-Object -First 1
+            $profileLine = $logLines | Where-Object { $_ -like "Profile:*" } | Select-Object -First 1
 
             if (-not [string]::IsNullOrWhiteSpace($exitCodeLine)) {
                 $lastExitCode = ($exitCodeLine -replace "^ExitCode:\s*", "")
@@ -2335,14 +2391,53 @@ function Get-TaskRuntimeExecutionInfo {
                     $lastFailureType = "worker-failed"
                 }
             }
+            if (-not [string]::IsNullOrWhiteSpace($startedAtLine)) {
+                $lastRunStartedAt = ($startedAtLine -replace "^StartedAt:\s*", "")
+            }
+            if (-not [string]::IsNullOrWhiteSpace($finishedAtLine)) {
+                $lastRunFinishedAt = ($finishedAtLine -replace "^FinishedAt:\s*", "")
+            }
+            if (-not [string]::IsNullOrWhiteSpace($failureTypeLine)) {
+                $parsedFailureType = ($failureTypeLine -replace "^FailureType:\s*", "")
+                if (-not [string]::IsNullOrWhiteSpace($parsedFailureType)) {
+                    $lastFailureType = $parsedFailureType
+                }
+            }
+            if (-not [string]::IsNullOrWhiteSpace($providerLine)) {
+                $lastProvider = ($providerLine -replace "^Provider:\s*", "")
+            }
+            if (-not [string]::IsNullOrWhiteSpace($profileLine)) {
+                $lastProfile = ($profileLine -replace "^Profile:\s*", "")
+            }
         }
+    }
+
+    $status = "never-run"
+    if ($null -ne $lastRunStartedAt -and $null -eq $lastRunFinishedAt) {
+        $status = "running-unknown"
+    }
+    elseif ($null -ne $lastExitCode) {
+        if ([string]$lastExitCode -eq "0") {
+            $status = "succeeded"
+        }
+        else {
+            $status = "failed"
+        }
+    }
+    elseif ($null -ne $latestLog) {
+        $status = "running-unknown"
     }
 
     return [pscustomobject]@{
         hasLog = ($null -ne $latestLog)
+        status = $status
+        lastRunStartedAt = $lastRunStartedAt
+        lastRunFinishedAt = $lastRunFinishedAt
         lastLogPath = $(if ($null -ne $latestLog) { $latestLog.FullName } else { "" })
         lastExitCode = $lastExitCode
         lastFailureType = $lastFailureType
+        lastProvider = $lastProvider
+        lastProfile = $lastProfile
     }
 }
 
@@ -2408,7 +2503,7 @@ function Get-TaskRuntimeInfo {
         $prompt = Get-TaskRuntimePromptInfo -Task $emptyTask
         $context = Get-TaskRuntimeContextInfo -Task $emptyTask
         $provider = Get-TaskRuntimeProviderInfo
-        $execution = Get-TaskRuntimeExecutionInfo -Slug $Slug
+        $execution = Get-TaskRuntimeExecutionInfo -Slug $Slug -Task $emptyTask
         $runtime = Get-TaskRuntimeStateFlags -Task $emptyTask -Worktree $worktree -Prompt $prompt
 
         return [pscustomobject]@{
@@ -2433,7 +2528,7 @@ function Get-TaskRuntimeInfo {
     $prompt = Get-TaskRuntimePromptInfo -Task $Task
     $context = Get-TaskRuntimeContextInfo -Task $Task
     $provider = Get-TaskRuntimeProviderInfo
-    $execution = Get-TaskRuntimeExecutionInfo -Slug $slug
+    $execution = Get-TaskRuntimeExecutionInfo -Slug $slug -Task $Task
     $runtime = Get-TaskRuntimeStateFlags -Task $Task -Worktree $worktree -Prompt $prompt
 
     $runtimeStatus = $metadataStatus
@@ -2818,8 +2913,14 @@ function ConvertTo-RuntimeStateTaskSummary {
         promptExists = $Task.prompt.exists
         stale = $Task.runtime.stale
         issues = @($Task.runtime.issues)
+        workerStatus = $Task.execution.status
+        lastRunStartedAt = $Task.execution.lastRunStartedAt
+        lastRunFinishedAt = $Task.execution.lastRunFinishedAt
         lastExitCode = $Task.execution.lastExitCode
+        lastFailureType = $Task.execution.lastFailureType
         lastLogPath = $Task.execution.lastLogPath
+        lastProvider = $Task.execution.lastProvider
+        lastProfile = $Task.execution.lastProfile
     }
 }
 
@@ -4832,6 +4933,58 @@ function Invoke-WorkerCommand {
     }
 }
 
+function Update-TaskWorkerLifecycle {
+    param(
+        [string]$TasksPath,
+        [string]$Slug,
+        [string]$StartedAt = $null,
+        [string]$FinishedAt = $null,
+        [object]$ExitCode = $null,
+        [string]$FailureType = $null,
+        [string]$LogPath = $null,
+        [string]$Provider = $null,
+        [string]$Profile = $null
+    )
+
+    Invoke-TaskMetadataLock -TasksPath $TasksPath -ScriptBlock {
+        $currentTasks = @(Read-TaskMetadataFile -TasksPath $TasksPath)
+        foreach ($taskRecord in $currentTasks) {
+            if ($taskRecord.slug -ne $Slug) {
+                continue
+            }
+
+            $existingLifecycle = $null
+            if (Get-Member -InputObject $taskRecord -Name "workerLifecycle" -MemberType NoteProperty -ErrorAction SilentlyContinue) {
+                $existingLifecycle = $taskRecord.workerLifecycle
+            }
+
+            if ($null -eq $existingLifecycle) {
+                $existingLifecycle = [pscustomobject]([ordered]@{
+                    lastRunStartedAt = $null
+                    lastRunFinishedAt = $null
+                    lastExitCode = $null
+                    lastFailureType = $null
+                    lastLogPath = $null
+                    lastProvider = $null
+                    lastProfile = $null
+                })
+            }
+
+            if ($PSBoundParameters.ContainsKey("StartedAt")) { Set-ObjectNoteProperty -Target $existingLifecycle -Name "lastRunStartedAt" -Value $StartedAt }
+            if ($PSBoundParameters.ContainsKey("FinishedAt")) { Set-ObjectNoteProperty -Target $existingLifecycle -Name "lastRunFinishedAt" -Value $FinishedAt }
+            if ($PSBoundParameters.ContainsKey("ExitCode")) { Set-ObjectNoteProperty -Target $existingLifecycle -Name "lastExitCode" -Value $ExitCode }
+            if ($PSBoundParameters.ContainsKey("FailureType")) { Set-ObjectNoteProperty -Target $existingLifecycle -Name "lastFailureType" -Value $FailureType }
+            if ($PSBoundParameters.ContainsKey("LogPath")) { Set-ObjectNoteProperty -Target $existingLifecycle -Name "lastLogPath" -Value $LogPath }
+            if ($PSBoundParameters.ContainsKey("Provider")) { Set-ObjectNoteProperty -Target $existingLifecycle -Name "lastProvider" -Value $Provider }
+            if ($PSBoundParameters.ContainsKey("Profile")) { Set-ObjectNoteProperty -Target $existingLifecycle -Name "lastProfile" -Value $Profile }
+
+            Set-ObjectNoteProperty -Target $taskRecord -Name "workerLifecycle" -Value $existingLifecycle
+        }
+
+        Write-TaskMetadataFile -TasksPath $TasksPath -Tasks $currentTasks
+    }
+}
+
 function Show-TaskRun {
     param(
         [string]$Slug,
@@ -5001,6 +5154,8 @@ function Show-TaskRun {
     }
 
     Write-Host "Executing $($workerCommand.provider) worker..."
+    $runStartedAt = (Get-Date).ToUniversalTime().ToString("o")
+    Update-TaskWorkerLifecycle -TasksPath $tasksPath -Slug $Slug -StartedAt $runStartedAt -FinishedAt $null -ExitCode $null -FailureType $null -LogPath $null -Provider $workerCommand.provider -Profile $effectiveProfileName
     $previousExecutionPolicyPreference = $env:PSExecutionPolicyPreference
     $previousEnvironment = [ordered]@{}
     if (-not [string]::IsNullOrWhiteSpace($workerCommand.executionPolicy)) {
@@ -5025,6 +5180,7 @@ function Show-TaskRun {
             $workerResult = Invoke-WorkerCommand -WorkerCommand $workerCommand
             $workerOutput = @($workerResult.output)
             $exitCode = $workerResult.exitCode
+            $runFinishedAt = (Get-Date).ToUniversalTime().ToString("o")
 
             $logsRoot = Join-Path $repoRoot ".brevity\logs"
             $taskLogsRoot = Join-Path $logsRoot $Slug
@@ -5038,8 +5194,11 @@ function Show-TaskRun {
             $logLines = @(
                 "Task: $Slug"
                 "Provider: $($workerCommand.provider)"
+                "Profile: $effectiveProfileName"
                 "Command: $($workerCommand.display)"
                 "WorkingDirectory: $($workerCommand.workingDirectory)"
+                "StartedAt: $runStartedAt"
+                "FinishedAt: $runFinishedAt"
                 "ExitCode: $exitCode"
                 ""
                 "Output:"
@@ -5071,6 +5230,22 @@ function Show-TaskRun {
                     $failureHint = "Worker executable or dependency was not found. Check provider config and PATH."
                 }
 
+                $logLines = @(
+                    "Task: $Slug"
+                    "Provider: $($workerCommand.provider)"
+                    "Profile: $effectiveProfileName"
+                    "Command: $($workerCommand.display)"
+                    "WorkingDirectory: $($workerCommand.workingDirectory)"
+                    "StartedAt: $runStartedAt"
+                    "FinishedAt: $runFinishedAt"
+                    "ExitCode: $exitCode"
+                    "FailureType: $failureKind"
+                    ""
+                    "Output:"
+                ) + ($workerOutput | ForEach-Object { [string]$_ })
+                $logLines | Set-Content -LiteralPath $logPath -Encoding UTF8
+                Update-TaskWorkerLifecycle -TasksPath $tasksPath -Slug $Slug -StartedAt $runStartedAt -FinishedAt $runFinishedAt -ExitCode $exitCode -FailureType $failureKind -LogPath $logPath -Provider $workerCommand.provider -Profile $effectiveProfileName
+
                 Write-Host ""
                 Write-Host "Worker failed with exit code $exitCode." -ForegroundColor Yellow
                 Write-Host "Failure kind: $failureKind" -ForegroundColor Yellow
@@ -5099,6 +5274,7 @@ function Show-TaskRun {
 
                 exit $exitCode
             }
+            Update-TaskWorkerLifecycle -TasksPath $tasksPath -Slug $Slug -StartedAt $runStartedAt -FinishedAt $runFinishedAt -ExitCode $exitCode -FailureType $null -LogPath $logPath -Provider $workerCommand.provider -Profile $effectiveProfileName
             if ($exitCode -eq 0 -and $workerCommand.provider -ne "smoke") {
                 Set-ProviderStatus `
                     -ProviderName $workerCommand.provider `

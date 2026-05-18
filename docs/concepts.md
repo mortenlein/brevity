@@ -132,6 +132,9 @@ The v1 snapshot includes these major sections:
 - `taskCounts` - tracked, runnable, blocked, stale, provider-gated, and review
   task counts.
 - `tasks` - runtime task summaries sorted by slug.
+  Each task summary includes compact worker lifecycle fields such as
+  `workerStatus`, `lastRunStartedAt`, `lastRunFinishedAt`, `lastExitCode`,
+  `lastFailureType`, `lastLogPath`, `lastProvider`, and `lastProfile`.
 - `groups` - runtime task slug groups such as runnable, blocked, stale,
   provider-gated, and review.
 - `orphanedTaskWorktrees` - active task-like worktrees missing from
@@ -507,8 +510,8 @@ Normal operator flow:
 .\brevity.ps1 task context refresh my-task
 ```
 
-`task runtime-info` exposes the current context state for the task. `task
-context status` reports the managed context files in the worktree, while `task
+`task runtime-info` exposes the current context state and last known worker
+lifecycle state for the task. `task context status` reports the managed context files in the worktree, while `task
 context refresh` re-materializes them from vault memory. If a selected vault
 memory file does not exist, Brevity skips it safely. Refresh is useful when an
 operator wants to restore Brevity-managed context files before handing the task

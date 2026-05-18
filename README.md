@@ -210,6 +210,9 @@ Major sections include:
 - `taskCounts` - aggregate counts for tracked, runnable, blocked, stale,
   provider-gated, and review tasks.
 - `tasks` - sorted task summaries from `.brevity\tasks.json`.
+  Each task summary includes compact worker lifecycle fields such as
+  `workerStatus`, `lastRunStartedAt`, `lastRunFinishedAt`, `lastExitCode`,
+  `lastFailureType`, `lastLogPath`, `lastProvider`, and `lastProfile`.
 - `groups` - task slug lists grouped by runtime classification.
 - `orphanedTaskWorktrees` - task-like active worktrees not tracked in runtime
   task metadata.
@@ -431,8 +434,8 @@ Example operator check:
 .\brevity.ps1 task context refresh my-task
 ```
 
-`task runtime-info` shows the task's worktree, prompt, provider, and context
-state. `task context status` inspects the managed files under
+`task runtime-info` shows the task's worktree, prompt, provider, context state,
+and last known worker lifecycle state. `task context status` inspects the managed files under
 `.brevity\context`, and `task context refresh` restores those managed files from
 vault memory. Missing vault files are skipped safely, so the worker always sees
 only the local bounded context that exists for that task.
