@@ -841,7 +841,7 @@ function Show-Help {
     Write-Host "  .\brevity.ps1 memory note <message>"
     Write-Host "  .\brevity.ps1 logs recent [--count <n>]"
     Write-Host "  .\brevity.ps1 logs task <slug> [--tail <n>]"
-    Write-Host "  .\brevity.ps1 runtime state --json"
+    Write-Host "  .\brevity.ps1 runtime state [--json]"
     Write-Host "  .\brevity.ps1 session summary [--json]"
     Write-Host "  .\brevity.ps1 status [-DevRoot <path>]"
     Write-Host "  .\brevity.ps1 provider status"
@@ -2745,12 +2745,33 @@ function Get-RuntimeStateData {
 function Show-RuntimeState {
     param([switch]$Json)
 
-    if (-not $Json) {
-        Write-Host "Usage: .\brevity.ps1 runtime state --json"
-        exit 1
+    $state = Get-RuntimeStateData
+
+    if ($Json) {
+        $state | ConvertTo-Json -Depth 12
+        return
     }
 
-    Get-RuntimeStateData | ConvertTo-Json -Depth 12
+    Write-Host "Brevity runtime state"
+    Write-Host "Repo: $($state.repoRoot)"
+    Write-Host "Providers: $($state.providers.summary.total) total, $($state.providers.summary.degraded) degraded, $($state.providers.summary.unavailable) unavailable"
+    Write-Host "Tasks: $($state.taskCounts.tracked) tracked, $($state.taskCounts.runnable) runnable, $($state.taskCounts.blocked) blocked, $($state.taskCounts.stale) stale, $($state.taskCounts.providerGated) provider-gated"
+    Write-Host "Worktrees: $($state.activeWorktreeCount) active, $($state.orphanedTaskWorktrees.Count) orphaned task"
+
+    if ($state.lock.exists) {
+        if ($null -ne $state.lock.ageMinutes) {
+            Write-Host ("Lock: present ({0:N1} minutes)" -f $state.lock.ageMinutes)
+        }
+        else {
+            Write-Host "Lock: present"
+        }
+    }
+    else {
+        Write-Host "Lock: none"
+    }
+
+    Write-Host "Next:"
+    $state.suggestedNextActions | ForEach-Object { Write-Host "  $_" }
 }
 
 function Show-SessionSummary {
@@ -4859,7 +4880,7 @@ switch ($Command.ToLowerInvariant()) {
     "runtime" {
         if ([string]::IsNullOrWhiteSpace($Subcommand)) {
             Write-Host "Missing brevity runtime command." -ForegroundColor Red
-            Write-Host "Usage: .\brevity.ps1 runtime state --json"
+            Write-Host "Usage: .\brevity.ps1 runtime state [--json]"
             exit 1
         }
 
@@ -4873,7 +4894,7 @@ switch ($Command.ToLowerInvariant()) {
                         }
                         else {
                             Write-Host "Unknown brevity runtime state argument: $runtimeArg" -ForegroundColor Red
-                            Write-Host "Usage: .\brevity.ps1 runtime state --json"
+                            Write-Host "Usage: .\brevity.ps1 runtime state [--json]"
                             exit 1
                         }
                     }
@@ -4883,7 +4904,7 @@ switch ($Command.ToLowerInvariant()) {
             }
             default {
                 Write-Host "Unknown brevity runtime command: $Subcommand" -ForegroundColor Red
-                Write-Host "Usage: .\brevity.ps1 runtime state --json"
+                Write-Host "Usage: .\brevity.ps1 runtime state [--json]"
                 exit 1
             }
         }
