@@ -2984,6 +2984,11 @@ function Get-RuntimeStateData {
     $runtimeTasks = @($tasks | ForEach-Object { Get-TaskRuntimeInfo -Task $_ })
     $worktreeRecords = @(Get-GitWorktreeRecords)
     $orphanedTaskWorktrees = @(Get-OrphanedTaskWorktreeRecords -RuntimeTasks $runtimeTasks -WorktreeRecords $worktreeRecords -ActiveWorktreesRoot $config.worktreesRoot)
+    $orphanedTaskBranches = @(Get-OrphanedTaskBranchRecords -RuntimeTasks $runtimeTasks -WorktreeRecords $worktreeRecords)
+    $cleanup = [pscustomobject]@{
+        orphanedTaskWorktrees = @($orphanedTaskWorktrees | Sort-Object path | ForEach-Object { ConvertTo-OrphanedTaskWorktreeCleanupCandidate -Worktree $_ })
+        orphanedTaskBranches = @($orphanedTaskBranches | Sort-Object branch | ForEach-Object { ConvertTo-OrphanedTaskBranchCleanupCandidate -Branch $_ })
+    }
     $tasksPath = Join-Path $repoRoot ".brevity\tasks.json"
     $lockInfo = Get-TaskMetadataLockInfo -TasksPath $tasksPath
     $runtimeLogPath = Join-Path $config.vaultPath "runtime-log.md"
@@ -3043,6 +3048,7 @@ function Get-RuntimeStateData {
             review = @($reviewTasks | Sort-Object slug | ForEach-Object { $_.slug })
         }
         orphanedTaskWorktrees = $orphanedTaskWorktrees
+        cleanup = $cleanup
         lock = $lockInfo
         activeWorktreeCount = $worktreeRecords.Count
         activeWorktrees = $worktreeRecords
@@ -3245,6 +3251,73 @@ function Get-OrphanedTaskBranchRecords {
             mergedIntoHead = ($mergedTaskBranches -contains $_)
         }
     })
+}
+
+function Get-OrphanCleanupDirtyReasons {
+    param([object]$DirtyInfo)
+
+    if ($null -eq $DirtyInfo) {
+        return @("dirty status was not inspected")
+    }
+
+    $reasons = @()
+    if (-not $DirtyInfo.detected) {
+        if ([string]::IsNullOrWhiteSpace([string]$DirtyInfo.reason)) {
+            $reasons += "dirty status could not be detected"
+        }
+        else {
+            $reasons += [string]$DirtyInfo.reason
+        }
+    }
+    elseif ($DirtyInfo.modifiedTracked) {
+        $reasons += "modified tracked files detected"
+    }
+
+    if ($null -ne $DirtyInfo -and $DirtyInfo.untracked) {
+        $reasons += "untracked files/directories detected"
+    }
+
+    return @($reasons)
+}
+
+function ConvertTo-OrphanedTaskWorktreeCleanupCandidate {
+    param([object]$Worktree)
+
+    $pathExists = (-not [string]::IsNullOrWhiteSpace([string]$Worktree.path)) -and (Test-Path -LiteralPath $Worktree.path)
+    $dirtyInfo = Get-OrphanCleanupDirtyInfo -WorktreePath $Worktree.path
+    $dirtyReasons = @(Get-OrphanCleanupDirtyReasons -DirtyInfo $dirtyInfo)
+    $formattedPath = Format-GitCommandArgument -Value $Worktree.path
+    $formattedBranch = Format-GitCommandArgument -Value $Worktree.branch
+    $suggestedCommands = @(
+        "git -C $formattedPath status --short",
+        "git -C $formattedPath diff --stat"
+    )
+
+    if ($dirtyInfo.detected -and -not $dirtyInfo.dirty) {
+        $suggestedCommands += "git worktree remove $formattedPath"
+        $suggestedCommands += "git branch -D $formattedBranch"
+    }
+
+    return [pscustomobject]@{
+        path = $Worktree.path
+        branch = $Worktree.branch
+        pathExists = $pathExists
+        dirty = $dirtyInfo.dirty
+        dirtyReasons = $dirtyReasons
+        suggestedCommands = $suggestedCommands
+        removableByExecute = ($pathExists -and $dirtyInfo.detected -and -not $dirtyInfo.dirty)
+    }
+}
+
+function ConvertTo-OrphanedTaskBranchCleanupCandidate {
+    param([object]$Branch)
+
+    return [pscustomobject]@{
+        branch = $Branch.branch
+        mergedIntoHead = $Branch.mergedIntoHead
+        suggestedCommands = @("git branch -D $(Format-GitCommandArgument -Value $Branch.branch)")
+        destructiveIfUnmerged = (-not $Branch.mergedIntoHead)
+    }
 }
 
 function Format-GitCommandArgument {
