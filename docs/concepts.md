@@ -91,6 +91,14 @@ the health file, and the status must be one of the supported health states. The
 command refreshes `updatedAt` with a UTC timestamp and stores the note when one
 is supplied.
 
+`Brevity logs recent` gives a concise operator view of recent runtime activity.
+It tails the vault `runtime-log.md` file and lists the most recent worker log
+files under `.brevity\logs` without changing either log format.
+
+`Brevity logs task <slug>` prints the latest worker log path for one task and a
+small tail of that log. If no worker log exists for the task, it reports the
+expected log folder cleanly. The command is read-only.
+
 `config.json` records:
 
 - `projectName`
@@ -668,6 +676,10 @@ Brevity is designed around these commands:
 - `Brevity board` groups Brevity task metadata by status.
 - `Brevity onboard` prepares an existing repo and AI-Vault project memory.
 - `Brevity status` reports repos, worktrees, and vault presence.
+- `Brevity logs recent` shows recent vault runtime memory and recent worker log
+  files.
+- `Brevity logs task <slug>` shows the latest worker log path and a small tail
+  for a task.
 - `Brevity task new` creates an isolated worktree and task branch.
 - `Brevity task activate` creates a task worktree from a vault task spec.
 - `Brevity task spec` prints a vault-backed task spec by slug.

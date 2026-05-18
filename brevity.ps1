@@ -766,6 +766,8 @@ function Show-Help {
     Write-Host "  .\brevity.ps1 doctor [--repair]"
     Write-Host "  .\brevity.ps1 doctor execution-policy"
     Write-Host "  .\brevity.ps1 memory note <message>"
+    Write-Host "  .\brevity.ps1 logs recent"
+    Write-Host "  .\brevity.ps1 logs task <slug>"
     Write-Host "  .\brevity.ps1 session summary [--json]"
     Write-Host "  .\brevity.ps1 status [-DevRoot <path>]"
     Write-Host "  .\brevity.ps1 provider status"
@@ -1002,6 +1004,99 @@ function Add-MemoryNote {
     Write-VaultRuntimeEvent -Type "note" -Message $Message
     $config = Read-BrevityConfig
     Write-Host "Wrote runtime memory: $(Join-Path $config.vaultPath "runtime-log.md")"
+}
+
+function Get-RecentWorkerLogs {
+    param([int]$Count = 5)
+
+    $repoRoot = Get-RepositoryRoot
+    $logsRoot = Join-Path $repoRoot ".brevity\logs"
+
+    if (-not (Test-Path -LiteralPath $logsRoot)) {
+        return @()
+    }
+
+    return @(Get-ChildItem -LiteralPath $logsRoot -Recurse -Filter "*.log" -File -ErrorAction SilentlyContinue |
+        Sort-Object LastWriteTime -Descending |
+        Select-Object -First $Count)
+}
+
+function Get-LatestTaskWorkerLog {
+    param([string]$Slug)
+
+    $repoRoot = Get-RepositoryRoot
+    $taskLogsRoot = Join-Path (Join-Path $repoRoot ".brevity\logs") $Slug
+
+    if (-not (Test-Path -LiteralPath $taskLogsRoot)) {
+        return $null
+    }
+
+    return (Get-ChildItem -LiteralPath $taskLogsRoot -Filter "*.log" -File -ErrorAction SilentlyContinue |
+        Sort-Object LastWriteTime -Descending |
+        Select-Object -First 1)
+}
+
+function Show-RecentLogs {
+    $config = Read-BrevityConfig
+    $runtimeLogPath = Join-Path $config.vaultPath "runtime-log.md"
+
+    Write-Host "Recent runtime activity"
+    Write-Host ""
+
+    Write-Section "Runtime Memory"
+    if (Test-Path -LiteralPath $runtimeLogPath) {
+        $runtimeLines = @(Get-Content -LiteralPath $runtimeLogPath -Tail 8)
+        if ($runtimeLines.Count -eq 0) {
+            Write-Host "No runtime memory entries found."
+        }
+        else {
+            $runtimeLines | ForEach-Object { Write-Host $_ }
+        }
+    }
+    else {
+        Write-Host "Runtime log not found: $runtimeLogPath" -ForegroundColor DarkYellow
+    }
+
+    Write-Host ""
+    Write-Section "Worker Logs"
+    $logs = @(Get-RecentWorkerLogs -Count 5)
+    if ($logs.Count -eq 0) {
+        Write-Host "No worker logs found."
+        return
+    }
+
+    foreach ($log in $logs) {
+        $slug = Split-Path -Leaf (Split-Path -Parent $log.FullName)
+        Write-Host "$($log.LastWriteTime.ToString("yyyy-MM-dd HH:mm:ss"))  $slug  $($log.FullName)"
+    }
+}
+
+function Show-TaskLogs {
+    param([string]$Slug)
+
+    if ([string]::IsNullOrWhiteSpace($Slug)) {
+        Write-Host "Missing task slug." -ForegroundColor Red
+        Write-Host "Usage: .\brevity.ps1 logs task <slug>"
+        exit 1
+    }
+
+    $latestLog = Get-LatestTaskWorkerLog -Slug $Slug
+
+    Write-Host "Task logs"
+    Write-Host "Slug: $Slug"
+
+    if ($null -eq $latestLog) {
+        $repoRoot = Get-RepositoryRoot
+        $taskLogsRoot = Join-Path (Join-Path $repoRoot ".brevity\logs") $Slug
+        Write-Host "Latest worker log: none"
+        Write-Host "No worker logs found under: $taskLogsRoot" -ForegroundColor DarkYellow
+        return
+    }
+
+    Write-Host "Latest worker log: $($latestLog.FullName)"
+    Write-Host ""
+    Write-Section "Tail"
+    Get-Content -LiteralPath $latestLog.FullName -Tail 20 | ForEach-Object { Write-Host $_ }
 }
 
 function Show-Board {
@@ -4291,6 +4386,49 @@ switch ($Command.ToLowerInvariant()) {
             Write-Host "Unknown brevity memory command: $Subcommand" -ForegroundColor Red
             Write-Host "Usage: .\brevity.ps1 memory note <message>"
             exit 1
+        }
+    }
+    "logs" {
+        if ([string]::IsNullOrWhiteSpace($Subcommand)) {
+            Write-Host "Missing brevity logs command." -ForegroundColor Red
+            Write-Host "Usage: .\brevity.ps1 logs recent"
+            Write-Host "Usage: .\brevity.ps1 logs task <slug>"
+            exit 1
+        }
+
+        switch ($Subcommand.ToLowerInvariant()) {
+            "recent" {
+                if ($null -ne $RemainingArgs -and $RemainingArgs.Length -gt 0) {
+                    Write-Host "Unknown argument for brevity logs recent: $($RemainingArgs[0])" -ForegroundColor Red
+                    Write-Host "Usage: .\brevity.ps1 logs recent"
+                    exit 1
+                }
+
+                Show-RecentLogs
+            }
+            "task" {
+                $taskSlug = $null
+                if ($null -ne $RemainingArgs) {
+                    foreach ($logsArg in $RemainingArgs) {
+                        if ([string]::IsNullOrWhiteSpace($taskSlug)) {
+                            $taskSlug = [string]$logsArg
+                        }
+                        else {
+                            Write-Host "Unknown argument for brevity logs task: $logsArg" -ForegroundColor Red
+                            Write-Host "Usage: .\brevity.ps1 logs task <slug>"
+                            exit 1
+                        }
+                    }
+                }
+
+                Show-TaskLogs -Slug $taskSlug
+            }
+            default {
+                Write-Host "Unknown brevity logs command: $Subcommand" -ForegroundColor Red
+                Write-Host "Usage: .\brevity.ps1 logs recent"
+                Write-Host "Usage: .\brevity.ps1 logs task <slug>"
+                exit 1
+            }
         }
     }
     "session" {
