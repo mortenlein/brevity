@@ -4,7 +4,7 @@ Brevity is a Windows-first command line scaffold for AI-assisted repository work
 It extracts the useful shape of `bootstrap-ai-system-complete-v4.ps1` into a
 small repo-owned tool:
 
-- `.system` becomes `.Brevity`
+- `.system` concepts are consolidated into repo-local `.brevity`
 - `onboard-ai-repo.ps1` becomes `Brevity onboard`
 - `new-agent-task.ps1` becomes `Brevity task new`
 - `workspace-status.ps1` becomes `Brevity status`
@@ -148,18 +148,28 @@ Brevity v0 supports:
 .\brevity.ps1 init --repair [-DevRoot <path>]
 .\brevity.ps1 plan
 .\brevity.ps1 plan backlog
+.\brevity.ps1 plan workers
 .\brevity.ps1 plan apply <file>
 .\brevity.ps1 board
+.\brevity.ps1 doctor [--repair]
+.\brevity.ps1 doctor execution-policy
+.\brevity.ps1 memory note <message>
 .\brevity.ps1 logs recent [--count <n>]
 .\brevity.ps1 logs task <slug> [--tail <n>]
+.\brevity.ps1 session summary [--json]
 .\brevity.ps1 status [-DevRoot <path>]
 .\brevity.ps1 provider status
+.\brevity.ps1 provider docs
+.\brevity.ps1 provider profiles [--profile <name>] [--json]
+.\brevity.ps1 provider reset <provider>
 .\brevity.ps1 provider set <provider> <status> [-Note <note>]
 .\brevity.ps1 task new <slug> [-DevRoot <path>]
 .\brevity.ps1 task activate <slug>
 .\brevity.ps1 task spec <slug>
 .\brevity.ps1 task start <slug>
-.\brevity.ps1 task run <slug> [--execute] [--profile <name>]
+.\brevity.ps1 task run <slug> [--execute] [--profile <name>] [--smoke] [--force-provider]
+.\brevity.ps1 task context refresh <slug>
+.\brevity.ps1 task context status <slug>
 .\brevity.ps1 task status
 .\brevity.ps1 task merge <slug>
 .\brevity.ps1 task cleanup <slug> [--force]
@@ -216,7 +226,7 @@ recomputes `vaultPath` as
 `<dev-root>\vaults\AI-Vault\10-Projects\<project-name>`, and recomputes
 `worktreesRoot` as `<dev-root>\worktrees\active`. It creates `config.json` if
 missing, updates only the known Brevity fields when they are wrong, and preserves
-unknown or custom fields. It also creates the same missing `.Brevity` files,
+unknown or custom fields. It also creates the same missing `.brevity` files,
 folders, and AI-Vault project memory paths as normal init. Existing vault
 memory files are not overwritten. Repair also adds missing Codex run settings
 without removing custom config fields.
@@ -508,8 +518,8 @@ Use `--execute` to run the generated command:
 .\brevity.ps1 task run <slug> --execute
 ```
 
-Brevity does not implement metrics or other AI providers yet. Setting another
-provider returns a clear unsupported-provider error.
+Brevity does not implement metrics yet. Unsupported worker providers return a
+clear unsupported-provider error.
 
 The task status command reads:
 
@@ -636,11 +646,13 @@ repository's `.brevity\config.json`, set the `env` property under `gemini`:
 
 ```json
 {
-  "codex": {
-    "provider": "gemini",
-    "command": "gemini",
-    "env": {
-      "GEMINI_API_KEY": "$env:GEMINI_API_KEY"
+  "defaultProvider": "gemini",
+  "providers": {
+    "gemini": {
+      "command": "gemini",
+      "env": {
+        "GEMINI_API_KEY": "$env:GEMINI_API_KEY"
+      }
     }
   }
 }
@@ -703,8 +715,8 @@ These commands are part of Brevity's public design, but are not implemented in v
 Brevity onboard
 ```
 
-`Brevity status` is the successor to the bootstrap script's
-`.system\scripts\workspace-status.ps1`.
+`Brevity status` is the current workspace inspection command for repos,
+worktrees, and vault presence.
 
 ## Workspace Layout
 
@@ -739,6 +751,6 @@ Brevity keeps orchestration separate from project source:
 - No web app.
 - No planner automation in v0.
 - Planner prompt generation is manual and does not create worktrees.
-- Codex is the only configured worker provider in v0.
+- Codex, Gemini, and Copilot worker profiles are configured in v0.
 - Markdown remains the durable memory layer.
 - Git remains the source of truth for code.

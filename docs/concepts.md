@@ -7,14 +7,15 @@ while moving from many generated helper scripts to one CLI entry point.
 ## From Bootstrap Script To Brevity
 
 The bootstrap script created a full workspace and wrote helper scripts under
-`.system`. Brevity keeps the same operating model, but renames and consolidates it:
+`.system`. Brevity keeps the same operating model, but consolidates repo-local
+runtime state under `.brevity`:
 
 | Bootstrap concept | Brevity concept |
 | --- | --- |
-| `.system` | `.Brevity` |
-| `.system\scripts\onboard-ai-repo.ps1` | `Brevity onboard` |
-| `.system\scripts\new-agent-task.ps1` | `Brevity task new` |
-| `.system\scripts\workspace-status.ps1` | `Brevity status` |
+| `.system` | `.brevity` |
+| bootstrap onboard helper | `Brevity onboard` |
+| bootstrap task helper | `Brevity task new` |
+| bootstrap status helper | `Brevity status` |
 | AI-Vault | AI-Vault remains supported |
 | `worktrees\active`, `paused`, `completed` | first-class Brevity task state |
 
@@ -35,9 +36,9 @@ vaults, scratch files, and Brevity orchestration state.
 Brevity commands should accept an explicit `-DevRoot` when useful and otherwise
 default to `C:\dev`.
 
-## .Brevity
+## .brevity
 
-`.Brevity` is the orchestration area. It replaces `.system` from the bootstrap
+`.brevity` is the orchestration area. It replaces `.system` from the bootstrap
 script. `Brevity init` creates it in the current Git repository and adds:
 
 - `tasks.json`
@@ -108,7 +109,8 @@ folder cleanly. The command is read-only.
 - `devRoot`
 - `vaultPath`
 - `worktreesRoot`
-- `codex`
+- `defaultProvider`
+- `providers`
 
 For new configs, `worktreesRoot` points at:
 
@@ -120,29 +122,44 @@ New configs also include worker run settings:
 
 ```json
 {
-  "codex": {
-    "provider": "codex",
-    "command": "codex",
-    "mode": "exec",
-    "sandbox": "workspace-write",
-    "model": null,
-    "profile": null,
-    "executionPolicy": "Bypass",
-    "autoExecute": false
+  "defaultProvider": "gemini",
+  "providers": {
+    "codex": {
+      "command": "codex",
+      "mode": "exec",
+      "sandbox": "workspace-write",
+      "model": null,
+      "profile": null,
+      "executionPolicy": "Bypass",
+      "autoExecute": false
+    },
+    "gemini": {
+      "command": "gemini",
+      "model": "gemini-3-flash-preview",
+      "approvalMode": "yolo",
+      "skipTrust": true,
+      "env": {
+        "GEMINI_API_KEY": "GEMINI_API_KEY"
+      }
+    },
+    "copilot": {
+      "command": "copilot",
+      "allowAllTools": true,
+      "allowAllPaths": true,
+      "noAskUser": true
+    }
   }
 }
 ```
 
 Existing files are left unchanged by normal init.
 
-Set `codex.provider` to `gemini` to run Gemini CLI instead of Codex. Brevity keeps
-the existing config object name for compatibility. With Gemini, Brevity passes the
-task prompt text with `-p`, passes `-m <model>` when configured, and passes `-s`
-when sandbox is not blank or `none`. Set `providers.gemini.skipTrust` to `true`
-to pass `--approval-mode yolo`. Set `providers.gemini.env` to an object of
-environment variables, such as `GOOGLE_API_KEY`, when Gemini authentication
-should be scoped to the worker process. Dry runs print configured variable names
-but mask values.
+Set `defaultProvider` or pass `--profile <name>` to select a worker provider.
+With Gemini, Brevity passes the task prompt text with `-p` and passes
+`-m <model>` when configured. Set `providers.gemini.skipTrust` to `true` to pass
+`--approval-mode yolo`. Set `providers.gemini.env` to an object of environment
+variables, such as `GEMINI_API_KEY`, when Gemini authentication should be scoped
+to the worker process. Dry runs print configured variable names but mask values.
 
 `Brevity init --repair [-DevRoot <path>]` is the corrective init mode. It
 re-detects `projectName` from the Git repository root folder and recomputes:
@@ -152,7 +169,7 @@ re-detects `projectName` from the Git repository root folder and recomputes:
 
 If `.brevity\config.json` is missing, repair mode creates it. If it exists, repair
 mode updates the known Brevity fields only when they are wrong and preserves
-unknown or custom fields. It also creates the same missing `.Brevity` files,
+unknown or custom fields. It also creates the same missing `.brevity` files,
 folders, and vault project memory paths as normal init. Existing vault memory
 files are not overwritten. Repair also adds missing Codex run settings without
 removing custom config fields.
@@ -399,7 +416,7 @@ worktree from selected project memory files. The prompt keeps the worker bounded
 by including the task slug, embedded spec contents, local context guidance,
 constraints, acceptance checks, and stop-after-summary instructions.
 
-`Brevity task run <slug> [--execute] [--profile <name>]` reads the same metadata file and finds the matching task
+`Brevity task run <slug> [--execute] [--profile <name>] [--smoke] [--force-provider]` reads the same metadata file and finds the matching task
 record. It prints:
 
 - task slug
@@ -434,8 +451,8 @@ blank to omit `-s`. Set `skipTrust` to `true` to include
 command. The default `Bypass` value is scoped to the child process and does not
 change the user's machine policy. By default, Brevity prints the command only.
 With `--execute`, Brevity runs the generated command. It does not update task
-status, record metrics, run planner automation, or support other AI providers
-yet. Setting another provider returns a clear unsupported-provider error.
+status, record metrics, or run planner automation. Unsupported worker providers
+return a clear unsupported-provider error.
 
 Before a worker handoff, Brevity materializes only selected durable project
 memory files into the task worktree at `.brevity\context\`: `project.md`,
@@ -654,8 +671,8 @@ on how to proceed.
     ```
 
 3.  **Provider Switching:** If a provider is completely down or exhausted,
-    switching the `defaultProvider` in `.brevity\config.json` to a different
-    provider (e.g., from `gemini` to `codex`) can unblock work.
+    selecting a different worker profile, such as moving from a Gemini profile
+    to `codex-balanced`, can unblock work.
 
 Automatic retry and profile switching are planned for future versions of Brevity.
 In v0, these actions must be performed manually by the operator.
@@ -731,5 +748,4 @@ Brevity is designed around these commands:
 Brevity v0 provides the CLI scaffold, repository initialization, planner prompt
 generation, workspace status, task creation, task status start instructions,
 headless task run instructions, task reporting, task merge, and task cleanup.
-Planner automation, metrics, and other AI providers are deliberately out of
-scope.
+Planner automation and metrics are deliberately out of scope.
