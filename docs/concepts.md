@@ -553,6 +553,14 @@ removal. Brevity removes the task record when branch removal succeeds or the
 branch is already missing. If branch removal fails for another reason, the
 metadata stays in place so the task can be inspected or retried explicitly.
 
+`Brevity task cleanup-orphans --dry-run` reports registered task-like worktrees
+under the active worktree root that are missing from `.brevity\tasks.json`.
+`Brevity task cleanup-orphans --execute` is the explicit mutating form. Before
+each removal, Brevity re-checks that the worktree is still registered, still
+under the active worktree root, still on a `task/*` branch, and still missing
+matching task metadata. It skips uncertain candidates and only deletes a branch
+after the worktree removal succeeds and the branch still exists as `task/*`.
+
 `Brevity task merge <slug>` reads the same metadata file, finds the matching task
 record, and merges the recorded branch into the current Git branch with
 `git merge <branch>`. When the merge succeeds, Brevity updates the task status to

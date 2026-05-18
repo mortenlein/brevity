@@ -966,6 +966,7 @@ function Show-Help {
     Write-Host "  .\brevity.ps1 task merge <slug>"
     Write-Host "  .\brevity.ps1 task cleanup <slug> [--force]"
     Write-Host "  .\brevity.ps1 task cleanup-orphans --dry-run"
+    Write-Host "  .\brevity.ps1 task cleanup-orphans --execute"
     Write-Host ""
     Write-Host "Planned commands:"
     Write-Host "  brevity onboard"
@@ -3238,13 +3239,149 @@ function Format-GitCommandArgument {
     return $Value
 }
 
-function Show-OrphanCleanupDryRun {
-    param([bool]$DryRun = $false)
+function Test-OrphanCleanupCandidateCurrent {
+    param(
+        [object]$Candidate,
+        [string]$ActiveWorktreesRoot,
+        [string]$MainWorktreeRoot
+    )
+
+    $candidatePath = ConvertTo-DoctorComparablePath -Path $Candidate.path
+    $candidateBranch = [string]$Candidate.branch
+    $mainWorktreePath = ConvertTo-DoctorComparablePath -Path $MainWorktreeRoot
+
+    if ([string]::IsNullOrWhiteSpace($candidatePath)) {
+        return [pscustomobject]@{ valid = $false; reason = "missing candidate path"; record = $null }
+    }
+
+    if (-not [string]::IsNullOrWhiteSpace($mainWorktreePath) -and $candidatePath -eq $mainWorktreePath) {
+        return [pscustomobject]@{ valid = $false; reason = "candidate is the main worktree"; record = $null }
+    }
+
+    if ([string]::IsNullOrWhiteSpace($candidateBranch) -or -not $candidateBranch.StartsWith("task/")) {
+        return [pscustomobject]@{ valid = $false; reason = "candidate branch is not task/*"; record = $null }
+    }
+
+    $currentRecords = @(Get-GitWorktreeRecords)
+    $currentRuntimeTasks = @(Read-BrevityTasks | ForEach-Object { Get-TaskRuntimeInfo -Task $_ })
+    $currentOrphans = @(Get-OrphanedTaskWorktreeRecords -RuntimeTasks $currentRuntimeTasks -WorktreeRecords $currentRecords -ActiveWorktreesRoot $ActiveWorktreesRoot)
+    $currentCandidate = $currentOrphans | Where-Object {
+        (ConvertTo-DoctorComparablePath -Path $_.path) -eq $candidatePath -and [string]$_.branch -eq $candidateBranch
+    } | Select-Object -First 1
+
+    if ($null -eq $currentCandidate) {
+        return [pscustomobject]@{ valid = $false; reason = "candidate is no longer an orphaned task worktree"; record = $null }
+    }
+
+    return [pscustomobject]@{ valid = $true; reason = ""; record = $currentCandidate }
+}
+
+function Invoke-OrphanCleanupExecute {
+    $repoRoot = Get-RepositoryRoot
+    $mainWorktreeRoot = Get-MainRepositoryRoot
+    $config = Read-BrevityConfig
+    $runtimeTasks = @(Read-BrevityTasks | ForEach-Object { Get-TaskRuntimeInfo -Task $_ })
+    $worktreeRecords = @(Get-GitWorktreeRecords)
+    $orphanedWorktrees = @(Get-OrphanedTaskWorktreeRecords -RuntimeTasks $runtimeTasks -WorktreeRecords $worktreeRecords -ActiveWorktreesRoot $config.worktreesRoot)
+
+    Write-Host "Brevity orphan cleanup execute"
+    Write-Host "Repo: $repoRoot"
+    Write-Host "Active worktree root: $($config.worktreesRoot)"
+    Write-Host "Candidates: $($orphanedWorktrees.Count)"
+
+    if ($orphanedWorktrees.Count -eq 0) {
+        Write-Host "No orphaned task-like worktrees found."
+        return
+    }
+
+    $removedWorktrees = @()
+    $removedBranches = @()
+    $skippedCandidates = @()
+    $failedCandidates = @()
+
+    foreach ($worktree in $orphanedWorktrees) {
+        Write-Host ""
+        Write-Host "Candidate: $($worktree.branch) -> $($worktree.path)"
+        $currentCheck = Test-OrphanCleanupCandidateCurrent -Candidate $worktree -ActiveWorktreesRoot $config.worktreesRoot -MainWorktreeRoot $mainWorktreeRoot
+
+        if (-not $currentCheck.valid) {
+            Write-Host "Skip: $($currentCheck.reason)" -ForegroundColor Yellow
+            $skippedCandidates += $worktree
+            continue
+        }
+
+        Write-Host "Removing worktree: $($worktree.path)"
+        $removeOutput = @(git worktree remove $worktree.path 2>&1)
+        if ($LASTEXITCODE -ne 0) {
+            Write-Host "Failed to remove worktree. Branch was not deleted." -ForegroundColor Red
+            $removeOutput | ForEach-Object { Write-Host $_ }
+            $failedCandidates += $worktree
+            continue
+        }
+
+        $removedWorktrees += $worktree.path
+        Write-Host "Removed worktree."
+
+        $branch = [string]$worktree.branch
+        if ([string]::IsNullOrWhiteSpace($branch) -or -not $branch.StartsWith("task/")) {
+            Write-Host "Skip branch deletion: branch is not task/*." -ForegroundColor Yellow
+            continue
+        }
+
+        if (-not (Test-GitBranchExists -Branch $branch)) {
+            Write-Host "Branch already absent: $branch"
+            continue
+        }
+
+        Write-Host "Deleting branch: $branch"
+        $branchOutput = @(git branch -D $branch 2>&1)
+        if ($LASTEXITCODE -ne 0) {
+            Write-Host "Failed to delete branch." -ForegroundColor Red
+            $branchOutput | ForEach-Object { Write-Host $_ }
+            $failedCandidates += $worktree
+            continue
+        }
+
+        $removedBranches += $branch
+        Write-Host "Deleted branch."
+    }
+
+    Write-Host ""
+    Write-Host "Orphan cleanup complete."
+    Write-Host "Worktrees removed: $($removedWorktrees.Count)"
+    Write-Host "Branches deleted: $($removedBranches.Count)"
+    Write-Host "Skipped: $($skippedCandidates.Count)"
+    Write-Host "Failed: $($failedCandidates.Count)"
+
+    if ($failedCandidates.Count -gt 0) {
+        exit 1
+    }
+}
+
+function Invoke-OrphanCleanup {
+    param(
+        [bool]$DryRun = $false,
+        [bool]$Execute = $false
+    )
+
+    if ($DryRun -and $Execute) {
+        Write-Host "Refusing to combine --dry-run and --execute." -ForegroundColor Yellow
+        Write-Host "Run exactly one of:"
+        Write-Host "  .\brevity.ps1 task cleanup-orphans --dry-run"
+        Write-Host "  .\brevity.ps1 task cleanup-orphans --execute"
+        exit 1
+    }
+
+    if ($Execute) {
+        Invoke-OrphanCleanupExecute
+        return
+    }
 
     if (-not $DryRun) {
-        Write-Host "Refusing to clean orphaned task worktrees without --dry-run." -ForegroundColor Yellow
-        Write-Host "This command is read-only in Brevity v0. Run:"
+        Write-Host "Refusing to clean orphaned task worktrees without --dry-run or --execute." -ForegroundColor Yellow
+        Write-Host "Run exactly one of:"
         Write-Host "  .\brevity.ps1 task cleanup-orphans --dry-run"
+        Write-Host "  .\brevity.ps1 task cleanup-orphans --execute"
         exit 1
     }
 
@@ -5934,20 +6071,24 @@ switch ($Command.ToLowerInvariant()) {
             }
             "cleanup-orphans" {
                 $dryRunCleanup = $false
+                $executeCleanup = $false
                 if ($null -ne $RemainingArgs) {
                     foreach ($taskArg in $RemainingArgs) {
                         if ($taskArg -eq "--dry-run") {
                             $dryRunCleanup = $true
                         }
+                        elseif ($taskArg -eq "--execute") {
+                            $executeCleanup = $true
+                        }
                         else {
                             Write-Host "Unknown argument for brevity task cleanup-orphans: $taskArg" -ForegroundColor Red
-                            Write-Host "Usage: .\brevity.ps1 task cleanup-orphans --dry-run"
+                            Write-Host "Usage: .\brevity.ps1 task cleanup-orphans (--dry-run | --execute)"
                             exit 1
                         }
                     }
                 }
 
-                Show-OrphanCleanupDryRun -DryRun $dryRunCleanup
+                Invoke-OrphanCleanup -DryRun $dryRunCleanup -Execute $executeCleanup
             }
             default {
                 Write-Host "Unknown brevity task command: $Subcommand" -ForegroundColor Red

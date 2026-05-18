@@ -624,6 +624,26 @@ When branch removal succeeds, or the branch is already missing, Brevity removes 
 task metadata record. If branch removal fails for another reason, Brevity keeps the
 metadata unchanged.
 
+Orphan cleanup is separate from normal task cleanup. It only considers registered
+Git worktrees under the active worktree root, on `task/*` branches, with no
+matching `.brevity\tasks.json` metadata. `--dry-run` reports the candidates
+without changing anything:
+
+```powershell
+.\brevity.ps1 task cleanup-orphans --dry-run
+```
+
+To remove those orphaned task worktrees and then delete their `task/*` branches,
+run the explicit execute form:
+
+```powershell
+.\brevity.ps1 task cleanup-orphans --execute
+```
+
+Brevity re-checks each candidate immediately before removal and skips anything
+that is no longer registered, no longer under the active worktree root, no longer
+on a `task/*` branch, or now has task metadata.
+
 ## Workspace Lifecycle Hygiene
 
 Brevity promotes a high-velocity, high-hygiene lifecycle for AI-assisted work.
