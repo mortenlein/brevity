@@ -5292,8 +5292,7 @@ function Show-TaskRun {
                 New-Item -ItemType Directory -Path $taskLogsRoot -Force | Out-Null
             }
 
-            $timestamp = Get-Date -Format "yyyyMMdd-HHmmss"
-            $logPath = Join-Path $taskLogsRoot "$timestamp.log"
+            $logPath = Join-Path $taskLogsRoot "$runId.log"
 
             $logLines = @(
                 "Task: $Slug"
