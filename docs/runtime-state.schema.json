@@ -1,0 +1,148 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "brevity.runtime-state.v1",
+  "title": "Brevity Runtime State v1",
+  "description": "Lightweight machine-readable contract for .\\brevity.ps1 runtime state --json. The v1 contract is intended to evolve additively; consumers should tolerate unknown fields.",
+  "type": "object",
+  "required": [
+    "schema",
+    "repoRoot",
+    "generatedAt",
+    "providers",
+    "taskCounts",
+    "tasks",
+    "groups",
+    "orphanedTaskWorktrees",
+    "lock",
+    "activeWorktreeCount",
+    "activeWorktrees",
+    "runtimeMemory",
+    "suggestedNextActions"
+  ],
+  "additionalProperties": true,
+  "properties": {
+    "schema": {
+      "description": "Runtime state contract identifier.",
+      "const": "brevity.runtime-state.v1"
+    },
+    "repoRoot": {
+      "description": "Repository root that produced this snapshot.",
+      "type": "string"
+    },
+    "generatedAt": {
+      "description": "Snapshot generation timestamp.",
+      "type": "string"
+    },
+    "providers": {
+      "description": "Provider health summary and per-provider health records.",
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "summary": {
+          "type": "object",
+          "additionalProperties": true,
+          "properties": {
+            "total": { "type": "integer" },
+            "degraded": { "type": "integer" },
+            "unavailable": { "type": "integer" }
+          }
+        },
+        "health": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        }
+      }
+    },
+    "taskCounts": {
+      "description": "Aggregate task counts by runtime classification.",
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "tracked": { "type": "integer" },
+        "runnable": { "type": "integer" },
+        "blocked": { "type": "integer" },
+        "stale": { "type": "integer" },
+        "providerGated": { "type": "integer" },
+        "review": { "type": "integer" }
+      }
+    },
+    "tasks": {
+      "description": "Runtime task summaries from .brevity\\tasks.json.",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": true
+      }
+    },
+    "groups": {
+      "description": "Task slug lists grouped by runtime classification.",
+      "type": "object",
+      "additionalProperties": {
+        "type": "array",
+        "items": { "type": "string" }
+      }
+    },
+    "orphanedTaskWorktrees": {
+      "description": "Task-like active worktrees not tracked in runtime task metadata.",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": true,
+        "properties": {
+          "path": { "type": "string" },
+          "branch": { "type": "string" }
+        }
+      }
+    },
+    "lock": {
+      "description": "Task metadata lock status.",
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "exists": { "type": "boolean" },
+        "path": { "type": "string" },
+        "ageMinutes": {
+          "type": [ "number", "null" ]
+        }
+      }
+    },
+    "activeWorktreeCount": {
+      "description": "Number of active Git worktrees seen by the runtime snapshot.",
+      "type": "integer"
+    },
+    "activeWorktrees": {
+      "description": "Active Git worktrees and branches.",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": true,
+        "properties": {
+          "path": { "type": "string" },
+          "branch": { "type": "string" }
+        }
+      }
+    },
+    "runtimeMemory": {
+      "description": "Runtime log metadata and recent runtime-memory entries.",
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "path": { "type": "string" },
+        "exists": { "type": "boolean" },
+        "recentCount": { "type": "integer" },
+        "recentEntries": {
+          "type": "array",
+          "items": { "type": "string" }
+        }
+      }
+    },
+    "suggestedNextActions": {
+      "description": "Suggested operator actions derived from the current snapshot.",
+      "type": "array",
+      "items": { "type": "string" }
+    }
+  }
+}
