@@ -157,6 +157,7 @@ Brevity v0 supports:
 .\brevity.ps1 logs recent [--count <n>]
 .\brevity.ps1 logs task <slug> [--tail <n>]
 .\brevity.ps1 session summary [--json]
+.\brevity.ps1 runtime state [--json]
 .\brevity.ps1 status [-DevRoot <path>]
 .\brevity.ps1 provider status
 .\brevity.ps1 provider docs
@@ -175,6 +176,33 @@ Brevity v0 supports:
 .\brevity.ps1 task merge <slug>
 .\brevity.ps1 task cleanup <slug> [--force]
 ```
+
+## Runtime State Contract
+
+`.\brevity.ps1 runtime state --json` prints the machine-readable runtime state
+snapshot for the current repository. It is intended for future TUI and
+automation consumers that need read-only orchestration state without scraping the
+human dashboard.
+
+The JSON includes `schema`, currently `brevity.runtime-state.v1`. Consumers
+should check this value before depending on the shape. The v1 contract should
+evolve additively where practical: new fields may be added, but existing fields
+should not be removed or renamed casually. If Brevity needs a breaking contract,
+it should publish a new schema such as `brevity.runtime-state.v2`.
+
+Major sections include:
+
+- `providers` - provider health summary and per-provider health records.
+- `taskCounts` - aggregate counts for tracked, runnable, blocked, stale,
+  provider-gated, and review tasks.
+- `tasks` - sorted task summaries from `.brevity\tasks.json`.
+- `groups` - task slug lists grouped by runtime classification.
+- `orphanedTaskWorktrees` - task-like active worktrees not tracked in runtime
+  task metadata.
+- `lock` - task metadata lock presence, path, and age in minutes.
+- `runtimeMemory` - runtime log path, existence, recent entry count, and recent
+  entries.
+- `suggestedNextActions` - operator guidance derived from the current snapshot.
 
 The init command prepares the current Git repository for Brevity. It creates
 repo-local Brevity state when missing:

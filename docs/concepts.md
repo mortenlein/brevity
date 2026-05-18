@@ -103,6 +103,34 @@ small tail of that log. Use `--tail <n>` to control the number of worker-log
 lines shown. If no worker log exists for the task, it reports the expected log
 folder cleanly. The command is read-only.
 
+### Runtime State JSON
+
+`Brevity runtime state --json` emits the read-only runtime inspection contract
+for future TUI and automation consumers. The human dashboard may change for
+operator readability, but JSON consumers should target the machine contract
+instead of parsing console text.
+
+The top-level `schema` field identifies the contract version. The current value
+is `brevity.runtime-state.v1`. Contract evolution should be additive whenever
+possible: consumers should tolerate unknown fields, and Brevity should avoid
+removing or renaming existing fields within v1 unless there is a deliberate
+schema break. Breaking changes should move to a new schema value, for example
+`brevity.runtime-state.v2`.
+
+The v1 snapshot includes these major sections:
+
+- `providers` - provider health totals and per-provider health records.
+- `taskCounts` - tracked, runnable, blocked, stale, provider-gated, and review
+  task counts.
+- `tasks` - runtime task summaries sorted by slug.
+- `groups` - runtime task slug groups such as runnable, blocked, stale,
+  provider-gated, and review.
+- `orphanedTaskWorktrees` - active task-like worktrees missing from
+  `.brevity\tasks.json`.
+- `lock` - task metadata lock status, lock path, and lock age in minutes.
+- `runtimeMemory` - runtime log metadata plus recent runtime-memory entries.
+- `suggestedNextActions` - suggested operator actions based on the snapshot.
+
 `config.json` records:
 
 - `projectName`
