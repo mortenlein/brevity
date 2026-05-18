@@ -2590,6 +2590,7 @@ function Get-SessionSummaryData {
     $providerGatedTasks = @($runtimeTasks | Where-Object { $_.provider.gated })
     $blockedTasks = @($runtimeTasks | Where-Object { $_.runtime.stale -or $_.provider.gated })
     $worktreeRecords = @(Get-GitWorktreeRecords)
+    $orphanedTaskWorktrees = @(Get-OrphanedTaskWorktreeRecords -RuntimeTasks $runtimeTasks -WorktreeRecords $worktreeRecords)
     $tasksPath = Join-Path $repoRoot ".brevity\tasks.json"
     $lockInfo = Get-TaskMetadataLockInfo -TasksPath $tasksPath
     $config = Read-BrevityConfig
@@ -2606,6 +2607,12 @@ function Get-SessionSummaryData {
     elseif ($staleTasks.Count -gt 0) {
         $suggestedNextActions = @("Run .\brevity.ps1 doctor to inspect stale task metadata.")
     }
+    elseif ($runtimeTasks.Count -eq 0 -and $worktreeRecords.Count -gt 0) {
+        $suggestedNextActions = @(Get-OrphanedWorktreeGuidance -TrackedTaskCount $runtimeTasks.Count -RegisteredWorktreeCount $worktreeRecords.Count -OrphanedTaskWorktreeCount $orphanedTaskWorktrees.Count)
+    }
+    elseif ($orphanedTaskWorktrees.Count -gt 0) {
+        $suggestedNextActions = @(Get-OrphanedWorktreeGuidance -TrackedTaskCount $runtimeTasks.Count -RegisteredWorktreeCount $worktreeRecords.Count -OrphanedTaskWorktreeCount $orphanedTaskWorktrees.Count)
+    }
     elseif ($providerGatedTasks.Count -gt 0 -or $providerSummary.degraded -gt 0 -or $providerSummary.unavailable -gt 0) {
         $suggestedNextActions = @("Run .\brevity.ps1 provider status and choose a healthy worker profile before launching more work.")
     }
@@ -2620,6 +2627,7 @@ function Get-SessionSummaryData {
         providers = $providerSummary
         taskCounts = $taskCounts
         activeWorktrees = $worktreeRecords
+        orphanedTaskWorktrees = $orphanedTaskWorktrees
         lock = $lockInfo
         recentRuntimeMemory = $recentRuntimeMemory
         runtimeLogPath = $runtimeLogPath
@@ -2634,7 +2642,7 @@ function Show-SessionSummary {
     $summary = Get-SessionSummaryData
 
     if ($Json) {
-        $summary | Select-Object providers, taskCounts, activeWorktrees, lock, recentRuntimeMemory, suggestedNextActions | ConvertTo-Json -Depth 10
+        $summary | Select-Object providers, taskCounts, activeWorktrees, orphanedTaskWorktrees, lock, recentRuntimeMemory, suggestedNextActions | ConvertTo-Json -Depth 10
     }
     else {
         Write-Host "Brevity session summary"
@@ -2642,6 +2650,12 @@ function Show-SessionSummary {
         Write-Host "Providers: $($summary.providers.total) total, $($summary.providers.degraded) degraded, $($summary.providers.unavailable) unavailable"
         Write-Host "Tasks: $($summary.taskCounts.tracked) tracked, $($summary.taskCounts.runnable) runnable, $($summary.taskCounts.stale) stale, $($summary.taskCounts.providerGated) provider-gated, $($summary.taskCounts.blocked) blocked"
         Write-Host "Active worktrees: $($summary.activeWorktrees.Count) registered"
+        if ($summary.taskCounts.tracked -eq 0 -and $summary.activeWorktrees.Count -gt 0) {
+            Write-Host "Worktree guidance: registered worktrees exist, but no Brevity tasks are tracked." -ForegroundColor Yellow
+        }
+        if ($summary.orphanedTaskWorktrees.Count -gt 0) {
+            Write-Host "Orphaned task worktrees: $($summary.orphanedTaskWorktrees.Count) task-like worktree(s) are not tracked in .brevity\tasks.json" -ForegroundColor Yellow
+        }
         if ($summary.lock.exists) {
             if ($null -ne $summary.lock.ageMinutes) {
                 Write-Host ("Task metadata lock: present ({0:N1} minutes)" -f $summary.lock.ageMinutes)
@@ -2666,7 +2680,6 @@ function Show-SessionSummary {
         $summary.suggestedNextActions | ForEach-Object { Write-Host $_ }
     }
 
-    Write-VaultRuntimeEvent -Type "session-summary" -Message $summary.runtimeEventMessage
 }
 
 function Get-GitTaskBranches {
@@ -2739,6 +2752,43 @@ function Get-GitWorktreeRecords {
     return @($records)
 }
 
+function Get-OrphanedTaskWorktreeRecords {
+    param(
+        [object[]]$RuntimeTasks,
+        [object[]]$WorktreeRecords
+    )
+
+    $metadataWorktrees = @($RuntimeTasks | ForEach-Object { ConvertTo-DoctorComparablePath -Path $_.worktree.path } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+
+    return @($WorktreeRecords | Where-Object {
+        $record = $_
+        $recordPath = ConvertTo-DoctorComparablePath -Path $record.path
+        (-not [string]::IsNullOrWhiteSpace($record.branch)) -and $record.branch.StartsWith("task/") -and ($metadataWorktrees -notcontains $recordPath)
+    })
+}
+
+function Get-OrphanedWorktreeGuidance {
+    param(
+        [int]$TrackedTaskCount,
+        [int]$RegisteredWorktreeCount,
+        [int]$OrphanedTaskWorktreeCount
+    )
+
+    if ($RegisteredWorktreeCount -eq 0) {
+        return @()
+    }
+
+    if ($TrackedTaskCount -eq 0 -or $OrphanedTaskWorktreeCount -gt 0) {
+        return @(
+            "Run .\brevity.ps1 doctor to inspect orphaned task worktrees.",
+            "Inspect Git registrations with git worktree list.",
+            "Clean up only known Brevity task worktrees manually; future cleanup automation should stay explicit."
+        )
+    }
+
+    return @()
+}
+
 function ConvertTo-DoctorComparablePath {
     param([string]$Path)
 
@@ -2801,17 +2851,12 @@ function Show-DoctorReport {
     $tasks = @(Read-BrevityTasks)
     $runtimeTasks = @($tasks | ForEach-Object { Get-TaskRuntimeInfo -Task $_ })
     $metadataBranches = @($runtimeTasks | ForEach-Object { $_.branch } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
-    $metadataWorktrees = @($runtimeTasks | ForEach-Object { ConvertTo-DoctorComparablePath -Path $_.worktree.path } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
     $taskBranches = @(Get-GitTaskBranches)
     $mergedBranches = @(Get-MergedTaskBranches)
     $worktreeRecords = @(Get-GitWorktreeRecords)
 
     $orphanedBranches = @($taskBranches | Where-Object { $metadataBranches -notcontains $_ })
-    $orphanedWorktrees = @($worktreeRecords | Where-Object {
-        $record = $_
-        $recordPath = ConvertTo-DoctorComparablePath -Path $record.path
-        (-not [string]::IsNullOrWhiteSpace($record.branch)) -and $record.branch.StartsWith("task/") -and ($metadataWorktrees -notcontains $recordPath)
-    })
+    $orphanedWorktrees = @(Get-OrphanedTaskWorktreeRecords -RuntimeTasks $runtimeTasks -WorktreeRecords $worktreeRecords)
     $mergedTaskBranches = @($mergedBranches | Where-Object { $metadataBranches -contains $_ })
     $staleTasks = @($runtimeTasks | Where-Object { $_.runtime.stale })
     $missingWorktreeTasks = @($runtimeTasks | Where-Object { $_.runtime.missingWorktree })
@@ -2823,6 +2868,9 @@ function Show-DoctorReport {
     Write-Host "Tasks: $($runtimeTasks.Count) tracked, $($staleTasks.Count) stale"
     Write-Host "Branches: $($taskBranches.Count) task branches, $($orphanedBranches.Count) orphaned, $($mergedTaskBranches.Count) merged tracked"
     Write-Host "Worktrees: $($worktreeRecords.Count) registered, $($orphanedWorktrees.Count) orphaned task worktrees"
+    if ($runtimeTasks.Count -eq 0 -and $worktreeRecords.Count -gt 0) {
+        Write-Host "Guidance: registered worktrees exist, but no Brevity tasks are tracked." -ForegroundColor Yellow
+    }
 
     Write-Section "Stale task metadata"
     if ($staleTasks.Count -eq 0) {
@@ -2870,6 +2918,13 @@ function Show-DoctorReport {
     }
     else {
         $orphanedWorktrees | ForEach-Object { Write-Host "$($_.branch): $($_.path)" }
+    }
+
+    $orphanedWorktreeGuidance = @(Get-OrphanedWorktreeGuidance -TrackedTaskCount $runtimeTasks.Count -RegisteredWorktreeCount $worktreeRecords.Count -OrphanedTaskWorktreeCount $orphanedWorktrees.Count)
+    if ($orphanedWorktreeGuidance.Count -gt 0) {
+        Write-Section "Worktree cleanup guidance"
+        $orphanedWorktreeGuidance | ForEach-Object { Write-Host $_ }
+        Write-Host "Doctor does not remove worktrees automatically."
     }
 
     Write-Section "Merged task branches"
