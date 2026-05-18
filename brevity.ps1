@@ -858,6 +858,7 @@ function Show-Help {
     Write-Host "  .\brevity.ps1 task status"
     Write-Host "  .\brevity.ps1 task merge <slug>"
     Write-Host "  .\brevity.ps1 task cleanup <slug> [--force]"
+    Write-Host "  .\brevity.ps1 task cleanup-orphans --dry-run"
     Write-Host ""
     Write-Host "Planned commands:"
     Write-Host "  brevity onboard"
@@ -2755,16 +2756,82 @@ function Get-GitWorktreeRecords {
 function Get-OrphanedTaskWorktreeRecords {
     param(
         [object[]]$RuntimeTasks,
-        [object[]]$WorktreeRecords
+        [object[]]$WorktreeRecords,
+        [string]$ActiveWorktreesRoot = ""
     )
 
     $metadataWorktrees = @($RuntimeTasks | ForEach-Object { ConvertTo-DoctorComparablePath -Path $_.worktree.path } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+    $activeRoot = ConvertTo-DoctorComparablePath -Path $ActiveWorktreesRoot
 
     return @($WorktreeRecords | Where-Object {
         $record = $_
         $recordPath = ConvertTo-DoctorComparablePath -Path $record.path
-        (-not [string]::IsNullOrWhiteSpace($record.branch)) -and $record.branch.StartsWith("task/") -and ($metadataWorktrees -notcontains $recordPath)
+        $underActiveRoot = $true
+        if (-not [string]::IsNullOrWhiteSpace($activeRoot)) {
+            $underActiveRoot = ($recordPath -eq $activeRoot -or $recordPath.StartsWith("$activeRoot\"))
+        }
+
+        $underActiveRoot -and (-not [string]::IsNullOrWhiteSpace($record.branch)) -and $record.branch.StartsWith("task/") -and ($metadataWorktrees -notcontains $recordPath)
     })
+}
+
+function Format-GitCommandArgument {
+    param([string]$Value)
+
+    if ([string]::IsNullOrWhiteSpace($Value)) {
+        return '""'
+    }
+
+    if ($Value -match '\s') {
+        return '"' + ($Value -replace '"', '\"') + '"'
+    }
+
+    return $Value
+}
+
+function Show-OrphanCleanupDryRun {
+    param([bool]$DryRun = $false)
+
+    if (-not $DryRun) {
+        Write-Host "Refusing to clean orphaned task worktrees without --dry-run." -ForegroundColor Yellow
+        Write-Host "This command is read-only in Brevity v0. Run:"
+        Write-Host "  .\brevity.ps1 task cleanup-orphans --dry-run"
+        exit 1
+    }
+
+    $repoRoot = Get-RepositoryRoot
+    $config = Read-BrevityConfig
+    $runtimeTasks = @(Read-BrevityTasks | ForEach-Object { Get-TaskRuntimeInfo -Task $_ })
+    $worktreeRecords = @(Get-GitWorktreeRecords)
+    $orphanedWorktrees = @(Get-OrphanedTaskWorktreeRecords -RuntimeTasks $runtimeTasks -WorktreeRecords $worktreeRecords -ActiveWorktreesRoot $config.worktreesRoot)
+
+    Write-Host "Brevity orphan cleanup dry run"
+    Write-Host "Repo: $repoRoot"
+    Write-Host "Active worktree root: $($config.worktreesRoot)"
+    Write-Host "Candidates: $($orphanedWorktrees.Count)"
+
+    if ($orphanedWorktrees.Count -eq 0) {
+        Write-Host "No orphaned task-like worktrees found."
+        return
+    }
+
+    Write-Section "Orphaned task worktrees"
+    foreach ($worktree in $orphanedWorktrees) {
+        $pathExists = Test-Path -LiteralPath $worktree.path
+        Write-Host "Path: $($worktree.path)"
+        Write-Host "Branch: $($worktree.branch)"
+        Write-Host "Path exists: $pathExists"
+        Write-Host ""
+    }
+
+    Write-Section "Suggested manual cleanup commands"
+    foreach ($worktree in $orphanedWorktrees) {
+        Write-Host "git worktree remove $(Format-GitCommandArgument -Value $worktree.path)"
+        Write-Host "git branch -D $(Format-GitCommandArgument -Value $worktree.branch)"
+    }
+
+    Write-Host ""
+    Write-Host "Dry run only. No worktrees or branches were removed."
 }
 
 function Get-OrphanedWorktreeGuidance {
@@ -4987,6 +5054,23 @@ switch ($Command.ToLowerInvariant()) {
                 }
 
                 Remove-TaskWorktree -Slug $taskSlug -Force $forceCleanup
+            }
+            "cleanup-orphans" {
+                $dryRunCleanup = $false
+                if ($null -ne $RemainingArgs) {
+                    foreach ($taskArg in $RemainingArgs) {
+                        if ($taskArg -eq "--dry-run") {
+                            $dryRunCleanup = $true
+                        }
+                        else {
+                            Write-Host "Unknown argument for brevity task cleanup-orphans: $taskArg" -ForegroundColor Red
+                            Write-Host "Usage: .\brevity.ps1 task cleanup-orphans --dry-run"
+                            exit 1
+                        }
+                    }
+                }
+
+                Show-OrphanCleanupDryRun -DryRun $dryRunCleanup
             }
             default {
                 Write-Host "Unknown brevity task command: $Subcommand" -ForegroundColor Red
