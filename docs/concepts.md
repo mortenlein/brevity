@@ -103,6 +103,12 @@ small tail of that log. Use `--tail <n>` to control the number of worker-log
 lines shown. If no worker log exists for the task, it reports the expected log
 folder cleanly. The command is read-only.
 
+`Brevity task runs <slug>` lists recent worker log files for one task, most
+recent first. It infers run id, exit code, provider, and profile from the log
+filename and header when available. Use `--json` for structured output. This is
+read-only visibility over `.brevity\logs\<slug>\*.log`; it does not create a
+durable run index.
+
 ### Runtime State JSON
 
 `Brevity runtime state --json` emits the read-only runtime inspection contract

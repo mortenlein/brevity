@@ -169,6 +169,7 @@ Brevity v0 supports:
 .\brevity.ps1 task spec <slug>
 .\brevity.ps1 task start <slug>
 .\brevity.ps1 task runtime-info <slug>
+.\brevity.ps1 task runs <slug> [--json]
 .\brevity.ps1 task run <slug> [--execute] [--profile <name>] [--smoke] [--force-provider]
 .\brevity.ps1 task context refresh <slug>
 .\brevity.ps1 task context status <slug>

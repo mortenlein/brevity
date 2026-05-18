@@ -1297,6 +1297,118 @@ function Get-LatestTaskWorkerLog {
         Select-Object -First 1)
 }
 
+function Get-TaskWorkerRunHistory {
+    param(
+        [string]$Slug,
+        [int]$Count = 10
+    )
+
+    $repoRoot = Get-RepositoryRoot
+    $taskLogsRoot = Join-Path (Join-Path $repoRoot ".brevity\logs") $Slug
+
+    if (-not (Test-Path -LiteralPath $taskLogsRoot)) {
+        return @()
+    }
+
+    $logs = @(Get-ChildItem -LiteralPath $taskLogsRoot -Filter "*.log" -File -ErrorAction SilentlyContinue |
+        Sort-Object LastWriteTime -Descending |
+        Select-Object -First $Count)
+
+    return @($logs | ForEach-Object {
+        $logFile = $_
+        $header = @{}
+        $lines = @(Get-Content -LiteralPath $logFile.FullName -TotalCount 40 -ErrorAction SilentlyContinue)
+        foreach ($line in $lines) {
+            if ($line -eq "Output:") {
+                break
+            }
+
+            if ($line -match "^([^:]+):\s*(.*)$") {
+                $header[$matches[1]] = $matches[2]
+            }
+        }
+
+        $runId = ""
+        if ($header.ContainsKey("RunId") -and -not [string]::IsNullOrWhiteSpace([string]$header["RunId"])) {
+            $runId = [string]$header["RunId"]
+        }
+        elseif ($logFile.BaseName -match "^run-[A-Za-z0-9]+-[0-9a-f]+$") {
+            $runId = $logFile.BaseName
+        }
+
+        [pscustomobject]([ordered]@{
+            runId = $runId
+            logPath = $logFile.FullName
+            lastWriteTime = $logFile.LastWriteTime.ToString("yyyy-MM-dd HH:mm:ss")
+            lastWriteTimeUtc = $logFile.LastWriteTimeUtc.ToString("o")
+            exitCode = $(if ($header.ContainsKey("ExitCode")) { [string]$header["ExitCode"] } else { $null })
+            provider = $(if ($header.ContainsKey("Provider")) { [string]$header["Provider"] } else { "" })
+            profile = $(if ($header.ContainsKey("Profile")) { [string]$header["Profile"] } else { "" })
+        })
+    })
+}
+
+function Show-TaskRuns {
+    param(
+        [string]$Slug,
+        [int]$Count = 10,
+        [bool]$Json = $false
+    )
+
+    if ([string]::IsNullOrWhiteSpace($Slug)) {
+        if ($Json) {
+            Write-CommandErrorResult -Command "task runs" -Code "missing-slug" -Message "Missing task slug."
+            exit 1
+        }
+
+        Write-Host "Missing task slug." -ForegroundColor Red
+        Write-Host "Usage: .\brevity.ps1 task runs <slug> [--json]"
+        exit 1
+    }
+
+    $repoRoot = Get-RepositoryRoot
+    $taskLogsRoot = Join-Path (Join-Path $repoRoot ".brevity\logs") $Slug
+    $runs = @(Get-TaskWorkerRunHistory -Slug $Slug -Count $Count)
+
+    if ($Json) {
+        $payload = [pscustomobject]([ordered]@{
+            slug = $Slug
+            logsRoot = $taskLogsRoot
+            count = $runs.Count
+            runs = $runs
+        })
+        Write-CommandResult -Command "task runs" -Success $true -Severity "info" -Payload $payload
+        return
+    }
+
+    Write-Host "Task runs"
+    Write-Host "Slug: $Slug"
+    Write-Host "Logs: $taskLogsRoot"
+
+    if ($runs.Count -eq 0) {
+        Write-Host "No worker logs found." -ForegroundColor DarkYellow
+        return
+    }
+
+    foreach ($run in $runs) {
+        $runId = if ([string]::IsNullOrWhiteSpace([string]$run.runId)) { "(unknown runId)" } else { [string]$run.runId }
+        $exitCode = if ($null -eq $run.exitCode -or [string]::IsNullOrWhiteSpace([string]$run.exitCode)) { "exit ?" } else { "exit $($run.exitCode)" }
+        $providerProfile = if ([string]::IsNullOrWhiteSpace([string]$run.provider)) { "" } else { [string]$run.provider }
+        if (-not [string]::IsNullOrWhiteSpace($providerProfile) -and -not [string]::IsNullOrWhiteSpace([string]$run.profile)) {
+            $providerProfile = "$providerProfile/$($run.profile)"
+        }
+        elseif ([string]::IsNullOrWhiteSpace($providerProfile) -and -not [string]::IsNullOrWhiteSpace([string]$run.profile)) {
+            $providerProfile = [string]$run.profile
+        }
+        if ([string]::IsNullOrWhiteSpace($providerProfile)) {
+            $providerProfile = "provider ?"
+        }
+
+        Write-Host "$($run.lastWriteTime)  $runId  $exitCode  $providerProfile"
+        Write-Host "  $($run.logPath)"
+    }
+}
+
 function Resolve-PositiveIntegerOption {
     param(
         [string]$Name,
@@ -6710,6 +6822,32 @@ switch ($Command.ToLowerInvariant()) {
                 }
 
                 Show-TaskRuntimeInfoCommand -Slug $taskSlug
+            }
+            "runs" {
+                $taskSlug = $null
+                $jsonOutput = $false
+                if ($null -ne $RemainingArgs) {
+                    foreach ($taskArg in $RemainingArgs) {
+                        if ($taskArg -eq "--json") {
+                            $jsonOutput = $true
+                        }
+                        elseif ([string]::IsNullOrWhiteSpace($taskSlug)) {
+                            $taskSlug = [string]$taskArg
+                        }
+                        else {
+                            if ($jsonOutput) {
+                                Write-CommandErrorResult -Command "task runs" -Code "unknown-argument" -Message "Unknown argument for brevity task runs: $taskArg"
+                            }
+                            else {
+                                Write-Host "Unknown argument for brevity task runs: $taskArg" -ForegroundColor Red
+                                Write-Host "Usage: .\brevity.ps1 task runs <slug> [--json]"
+                            }
+                            exit 1
+                        }
+                    }
+                }
+
+                Show-TaskRuns -Slug $taskSlug -Json $jsonOutput
             }
             "context" {
                 $contextCommand = $null
