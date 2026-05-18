@@ -1106,6 +1106,10 @@ function Set-ObjectNoteProperty {
     }
 }
 
+function New-WorkerRunId {
+    return "run-$((Get-Date).ToUniversalTime().ToString("yyyyMMddTHHmmssfffZ"))-$([Guid]::NewGuid().ToString("N").Substring(0, 12))"
+}
+
 function Invoke-TaskMetadataLock {
     param(
         [string]$TasksPath,
@@ -2344,16 +2348,18 @@ function Get-TaskRuntimeExecutionInfo {
     $lastFailureType = $null
     $lastProvider = $null
     $lastProfile = $null
+    $lastRunId = $null
 
     if ($null -ne $Task -and (Get-Member -InputObject $Task -Name "workerLifecycle" -MemberType NoteProperty -ErrorAction SilentlyContinue)) {
         $lifecycle = $Task.workerLifecycle
         if ($null -ne $lifecycle) {
-            foreach ($fieldName in @("lastRunStartedAt", "lastRunFinishedAt", "lastExitCode", "lastFailureType", "lastLogPath", "lastProvider", "lastProfile")) {
+            foreach ($fieldName in @("lastRunId", "lastRunStartedAt", "lastRunFinishedAt", "lastExitCode", "lastFailureType", "lastLogPath", "lastProvider", "lastProfile")) {
                 if (-not (Get-Member -InputObject $lifecycle -Name $fieldName -MemberType NoteProperty -ErrorAction SilentlyContinue)) {
                     continue
                 }
 
                 switch ($fieldName) {
+                    "lastRunId" { $lastRunId = $lifecycle.lastRunId }
                     "lastRunStartedAt" { $lastRunStartedAt = $lifecycle.lastRunStartedAt }
                     "lastRunFinishedAt" { $lastRunFinishedAt = $lifecycle.lastRunFinishedAt }
                     "lastExitCode" { $lastExitCode = $lifecycle.lastExitCode }
@@ -2384,6 +2390,7 @@ function Get-TaskRuntimeExecutionInfo {
             $failureTypeLine = $logLines | Where-Object { $_ -like "FailureType:*" } | Select-Object -First 1
             $providerLine = $logLines | Where-Object { $_ -like "Provider:*" } | Select-Object -First 1
             $profileLine = $logLines | Where-Object { $_ -like "Profile:*" } | Select-Object -First 1
+            $runIdLine = $logLines | Where-Object { $_ -like "RunId:*" } | Select-Object -First 1
 
             if (-not [string]::IsNullOrWhiteSpace($exitCodeLine)) {
                 $lastExitCode = ($exitCodeLine -replace "^ExitCode:\s*", "")
@@ -2409,6 +2416,9 @@ function Get-TaskRuntimeExecutionInfo {
             if (-not [string]::IsNullOrWhiteSpace($profileLine)) {
                 $lastProfile = ($profileLine -replace "^Profile:\s*", "")
             }
+            if (-not [string]::IsNullOrWhiteSpace($runIdLine)) {
+                $lastRunId = ($runIdLine -replace "^RunId:\s*", "")
+            }
         }
     }
 
@@ -2431,6 +2441,7 @@ function Get-TaskRuntimeExecutionInfo {
     return [pscustomobject]@{
         hasLog = ($null -ne $latestLog)
         status = $status
+        lastRunId = $lastRunId
         lastRunStartedAt = $lastRunStartedAt
         lastRunFinishedAt = $lastRunFinishedAt
         lastLogPath = $(if ($null -ne $latestLog) { $latestLog.FullName } else { "" })
@@ -2921,6 +2932,7 @@ function ConvertTo-RuntimeStateTaskSummary {
         lastLogPath = $Task.execution.lastLogPath
         lastProvider = $Task.execution.lastProvider
         lastProfile = $Task.execution.lastProfile
+        lastRunId = $Task.execution.lastRunId
     }
 }
 
@@ -4948,7 +4960,8 @@ function Update-TaskWorkerLifecycle {
         [string]$FailureType = $null,
         [string]$LogPath = $null,
         [string]$Provider = $null,
-        [string]$Profile = $null
+        [string]$Profile = $null,
+        [string]$RunId = $null
     )
 
     Invoke-TaskMetadataLock -TasksPath $TasksPath -ScriptBlock {
@@ -4965,6 +4978,7 @@ function Update-TaskWorkerLifecycle {
 
             if ($null -eq $existingLifecycle) {
                 $existingLifecycle = [pscustomobject]([ordered]@{
+                    lastRunId = $null
                     lastRunStartedAt = $null
                     lastRunFinishedAt = $null
                     lastExitCode = $null
@@ -4982,6 +4996,7 @@ function Update-TaskWorkerLifecycle {
             if ($PSBoundParameters.ContainsKey("LogPath")) { Set-ObjectNoteProperty -Target $existingLifecycle -Name "lastLogPath" -Value $LogPath }
             if ($PSBoundParameters.ContainsKey("Provider")) { Set-ObjectNoteProperty -Target $existingLifecycle -Name "lastProvider" -Value $Provider }
             if ($PSBoundParameters.ContainsKey("Profile")) { Set-ObjectNoteProperty -Target $existingLifecycle -Name "lastProfile" -Value $Profile }
+            if ($PSBoundParameters.ContainsKey("RunId")) { Set-ObjectNoteProperty -Target $existingLifecycle -Name "lastRunId" -Value $RunId }
 
             Set-ObjectNoteProperty -Target $taskRecord -Name "workerLifecycle" -Value $existingLifecycle
         }
@@ -5243,7 +5258,8 @@ function Show-TaskRun {
         Write-Host "Executing $($workerCommand.provider) worker..."
     }
     $runStartedAt = (Get-Date).ToUniversalTime().ToString("o")
-    Update-TaskWorkerLifecycle -TasksPath $tasksPath -Slug $Slug -StartedAt $runStartedAt -FinishedAt $null -ExitCode $null -FailureType $null -LogPath $null -Provider $workerCommand.provider -Profile $effectiveProfileName
+    $runId = New-WorkerRunId
+    Update-TaskWorkerLifecycle -TasksPath $tasksPath -Slug $Slug -StartedAt $runStartedAt -FinishedAt $null -ExitCode $null -FailureType $null -LogPath $null -Provider $workerCommand.provider -Profile $effectiveProfileName -RunId $runId
     $previousExecutionPolicyPreference = $env:PSExecutionPolicyPreference
     $previousEnvironment = [ordered]@{}
     if (-not [string]::IsNullOrWhiteSpace($workerCommand.executionPolicy)) {
@@ -5281,6 +5297,7 @@ function Show-TaskRun {
 
             $logLines = @(
                 "Task: $Slug"
+                "RunId: $runId"
                 "Provider: $($workerCommand.provider)"
                 "Profile: $effectiveProfileName"
                 "Command: $($workerCommand.display)"
@@ -5322,6 +5339,7 @@ function Show-TaskRun {
 
                 $logLines = @(
                     "Task: $Slug"
+                    "RunId: $runId"
                     "Provider: $($workerCommand.provider)"
                     "Profile: $effectiveProfileName"
                     "Command: $($workerCommand.display)"
@@ -5334,11 +5352,12 @@ function Show-TaskRun {
                     "Output:"
                 ) + ($workerOutput | ForEach-Object { [string]$_ })
                 $logLines | Set-Content -LiteralPath $logPath -Encoding UTF8
-                Update-TaskWorkerLifecycle -TasksPath $tasksPath -Slug $Slug -StartedAt $runStartedAt -FinishedAt $runFinishedAt -ExitCode $exitCode -FailureType $failureKind -LogPath $logPath -Provider $workerCommand.provider -Profile $effectiveProfileName
+                Update-TaskWorkerLifecycle -TasksPath $tasksPath -Slug $Slug -StartedAt $runStartedAt -FinishedAt $runFinishedAt -ExitCode $exitCode -FailureType $failureKind -LogPath $logPath -Provider $workerCommand.provider -Profile $effectiveProfileName -RunId $runId
 
                 if ($Json) {
                     $payload = [pscustomobject]([ordered]@{
                         slug = $Slug
+                        runId = $runId
                         provider = $workerCommand.provider
                         profile = $effectiveProfileName
                         worktreePath = $task.worktreePath
@@ -5383,7 +5402,7 @@ function Show-TaskRun {
 
                 exit $exitCode
             }
-            Update-TaskWorkerLifecycle -TasksPath $tasksPath -Slug $Slug -StartedAt $runStartedAt -FinishedAt $runFinishedAt -ExitCode $exitCode -FailureType $null -LogPath $logPath -Provider $workerCommand.provider -Profile $effectiveProfileName
+            Update-TaskWorkerLifecycle -TasksPath $tasksPath -Slug $Slug -StartedAt $runStartedAt -FinishedAt $runFinishedAt -ExitCode $exitCode -FailureType $null -LogPath $logPath -Provider $workerCommand.provider -Profile $effectiveProfileName -RunId $runId
             if ($exitCode -eq 0 -and $workerCommand.provider -ne "smoke") {
                 Set-ProviderStatus `
                     -ProviderName $workerCommand.provider `
@@ -5393,6 +5412,7 @@ function Show-TaskRun {
             if ($Json) {
                 $payload = [pscustomobject]([ordered]@{
                     slug = $Slug
+                    runId = $runId
                     provider = $workerCommand.provider
                     profile = $effectiveProfileName
                     worktreePath = $task.worktreePath
