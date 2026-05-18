@@ -14,6 +14,51 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
+function Write-CommandResult {
+    param(
+        [string]$Command,
+        [bool]$Success,
+        [ValidateSet("info", "warning", "error")]
+        [string]$Severity,
+        [object]$Payload = ([pscustomobject]@{}),
+        [object[]]$Warnings = @(),
+        [object[]]$Errors = @(),
+        [string[]]$SuggestedNextActions = @()
+    )
+
+    $result = [pscustomobject]([ordered]@{
+        schema = "brevity.command-result.v1"
+        command = $Command
+        success = $Success
+        severity = $Severity
+        warnings = @($Warnings)
+        errors = @($Errors)
+        suggestedNextActions = @($SuggestedNextActions)
+        payload = $Payload
+    })
+
+    $result | ConvertTo-Json -Depth 10
+}
+
+function Write-CommandErrorResult {
+    param(
+        [string]$Command,
+        [string]$Code,
+        [string]$Message,
+        [object]$Details = ([pscustomobject]@{})
+    )
+
+    Write-CommandResult `
+        -Command $Command `
+        -Success $false `
+        -Severity "error" `
+        -Errors @([pscustomobject]([ordered]@{
+            code = $Code
+            message = $Message
+            details = $Details
+        }))
+}
+
 function Resolve-DevRoot {
     param([string]$Path)
 
@@ -4558,25 +4603,66 @@ function Merge-TaskBranch {
 function New-TaskWorktree {
     param(
         [string]$Root,
-        [string]$Slug
+        [string]$Slug,
+        [bool]$Json = $false
     )
 
     if ([string]::IsNullOrWhiteSpace($Slug)) {
-        Write-Host "Missing task slug." -ForegroundColor Red
-        Write-Host "Usage: .\brevity.ps1 task new <slug> [-DevRoot <path>]"
+        if ($Json) {
+            Write-CommandErrorResult -Command "task new" -Code "missing-slug" -Message "Missing task slug."
+        }
+        else {
+            Write-Host "Missing task slug." -ForegroundColor Red
+            Write-Host "Usage: .\brevity.ps1 task new <slug> [-DevRoot <path>]"
+        }
         exit 1
     }
 
-    $rootPath = Resolve-DevRoot $Root
+    try {
+        $rootPath = Resolve-DevRoot $Root
+    }
+    catch {
+        if ($Json) {
+            Write-CommandErrorResult -Command "task new" -Code "invalid-dev-root" -Message ([string]$_.Exception.Message) -Details ([pscustomobject]@{ devRoot = $Root })
+        }
+        else {
+            Write-Host $_.Exception.Message -ForegroundColor Red
+        }
+        exit 1
+    }
+
     $repoRoot = Get-RepositoryRoot
     $repoName = Get-RepositoryName
     $worktreeName = "$repoName-$Slug"
     $targetPath = Join-Path $rootPath "worktrees\active\$worktreeName"
     $branchName = "task/$Slug"
     $promptPath = Join-Path $targetPath "prompt.md"
+    $metadataPath = Join-Path $repoRoot ".brevity\tasks.json"
+
+    $existingTask = @(Read-BrevityTasks | Where-Object { $_.slug -eq $Slug } | Select-Object -First 1)
+    if ($existingTask.Count -gt 0) {
+        if ($Json) {
+            Write-CommandErrorResult -Command "task new" -Code "task-already-exists" -Message "Task metadata already exists: $Slug" -Details ([pscustomobject]@{
+                slug = $Slug
+                metadataPath = $metadataPath
+            })
+        }
+        else {
+            Write-Host "Task metadata already exists: $Slug" -ForegroundColor Red
+        }
+        exit 1
+    }
 
     if (Test-Path -LiteralPath $targetPath) {
-        Write-Host "Task worktree already exists: $targetPath" -ForegroundColor Red
+        if ($Json) {
+            Write-CommandErrorResult -Command "task new" -Code "worktree-already-exists" -Message "Task worktree already exists: $targetPath" -Details ([pscustomobject]@{
+                slug = $Slug
+                worktreePath = $targetPath
+            })
+        }
+        else {
+            Write-Host "Task worktree already exists: $targetPath" -ForegroundColor Red
+        }
         exit 1
     }
 
@@ -4585,8 +4671,22 @@ function New-TaskWorktree {
         New-Item -ItemType Directory -Path $activeRoot | Out-Null
     }
 
-    git worktree add $targetPath -b $branchName
+    if ($Json) {
+        $gitOutput = @(git worktree add $targetPath -b $branchName 2>&1)
+    }
+    else {
+        git worktree add $targetPath -b $branchName
+    }
     if ($LASTEXITCODE -ne 0) {
+        if ($Json) {
+            Write-CommandErrorResult -Command "task new" -Code "git-worktree-add-failed" -Message "Git failed to create the task worktree." -Details ([pscustomobject]@{
+                slug = $Slug
+                branch = $branchName
+                worktreePath = $targetPath
+                gitOutput = @($gitOutput | ForEach-Object { [string]$_ })
+                exitCode = $LASTEXITCODE
+            })
+        }
         exit $LASTEXITCODE
     }
 
@@ -4594,12 +4694,28 @@ function New-TaskWorktree {
     $specPath = Update-TaskPromptFromSpec -PromptPath $promptPath -Slug $Slug
     Add-TaskMetadata -RepoRoot $repoRoot -Slug $Slug -Branch $branchName -WorktreePath $targetPath -PromptPath $promptPath -SpecPath $specPath
 
-    Write-Host "Created task worktree"
-    Write-Host "Path: $targetPath"
-    Write-Host "Branch: $branchName"
-    Write-Host "Prompt: $promptPath"
-    Write-Host "Context: $(Join-Path $targetPath ".brevity\context") ($($contextFiles.Count) file(s))"
-    Write-Host "Metadata: $(Join-Path $repoRoot ".brevity\tasks.json")"
+    if ($Json) {
+        Write-CommandResult `
+            -Command "task new" `
+            -Success $true `
+            -Severity "info" `
+            -SuggestedNextActions @("refresh-runtime-state") `
+            -Payload ([pscustomobject]([ordered]@{
+                slug = $Slug
+                branch = $branchName
+                worktreePath = $targetPath
+                promptPath = $promptPath
+                metadataPath = $metadataPath
+            }))
+    }
+    else {
+        Write-Host "Created task worktree"
+        Write-Host "Path: $targetPath"
+        Write-Host "Branch: $branchName"
+        Write-Host "Prompt: $promptPath"
+        Write-Host "Context: $(Join-Path $targetPath ".brevity\context") ($($contextFiles.Count) file(s))"
+        Write-Host "Metadata: $metadataPath"
+    }
 }
 
 function Activate-TaskWorktree {
@@ -5055,14 +5171,29 @@ switch ($Command.ToLowerInvariant()) {
         switch ($Subcommand.ToLowerInvariant()) {
             "new" {
                 $taskSlug = $null
+                $jsonOutput = $false
                 if ($null -ne $RemainingArgs) {
                     foreach ($taskArg in $RemainingArgs) {
-                        $taskSlug = [string]$taskArg
-                        break
+                        if ($taskArg -eq "--json") {
+                            $jsonOutput = $true
+                        }
+                        elseif ([string]::IsNullOrWhiteSpace($taskSlug)) {
+                            $taskSlug = [string]$taskArg
+                        }
+                        else {
+                            if ($jsonOutput) {
+                                Write-CommandErrorResult -Command "task new" -Code "unknown-argument" -Message "Unknown argument for brevity task new: $taskArg"
+                            }
+                            else {
+                                Write-Host "Unknown argument for brevity task new: $taskArg" -ForegroundColor Red
+                                Write-Host "Usage: .\brevity.ps1 task new <slug> [-DevRoot <path>] [--json]"
+                            }
+                            exit 1
+                        }
                     }
                 }
 
-                New-TaskWorktree -Root $DevRoot -Slug $taskSlug
+                New-TaskWorktree -Root $DevRoot -Slug $taskSlug -Json $jsonOutput
             }
             "activate" {
                 $taskSlug = $null
