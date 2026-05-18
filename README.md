@@ -199,6 +199,10 @@ schema at [`docs/command-result.schema.json`](docs/command-result.schema.json).
 That contract is intended for TUI and automation consumers, should evolve
 additively where practical, and consumers should tolerate unknown fields.
 
+The centralized contract index is [`docs/contracts.md`](docs/contracts.md). It
+indexes the runtime/TUI contract surface and schemas for automation and TUI
+consumers, including the runtime-state and command-result contracts.
+
 Major sections include:
 
 - `providers` - provider health summary and per-provider health records.

@@ -122,6 +122,10 @@ The matching schema lives at
 `brevity.runtime-state.v1` for TUI and automation consumers and should evolve
 additively when possible.
 
+The centralized contract index lives at [`docs/contracts.md`](contracts.md). It
+indexes runtime/TUI contracts and schemas for automation and TUI consumers,
+including runtime-state and command-result contracts.
+
 The v1 snapshot includes these major sections:
 
 - `providers` - provider health totals and per-provider health records.
