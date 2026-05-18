@@ -3280,12 +3280,52 @@ function Get-OrphanCleanupDirtyReasons {
     return @($reasons)
 }
 
+function Get-OrphanedTaskWorktreeCleanupClassification {
+    param([object]$DirtyInfo)
+
+    if ($null -eq $DirtyInfo -or -not $DirtyInfo.detected) {
+        return [pscustomobject]@{
+            severity = "warning"
+            category = "uncertain-cleanup"
+        }
+    }
+
+    if ($DirtyInfo.dirty) {
+        return [pscustomobject]@{
+            severity = "warning"
+            category = "requires-inspection"
+        }
+    }
+
+    return [pscustomobject]@{
+        severity = "info"
+        category = "actionable-cleanup"
+    }
+}
+
+function Get-OrphanedTaskBranchCleanupClassification {
+    param([object]$Branch)
+
+    if ($Branch.mergedIntoHead) {
+        return [pscustomobject]@{
+            severity = "info"
+            category = "actionable-cleanup"
+        }
+    }
+
+    return [pscustomobject]@{
+        severity = "warning"
+        category = "destructive-if-removed"
+    }
+}
+
 function ConvertTo-OrphanedTaskWorktreeCleanupCandidate {
     param([object]$Worktree)
 
     $pathExists = (-not [string]::IsNullOrWhiteSpace([string]$Worktree.path)) -and (Test-Path -LiteralPath $Worktree.path)
     $dirtyInfo = Get-OrphanCleanupDirtyInfo -WorktreePath $Worktree.path
     $dirtyReasons = @(Get-OrphanCleanupDirtyReasons -DirtyInfo $dirtyInfo)
+    $classification = Get-OrphanedTaskWorktreeCleanupClassification -DirtyInfo $dirtyInfo
     $formattedPath = Format-GitCommandArgument -Value $Worktree.path
     $formattedBranch = Format-GitCommandArgument -Value $Worktree.branch
     $suggestedCommands = @(
@@ -3301,6 +3341,8 @@ function ConvertTo-OrphanedTaskWorktreeCleanupCandidate {
     return [pscustomobject]@{
         path = $Worktree.path
         branch = $Worktree.branch
+        severity = $classification.severity
+        category = $classification.category
         pathExists = $pathExists
         dirty = $dirtyInfo.dirty
         dirtyReasons = $dirtyReasons
@@ -3312,8 +3354,12 @@ function ConvertTo-OrphanedTaskWorktreeCleanupCandidate {
 function ConvertTo-OrphanedTaskBranchCleanupCandidate {
     param([object]$Branch)
 
+    $classification = Get-OrphanedTaskBranchCleanupClassification -Branch $Branch
+
     return [pscustomobject]@{
         branch = $Branch.branch
+        severity = $classification.severity
+        category = $classification.category
         mergedIntoHead = $Branch.mergedIntoHead
         suggestedCommands = @("git branch -D $(Format-GitCommandArgument -Value $Branch.branch)")
         destructiveIfUnmerged = (-not $Branch.mergedIntoHead)
