@@ -117,6 +117,11 @@ removing or renaming existing fields within v1 unless there is a deliberate
 schema break. Breaking changes should move to a new schema value, for example
 `brevity.runtime-state.v2`.
 
+The matching schema lives at
+[`docs/runtime-state.schema.json`](runtime-state.schema.json). It reflects
+`brevity.runtime-state.v1` for TUI and automation consumers and should evolve
+additively when possible.
+
 The v1 snapshot includes these major sections:
 
 - `providers` - provider health totals and per-provider health records.

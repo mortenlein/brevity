@@ -189,6 +189,9 @@ should check this value before depending on the shape. The v1 contract should
 evolve additively where practical: new fields may be added, but existing fields
 should not be removed or renamed casually. If Brevity needs a breaking contract,
 it should publish a new schema such as `brevity.runtime-state.v2`.
+The discoverable schema for TUI and automation consumers is
+[`docs/runtime-state.schema.json`](docs/runtime-state.schema.json), which
+reflects `brevity.runtime-state.v1` and should evolve additively when possible.
 
 Major sections include:
 
