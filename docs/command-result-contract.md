@@ -16,6 +16,14 @@ happened, whether it succeeded, which warnings or errors matter, and what a
 consumer should refresh or offer next. Console text may remain, but structured
 results should become the automation contract.
 
+## Schema
+
+The discoverable JSON schema lives at
+[`docs/command-result.schema.json`](command-result.schema.json). It reflects
+`brevity.command-result.v1` for TUI and automation consumers. The v1 contract
+should evolve additively where practical, and consumers should tolerate unknown
+fields.
+
 ## Desired Characteristics
 
 Command results should be:
