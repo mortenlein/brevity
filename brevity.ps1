@@ -2985,9 +2985,12 @@ function Get-RuntimeStateData {
     $worktreeRecords = @(Get-GitWorktreeRecords)
     $orphanedTaskWorktrees = @(Get-OrphanedTaskWorktreeRecords -RuntimeTasks $runtimeTasks -WorktreeRecords $worktreeRecords -ActiveWorktreesRoot $config.worktreesRoot)
     $orphanedTaskBranches = @(Get-OrphanedTaskBranchRecords -RuntimeTasks $runtimeTasks -WorktreeRecords $worktreeRecords)
+    $orphanedTaskWorktreeCleanupCandidates = @($orphanedTaskWorktrees | Sort-Object path | ForEach-Object { ConvertTo-OrphanedTaskWorktreeCleanupCandidate -Worktree $_ })
+    $orphanedTaskBranchCleanupCandidates = @($orphanedTaskBranches | Sort-Object branch | ForEach-Object { ConvertTo-OrphanedTaskBranchCleanupCandidate -Branch $_ })
     $cleanup = [pscustomobject]@{
-        orphanedTaskWorktrees = @($orphanedTaskWorktrees | Sort-Object path | ForEach-Object { ConvertTo-OrphanedTaskWorktreeCleanupCandidate -Worktree $_ })
-        orphanedTaskBranches = @($orphanedTaskBranches | Sort-Object branch | ForEach-Object { ConvertTo-OrphanedTaskBranchCleanupCandidate -Branch $_ })
+        summary = Get-CleanupCandidateSummary -OrphanedTaskWorktreeCandidates $orphanedTaskWorktreeCleanupCandidates -OrphanedTaskBranchCandidates $orphanedTaskBranchCleanupCandidates
+        orphanedTaskWorktrees = $orphanedTaskWorktreeCleanupCandidates
+        orphanedTaskBranches = $orphanedTaskBranchCleanupCandidates
     }
     $tasksPath = Join-Path $repoRoot ".brevity\tasks.json"
     $lockInfo = Get-TaskMetadataLockInfo -TasksPath $tasksPath
@@ -3401,6 +3404,59 @@ function ConvertTo-OrphanedTaskBranchCleanupCandidate {
         mergedIntoHead = $Branch.mergedIntoHead
         suggestedCommands = @("git branch -D $(Format-GitCommandArgument -Value $Branch.branch)")
         destructiveIfUnmerged = (-not $Branch.mergedIntoHead)
+    }
+}
+
+function Get-CleanupCandidateSummary {
+    param(
+        [object[]]$OrphanedTaskWorktreeCandidates,
+        [object[]]$OrphanedTaskBranchCandidates
+    )
+
+    $worktreeCandidates = @($OrphanedTaskWorktreeCandidates)
+    $branchCandidates = @($OrphanedTaskBranchCandidates)
+    $allCandidates = @($worktreeCandidates + $branchCandidates)
+    $bySeverity = [ordered]@{}
+    $byCategory = [ordered]@{}
+
+    foreach ($candidate in $allCandidates) {
+        $severity = [string]$candidate.severity
+        if ([string]::IsNullOrWhiteSpace($severity)) {
+            $severity = "unknown"
+        }
+
+        $category = [string]$candidate.category
+        if ([string]::IsNullOrWhiteSpace($category)) {
+            $category = "unknown"
+        }
+
+        if (-not $bySeverity.Contains($severity)) {
+            $bySeverity[$severity] = 0
+        }
+        if (-not $byCategory.Contains($category)) {
+            $byCategory[$category] = 0
+        }
+
+        $bySeverity[$severity] = [int]$bySeverity[$severity] + 1
+        $byCategory[$category] = [int]$byCategory[$category] + 1
+    }
+
+    $removableByExecuteCount = 0
+    foreach ($candidate in $allCandidates) {
+        $removableProperty = $candidate.PSObject.Properties["removableByExecute"]
+        if ($null -ne $removableProperty -and $removableProperty.Value) {
+            $removableByExecuteCount++
+        }
+    }
+
+    return [pscustomobject]@{
+        totalCandidates = $allCandidates.Count
+        orphanedTaskWorktreeCount = $worktreeCandidates.Count
+        orphanedTaskBranchCount = $branchCandidates.Count
+        removableByExecuteCount = $removableByExecuteCount
+        requiresInspectionCount = @($allCandidates | Where-Object { $_.category -eq "requires-inspection" }).Count
+        bySeverity = $bySeverity
+        byCategory = $byCategory
     }
 }
 
