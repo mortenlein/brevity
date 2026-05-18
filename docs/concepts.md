@@ -560,6 +560,9 @@ each removal, Brevity re-checks that the worktree is still registered, still
 under the active worktree root, still on a `task/*` branch, and still missing
 matching task metadata. It skips uncertain candidates and only deletes a branch
 after the worktree removal succeeds and the branch still exists as `task/*`.
+Dirty orphaned worktrees are treated as unsafe: Brevity reports tracked and
+untracked changes when detectable, prints inspection commands, and leaves the
+worktree untouched.
 
 `Brevity task merge <slug>` reads the same metadata file, finds the matching task
 record, and merges the recorded branch into the current Git branch with

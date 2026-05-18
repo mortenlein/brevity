@@ -642,7 +642,9 @@ run the explicit execute form:
 
 Brevity re-checks each candidate immediately before removal and skips anything
 that is no longer registered, no longer under the active worktree root, no longer
-on a `task/*` branch, or now has task metadata.
+on a `task/*` branch, now has task metadata, or has dirty Git status. Dirty
+orphaned worktrees are not force deleted; Brevity prints inspection commands and
+safe next-step guidance instead.
 
 ## Workspace Lifecycle Hygiene
 

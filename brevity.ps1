@@ -3239,6 +3239,99 @@ function Format-GitCommandArgument {
     return $Value
 }
 
+function Get-OrphanCleanupDirtyInfo {
+    param([string]$WorktreePath)
+
+    if ([string]::IsNullOrWhiteSpace($WorktreePath) -or -not (Test-Path -LiteralPath $WorktreePath -PathType Container)) {
+        return [pscustomobject]@{
+            detected = $false
+            dirty = $false
+            modifiedTracked = $false
+            untracked = $false
+            statusLines = @()
+            reason = "worktree path is missing"
+        }
+    }
+
+    $previousErrorActionPreference = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    $statusLines = @(& git -C $WorktreePath status --porcelain 2>$null)
+    $gitExitCode = $LASTEXITCODE
+    $ErrorActionPreference = $previousErrorActionPreference
+
+    if ($gitExitCode -ne 0) {
+        return [pscustomobject]@{
+            detected = $false
+            dirty = $false
+            modifiedTracked = $false
+            untracked = $false
+            statusLines = @()
+            reason = "git status could not inspect this worktree"
+        }
+    }
+
+    $modifiedTracked = $false
+    $untracked = $false
+    foreach ($line in $statusLines) {
+        if ($line.StartsWith("??")) {
+            $untracked = $true
+        }
+        else {
+            $modifiedTracked = $true
+        }
+    }
+
+    return [pscustomobject]@{
+        detected = $true
+        dirty = ($statusLines.Count -gt 0)
+        modifiedTracked = $modifiedTracked
+        untracked = $untracked
+        statusLines = @($statusLines)
+        reason = ""
+    }
+}
+
+function Write-OrphanCleanupDirtyGuidance {
+    param(
+        [string]$WorktreePath,
+        [object]$DirtyInfo
+    )
+
+    if ($null -eq $DirtyInfo) {
+        return
+    }
+
+    $formattedPath = Format-GitCommandArgument -Value $WorktreePath
+
+    if (-not $DirtyInfo.detected) {
+        Write-Host "Dirty status: unknown ($($DirtyInfo.reason))" -ForegroundColor Yellow
+        Write-Host "Inspect with:"
+        Write-Host "  git -C $formattedPath status --short"
+        Write-Host "  git -C $formattedPath diff --stat"
+        return
+    }
+
+    if (-not $DirtyInfo.dirty) {
+        Write-Host "Dirty status: clean"
+        return
+    }
+
+    Write-Host "Dirty status: unsafe to remove automatically" -ForegroundColor Yellow
+    if ($DirtyInfo.modifiedTracked) {
+        Write-Host "  - modified tracked files detected"
+    }
+    if ($DirtyInfo.untracked) {
+        Write-Host "  - untracked files/directories detected"
+    }
+    Write-Host "Inspect with:"
+    Write-Host "  git -C $formattedPath status --short"
+    Write-Host "  git -C $formattedPath diff --stat"
+    Write-Host "Safe next steps:"
+    Write-Host "  - inspect changes"
+    Write-Host "  - save or commit elsewhere if valuable"
+    Write-Host "  - manually delete only after confirming nothing useful remains"
+}
+
 function Test-OrphanCleanupCandidateCurrent {
     param(
         [object]$Candidate,
@@ -3306,6 +3399,20 @@ function Invoke-OrphanCleanupExecute {
 
         if (-not $currentCheck.valid) {
             Write-Host "Skip: $($currentCheck.reason)" -ForegroundColor Yellow
+            $skippedCandidates += $worktree
+            continue
+        }
+
+        $dirtyInfo = Get-OrphanCleanupDirtyInfo -WorktreePath $currentCheck.record.path
+        if ($dirtyInfo.dirty) {
+            Write-OrphanCleanupDirtyGuidance -WorktreePath $currentCheck.record.path -DirtyInfo $dirtyInfo
+            Write-Host "Skip: dirty worktree was not removed." -ForegroundColor Yellow
+            $skippedCandidates += $worktree
+            continue
+        }
+        elseif (-not $dirtyInfo.detected) {
+            Write-OrphanCleanupDirtyGuidance -WorktreePath $currentCheck.record.path -DirtyInfo $dirtyInfo
+            Write-Host "Skip: dirty status could not be verified." -ForegroundColor Yellow
             $skippedCandidates += $worktree
             continue
         }
@@ -3404,14 +3511,24 @@ function Invoke-OrphanCleanup {
     Write-Section "Orphaned task worktrees"
     foreach ($worktree in $orphanedWorktrees) {
         $pathExists = Test-Path -LiteralPath $worktree.path
+        $dirtyInfo = Get-OrphanCleanupDirtyInfo -WorktreePath $worktree.path
         Write-Host "Path: $($worktree.path)"
         Write-Host "Branch: $($worktree.branch)"
         Write-Host "Path exists: $pathExists"
+        Write-OrphanCleanupDirtyGuidance -WorktreePath $worktree.path -DirtyInfo $dirtyInfo
         Write-Host ""
     }
 
     Write-Section "Suggested manual cleanup commands"
     foreach ($worktree in $orphanedWorktrees) {
+        $dirtyInfo = Get-OrphanCleanupDirtyInfo -WorktreePath $worktree.path
+        if ($dirtyInfo.dirty -or -not $dirtyInfo.detected) {
+            Write-Host "Skipped unsafe candidate: $($worktree.path)" -ForegroundColor Yellow
+            Write-Host "  git -C $(Format-GitCommandArgument -Value $worktree.path) status --short"
+            Write-Host "  git -C $(Format-GitCommandArgument -Value $worktree.path) diff --stat"
+            continue
+        }
+
         Write-Host "git worktree remove $(Format-GitCommandArgument -Value $worktree.path)"
         Write-Host "git branch -D $(Format-GitCommandArgument -Value $worktree.branch)"
     }
