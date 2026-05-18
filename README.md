@@ -193,6 +193,12 @@ The discoverable schema for TUI and automation consumers is
 [`docs/runtime-state.schema.json`](docs/runtime-state.schema.json), which
 reflects `brevity.runtime-state.v1` and should evolve additively when possible.
 
+Future machine-readable mutation results are documented in
+[`docs/command-result-contract.md`](docs/command-result-contract.md), with the
+schema at [`docs/command-result.schema.json`](docs/command-result.schema.json).
+That contract is intended for TUI and automation consumers, should evolve
+additively where practical, and consumers should tolerate unknown fields.
+
 Major sections include:
 
 - `providers` - provider health summary and per-provider health records.
