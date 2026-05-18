@@ -1,0 +1,96 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Brevity Command Result v1",
+  "description": "Permissive schema for future machine-readable Brevity command results. This contract is designed for additive evolution: producers may add fields over time, and consumers should tolerate unknown fields.",
+  "type": "object",
+  "additionalProperties": true,
+  "required": [
+    "schema",
+    "command",
+    "success",
+    "severity"
+  ],
+  "properties": {
+    "schema": {
+      "type": "string",
+      "const": "brevity.command-result.v1",
+      "description": "Identifies this document as a Brevity command result contract payload."
+    },
+    "command": {
+      "type": "string",
+      "description": "Identifies the Brevity command that produced the result, such as 'task cleanup' or 'provider set'."
+    },
+    "success": {
+      "type": "boolean",
+      "description": "Machine-readable command outcome. True indicates the command completed without fatal errors; warnings may still be present."
+    },
+    "severity": {
+      "type": "string",
+      "enum": [
+        "info",
+        "warning",
+        "error"
+      ],
+      "description": "Highest result severity. Consumers can use this to distinguish successful results, successful results with warnings, and failed commands."
+    },
+    "warnings": {
+      "type": "array",
+      "description": "Non-fatal issues that should be visible to the operator without requiring consumers to parse human console output.",
+      "items": {
+        "$ref": "#/$defs/message"
+      },
+      "default": []
+    },
+    "errors": {
+      "type": "array",
+      "description": "Fatal issues that prevented completion. Failed commands should explain the blocking condition here in machine-readable form where practical.",
+      "items": {
+        "$ref": "#/$defs/message"
+      },
+      "default": []
+    },
+    "suggestedNextActions": {
+      "type": "array",
+      "description": "Safe follow-up hints for TUI and runtime consumers, such as refreshing runtime state after a mutation. Unknown action names should be tolerated.",
+      "items": {
+        "type": "string"
+      },
+      "default": []
+    },
+    "payload": {
+      "type": "object",
+      "description": "Optional command-specific structured result data. Nested payloads are intentionally permissive so commands can evolve additively without breaking older consumers.",
+      "additionalProperties": true,
+      "default": {}
+    }
+  },
+  "$defs": {
+    "message": {
+      "description": "Operator-visible warning or error detail. Strings are allowed for lightweight early adoption; objects allow future structured codes and metadata.",
+      "oneOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "object",
+          "additionalProperties": true,
+          "properties": {
+            "code": {
+              "type": "string",
+              "description": "Optional stable machine-readable warning or error code."
+            },
+            "message": {
+              "type": "string",
+              "description": "Human-readable warning or error text."
+            },
+            "details": {
+              "type": "object",
+              "description": "Optional structured context for the warning or error.",
+              "additionalProperties": true
+            }
+          }
+        }
+      ]
+    }
+  }
+}
