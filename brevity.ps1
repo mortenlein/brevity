@@ -463,40 +463,68 @@ function Get-ProviderProfileSummary {
     )
 
     $config = Read-BrevityConfig
+    $profileMatrix = Get-BrevityProfileMatrix
+    $complexityDefaults = Get-BrevityComplexityProfileDefaults
     $profiles = @()
 
-    if ($null -ne $config -and (Get-Member -InputObject $config -Name "profiles" -MemberType NoteProperty -ErrorAction SilentlyContinue)) {
-        foreach ($profileProperty in $config.profiles.PSObject.Properties) {
-            $profile = $profileProperty.Value
-            $providerName = ""
-            if ($null -ne $profile -and (Get-Member -InputObject $profile -Name "provider" -MemberType NoteProperty -ErrorAction SilentlyContinue)) {
-                $providerName = [string]$profile.provider
-            }
+    foreach ($matrixProfileName in $profileMatrix.Keys) {
+        $profile = $profileMatrix[$matrixProfileName]
+        $workerConfig = $null
+        if ($null -ne $config) {
+            $workerConfig = Get-WorkerConfig -Config $config -ProfileName $matrixProfileName
+        }
 
-            if ([string]::IsNullOrWhiteSpace($providerName)) {
-                $providerName = [string]$config.defaultProvider
-            }
-
-            $profiles += [PSCustomObject]@{
-                name = $profileProperty.Name
-                provider = $providerName
-                capabilities = @("worker")
-                fallbackCandidates = @()
+        $providerName = [string]$profile.provider
+        $modelName = $null
+        if ($null -ne $workerConfig) {
+            $providerName = [string]$workerConfig.provider
+            if (-not [string]::IsNullOrWhiteSpace([string]$workerConfig.model)) {
+                $modelName = [string]$workerConfig.model
             }
         }
-    }
 
-    if ($profiles.Count -eq 0) {
-        $defaultProvider = "codex"
-        if ($null -ne $config -and (Get-Member -InputObject $config -Name "defaultProvider" -MemberType NoteProperty -ErrorAction SilentlyContinue)) {
-            $defaultProvider = [string]$config.defaultProvider
+        if ([string]::IsNullOrWhiteSpace($modelName) -and $profile.ContainsKey("model") -and $null -ne $profile.model) {
+            $modelName = [string]$profile.model
+        }
+        if ([string]::IsNullOrWhiteSpace($modelName)) {
+            $modelName = "(provider default)"
+        }
+
+        $fallbackCandidates = @()
+        foreach ($complexity in @($profile.complexityFit)) {
+            if ($complexityDefaults.Contains($complexity)) {
+                $orderedProfiles = @($complexityDefaults[$complexity])
+                $profileIndex = [array]::IndexOf($orderedProfiles, $matrixProfileName)
+                if ($profileIndex -ge 0 -and $profileIndex + 1 -lt $orderedProfiles.Count) {
+                    $fallbackCandidates += @($orderedProfiles[($profileIndex + 1)..($orderedProfiles.Count - 1)])
+                }
+            }
+        }
+
+        $executionStyleHints = @()
+        if ($profile.capabilityTier -in @("fast", "balanced", "deep")) {
+            $executionStyleHints += $profile.capabilityTier
+        }
+        if ($profile.capabilityTier -eq "lite" -or $profile.costTier -eq "low") {
+            $executionStyleHints += "lightweight"
+        }
+        if (@($profile.complexityFit) -contains "low") {
+            $executionStyleHints += "smoke"
+        }
+        if ([string]$profile.intendedUse -match "review") {
+            $executionStyleHints += "review"
         }
 
         $profiles += [PSCustomObject]@{
-            name = "default"
-            provider = $defaultProvider
-            capabilities = @("worker")
-            fallbackCandidates = @()
+            name = $matrixProfileName
+            valid = $true
+            provider = $providerName
+            model = $modelName
+            capabilityIntent = $profile.capabilityTier
+            category = (@($profile.complexityFit) -join ", ")
+            intendedUse = $profile.intendedUse
+            executionStyleHints = @($executionStyleHints | Select-Object -Unique)
+            fallbackCandidates = @($fallbackCandidates | Select-Object -Unique)
         }
     }
 
@@ -509,23 +537,36 @@ function Get-ProviderProfileSummary {
 
 function Show-ProviderProfiles {
     param(
-        [string]$ProfileName = ""
+        [string]$ProfileName = "",
+        [bool]$Json = $false
     )
 
     $profiles = @(Get-ProviderProfileSummary -ProfileName $ProfileName)
 
+    if ($Json) {
+        $profiles | ConvertTo-Json -Depth 10
+        return
+    }
+
     if ($profiles.Count -eq 0) {
         Write-Host "No provider profile matched: $ProfileName" -ForegroundColor Yellow
+        Write-Host "Valid profiles: $((Get-ProviderProfileSummary | ForEach-Object { $_.name }) -join ', ')"
         return
     }
 
     Write-Host "Provider profiles"
+    Write-Host "Valid profiles: $((Get-ProviderProfileSummary | ForEach-Object { $_.name }) -join ', ')"
     Write-Host ""
     foreach ($profile in $profiles) {
         Write-Host "name: $($profile.name)"
+        Write-Host "valid: $($profile.valid)"
         Write-Host "provider: $($profile.provider)"
-        Write-Host "capabilities: $(@($profile.capabilities) -join ', ')"
+        Write-Host "model: $($profile.model)"
+        Write-Host "capabilityIntent: $($profile.capabilityIntent)"
+        Write-Host "category: $($profile.category)"
+        Write-Host "executionStyleHints: $(@($profile.executionStyleHints) -join ', ')"
         Write-Host "fallbackCandidates: $(@($profile.fallbackCandidates) -join ', ')"
+        Write-Host "intendedUse: $($profile.intendedUse)"
         Write-Host ""
     }
 }
@@ -4532,7 +4573,7 @@ switch ($Command.ToLowerInvariant()) {
             Write-Host "Missing brevity provider command." -ForegroundColor Red
             Write-Host "Usage: .\brevity.ps1 provider status"
             Write-Host "Usage: .\brevity.ps1 provider docs"
-            Write-Host "Usage: .\brevity.ps1 provider profiles [--profile <name>]"
+            Write-Host "Usage: .\brevity.ps1 provider profiles [--profile <name>] [--json]"
             Write-Host "Usage: .\brevity.ps1 provider set <provider> <status> [-Note <note>]"
             exit 1
         }
@@ -4542,6 +4583,7 @@ switch ($Command.ToLowerInvariant()) {
             "docs" { Show-ProviderDocs }
             "profiles" {
                 $profileName = ""
+                $jsonOutput = $false
                 if ($null -ne $RemainingArgs) {
                     for ($i = 0; $i -lt $RemainingArgs.Length; $i++) {
                         $profileArg = $RemainingArgs[$i]
@@ -4555,15 +4597,18 @@ switch ($Command.ToLowerInvariant()) {
                                 exit 1
                             }
                         }
+                        elseif ($profileArg -eq "--json") {
+                            $jsonOutput = $true
+                        }
                         else {
                             Write-Host "Unknown argument for brevity provider profiles: $profileArg" -ForegroundColor Red
-                            Write-Host "Usage: .\brevity.ps1 provider profiles [--profile <name>]"
+                            Write-Host "Usage: .\brevity.ps1 provider profiles [--profile <name>] [--json]"
                             exit 1
                         }
                     }
                 }
 
-                Show-ProviderProfiles -ProfileName $profileName
+                Show-ProviderProfiles -ProfileName $profileName -Json $jsonOutput
             }
             "reset" {
                 $providerName = $null
