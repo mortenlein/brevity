@@ -461,6 +461,22 @@ files are skipped. Workers read those local files instead of external vault
 paths, preserving the split between vault durable memory and bounded worktree
 execution context.
 
+Normal operator flow:
+
+```powershell
+.\brevity.ps1 task new my-task
+.\brevity.ps1 task runtime-info my-task
+.\brevity.ps1 task context status my-task
+.\brevity.ps1 task context refresh my-task
+```
+
+`task runtime-info` exposes the current context state for the task. `task
+context status` reports the managed context files in the worktree, while `task
+context refresh` re-materializes them from vault memory. If a selected vault
+memory file does not exist, Brevity skips it safely. Refresh is useful when an
+operator wants to restore Brevity-managed context files before handing the task
+to a worker.
+
 ## Gemini Trust
 
 Gemini CLI uses a parent-folder trust model. When you run `gemini` from a

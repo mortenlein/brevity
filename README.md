@@ -167,6 +167,7 @@ Brevity v0 supports:
 .\brevity.ps1 task activate <slug>
 .\brevity.ps1 task spec <slug>
 .\brevity.ps1 task start <slug>
+.\brevity.ps1 task runtime-info <slug>
 .\brevity.ps1 task run <slug> [--execute] [--profile <name>] [--smoke] [--force-provider]
 .\brevity.ps1 task context refresh <slug>
 .\brevity.ps1 task context status <slug>
@@ -379,7 +380,22 @@ Workers should read these materialized files instead of external vault paths.
 The vault remains durable memory; the worktree remains the bounded execution
 context.
 
-and records task metadata in the source repository at:
+Example operator check:
+
+```powershell
+.\brevity.ps1 task new my-task
+.\brevity.ps1 task runtime-info my-task
+.\brevity.ps1 task context status my-task
+.\brevity.ps1 task context refresh my-task
+```
+
+`task runtime-info` shows the task's worktree, prompt, provider, and context
+state. `task context status` inspects the managed files under
+`.brevity\context`, and `task context refresh` restores those managed files from
+vault memory. Missing vault files are skipped safely, so the worker always sees
+only the local bounded context that exists for that task.
+
+The command records task metadata in the source repository at:
 
 ```text
 <repo>\.brevity\tasks.json
