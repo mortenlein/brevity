@@ -1,4 +1,4 @@
-param(
+﻿param(
     [Parameter(Position = 0)]
     [string]$Command = "help",
 
@@ -4383,7 +4383,8 @@ function Remove-TaskMetadataRecord {
     param(
         [string]$TasksPath,
         [object[]]$Tasks,
-        [string]$Slug
+        [string]$Slug,
+        [bool]$Quiet = $false
     )
 
     Invoke-TaskMetadataLock -TasksPath $TasksPath -ScriptBlock {
@@ -4392,18 +4393,26 @@ function Remove-TaskMetadataRecord {
         Write-TaskMetadataFile -TasksPath $TasksPath -Tasks $remainingTasks
     }
 
-    Write-Host "Removed task metadata: $Slug"
+    if (-not $Quiet) {
+        Write-Host "Removed task metadata: $Slug"
+    }
 }
 
 function Remove-TaskWorktree {
     param(
         [string]$Slug,
-        [bool]$Force = $false
+        [bool]$Force = $false,
+        [bool]$Json = $false
     )
 
     if ([string]::IsNullOrWhiteSpace($Slug)) {
-        Write-Host "Missing task slug." -ForegroundColor Red
-        Write-Host "Usage: .\brevity.ps1 task cleanup <slug> [--force]"
+        if ($Json) {
+            Write-CommandErrorResult -Command "task cleanup" -Code "missing-slug" -Message "Missing task slug."
+        }
+        else {
+            Write-Host "Missing task slug." -ForegroundColor Red
+            Write-Host "Usage: .\brevity.ps1 task cleanup <slug> [--force]"
+        }
         exit 1
     }
 
@@ -4421,10 +4430,14 @@ function Remove-TaskWorktree {
 
     $task = $tasks | Where-Object { $_.slug -eq $Slug } | Select-Object -First 1
     $taskFoundInMetadata = $null -ne $task
+    $cleanupWarnings = @()
 
     if (-not $taskFoundInMetadata) {
         if ($Force) {
-            Write-Host "Warning: metadata not found for task '$Slug'. Attempting orphaned cleanup." -ForegroundColor Yellow
+            $cleanupWarnings += "Metadata not found for task '$Slug'. Attempting orphaned cleanup."
+            if (-not $Json) {
+                Write-Host "Warning: metadata not found for task '$Slug'. Attempting orphaned cleanup." -ForegroundColor Yellow
+            }
             $inferredBranch = "task/$Slug"
             $inferredWorktreePath = $null
 
@@ -4453,12 +4466,44 @@ function Remove-TaskWorktree {
             }
         }
         else {
-            Write-Host "Task not found: $Slug" -ForegroundColor Red
-            if (-not (Test-Path -LiteralPath $tasksPath)) {
-                Write-Host "No Brevity task metadata exists at: $tasksPath"
+            if ($Json) {
+                $message = "Task not found: $Slug"
+                $suggestedNextActions = @("Run .\brevity.ps1 task status to list known tasks.")
+                if (-not (Test-Path -LiteralPath $tasksPath)) {
+                    $suggestedNextActions = @("Run .\brevity.ps1 task new <slug> to create task metadata before cleanup.")
+                }
+                Write-CommandResult `
+                    -Command "task cleanup" `
+                    -Success $false `
+                    -Severity "error" `
+                    -SuggestedNextActions $suggestedNextActions `
+                    -Errors @([pscustomobject]([ordered]@{
+                        code = "task-not-found"
+                        message = $message
+                        details = [pscustomobject]([ordered]@{
+                            slug = $Slug
+                            metadataPath = $tasksPath
+                        })
+                    })) `
+                    -Payload ([pscustomobject]([ordered]@{
+                        slug = $Slug
+                        worktreePath = $null
+                        branch = $null
+                        metadataRemoved = $false
+                        branchRemoved = $false
+                        worktreeRemoved = $false
+                        force = $Force
+                        cleanupWarnings = @($cleanupWarnings)
+                    }))
             }
             else {
-                Write-Host "Use .\brevity.ps1 task status to list known tasks."
+                Write-Host "Task not found: $Slug" -ForegroundColor Red
+                if (-not (Test-Path -LiteralPath $tasksPath)) {
+                    Write-Host "No Brevity task metadata exists at: $tasksPath"
+                }
+                else {
+                    Write-Host "Use .\brevity.ps1 task status to list known tasks."
+                }
             }
             exit 1
         }
@@ -4467,73 +4512,287 @@ function Remove-TaskWorktree {
     $runtimeInfo = Get-TaskRuntimeInfo -Task $task
 
     if ([string]::IsNullOrWhiteSpace($runtimeInfo.worktree.path) -and -not $Force) {
-        Write-Host "Task metadata is missing worktreePath for: $Slug" -ForegroundColor Red
-        Write-Host "Use --force only if you want to remove metadata/branch state despite incomplete metadata." -ForegroundColor Yellow
+        if ($Json) {
+            Write-CommandResult `
+                -Command "task cleanup" `
+                -Success $false `
+                -Severity "error" `
+                -SuggestedNextActions @("Re-run with --force only if you want to remove metadata/branch state despite incomplete metadata.") `
+                -Errors @([pscustomobject]([ordered]@{
+                    code = "missing-worktree-path"
+                    message = "Task metadata is missing worktreePath for: $Slug"
+                    details = [pscustomobject]([ordered]@{ slug = $Slug })
+                })) `
+                -Payload ([pscustomobject]([ordered]@{
+                    slug = $Slug
+                    worktreePath = $runtimeInfo.worktree.path
+                    branch = $runtimeInfo.branch
+                    metadataRemoved = $false
+                    branchRemoved = $false
+                    worktreeRemoved = $false
+                    force = $Force
+                    cleanupWarnings = @($cleanupWarnings)
+                }))
+        }
+        else {
+            Write-Host "Task metadata is missing worktreePath for: $Slug" -ForegroundColor Red
+            Write-Host "Use --force only if you want to remove metadata/branch state despite incomplete metadata." -ForegroundColor Yellow
+        }
         exit 1
     }
 
     if ([string]::IsNullOrWhiteSpace($runtimeInfo.branch)) {
-        Write-Host "Task metadata is missing branch for: $Slug" -ForegroundColor Red
+        if ($Json) {
+            Write-CommandResult `
+                -Command "task cleanup" `
+                -Success $false `
+                -Severity "error" `
+                -Errors @([pscustomobject]([ordered]@{
+                    code = "missing-branch"
+                    message = "Task metadata is missing branch for: $Slug"
+                    details = [pscustomobject]([ordered]@{ slug = $Slug })
+                })) `
+                -Payload ([pscustomobject]([ordered]@{
+                    slug = $Slug
+                    worktreePath = $runtimeInfo.worktree.path
+                    branch = $runtimeInfo.branch
+                    metadataRemoved = $false
+                    branchRemoved = $false
+                    worktreeRemoved = $false
+                    force = $Force
+                    cleanupWarnings = @($cleanupWarnings)
+                }))
+        }
+        else {
+            Write-Host "Task metadata is missing branch for: $Slug" -ForegroundColor Red
+        }
         exit 1
     }
 
-    Write-Host "Cleaning up Brevity task: $Slug"
-    Write-Host "Worktree: $($runtimeInfo.worktree.path)"
-    Write-Host "Branch: $($runtimeInfo.branch)"
+    if (-not $Json) {
+        Write-Host "Cleaning up Brevity task: $Slug"
+        Write-Host "Worktree: $($runtimeInfo.worktree.path)"
+        Write-Host "Branch: $($runtimeInfo.branch)"
+    }
     if ($runtimeInfo.runtime.stale) {
-        Write-Host "Runtime: stale" -ForegroundColor Yellow
+        $cleanupWarnings += "Runtime state is stale."
+        if (-not $Json) {
+            Write-Host "Runtime: stale" -ForegroundColor Yellow
+        }
         if ($runtimeInfo.runtime.issues.Count -gt 0) {
-            Write-Host "Issues: $($runtimeInfo.runtime.issues -join ', ')" -ForegroundColor Yellow
+            $cleanupWarnings += @($runtimeInfo.runtime.issues | ForEach-Object { [string]$_ })
+            if (-not $Json) {
+                Write-Host "Issues: $($runtimeInfo.runtime.issues -join ', ')" -ForegroundColor Yellow
+            }
         }
     }
-    if ($Force) {
+    if ($Force -and -not $Json) {
         Write-Host "Force: enabled"
     }
 
     $worktreeExists = $runtimeInfo.worktree.exists
     $worktreeRegistered = $runtimeInfo.worktree.registered
+    $worktreeRemoved = $false
+    $branchRemoved = $false
+    $metadataRemoved = $false
 
     if ((-not $worktreeExists) -or (-not $worktreeRegistered)) {
-        Write-Host "Warning: recorded worktree is missing or not registered with Git: $($runtimeInfo.worktree.path)" -ForegroundColor Yellow
-        Write-Host "Continuing to branch removal."
+        $cleanupWarnings += "Recorded worktree is missing or not registered with Git: $($runtimeInfo.worktree.path)"
+        if (-not $Json) {
+            Write-Host "Warning: recorded worktree is missing or not registered with Git: $($runtimeInfo.worktree.path)" -ForegroundColor Yellow
+            Write-Host "Continuing to branch removal."
+        }
     }
     elseif ($Force) {
-        git worktree remove --force $task.worktreePath
+        if ($Json) {
+            $gitOutput = @(git worktree remove --force $task.worktreePath 2>&1)
+        }
+        else {
+            git worktree remove --force $task.worktreePath
+        }
         if ($LASTEXITCODE -ne 0) {
-            Write-Host "Cleanup failed while force-removing worktree. Metadata was not changed." -ForegroundColor Red
+            if ($Json) {
+                Write-CommandResult `
+                    -Command "task cleanup" `
+                    -Success $false `
+                    -Severity "error" `
+                    -Errors @([pscustomobject]([ordered]@{
+                        code = "git-worktree-remove-failed"
+                        message = "Cleanup failed while force-removing worktree. Metadata was not changed."
+                        details = [pscustomobject]([ordered]@{
+                            slug = $Slug
+                            worktreePath = $task.worktreePath
+                            gitOutput = @($gitOutput | ForEach-Object { [string]$_ })
+                            exitCode = $LASTEXITCODE
+                        })
+                    })) `
+                    -Payload ([pscustomobject]([ordered]@{
+                        slug = $Slug
+                        worktreePath = $runtimeInfo.worktree.path
+                        branch = $runtimeInfo.branch
+                        metadataRemoved = $metadataRemoved
+                        branchRemoved = $branchRemoved
+                        worktreeRemoved = $worktreeRemoved
+                        force = $Force
+                        cleanupWarnings = @($cleanupWarnings)
+                    }))
+            }
+            else {
+                Write-Host "Cleanup failed while force-removing worktree. Metadata was not changed." -ForegroundColor Red
+            }
             exit $LASTEXITCODE
         }
+        $worktreeRemoved = -not (Test-Path -LiteralPath $task.worktreePath)
     }
     else {
-        git worktree remove $task.worktreePath
+        if ($Json) {
+            $gitOutput = @(git worktree remove $task.worktreePath 2>&1)
+        }
+        else {
+            git worktree remove $task.worktreePath
+        }
         if ($LASTEXITCODE -ne 0) {
-            Write-Host "Cleanup failed while removing worktree. Metadata was not changed." -ForegroundColor Red
+            if ($Json) {
+                Write-CommandResult `
+                    -Command "task cleanup" `
+                    -Success $false `
+                    -Severity "error" `
+                    -Errors @([pscustomobject]([ordered]@{
+                        code = "git-worktree-remove-failed"
+                        message = "Cleanup failed while removing worktree. Metadata was not changed."
+                        details = [pscustomobject]([ordered]@{
+                            slug = $Slug
+                            worktreePath = $task.worktreePath
+                            gitOutput = @($gitOutput | ForEach-Object { [string]$_ })
+                            exitCode = $LASTEXITCODE
+                        })
+                    })) `
+                    -Payload ([pscustomobject]([ordered]@{
+                        slug = $Slug
+                        worktreePath = $runtimeInfo.worktree.path
+                        branch = $runtimeInfo.branch
+                        metadataRemoved = $metadataRemoved
+                        branchRemoved = $branchRemoved
+                        worktreeRemoved = $worktreeRemoved
+                        force = $Force
+                        cleanupWarnings = @($cleanupWarnings)
+                    }))
+            }
+            else {
+                Write-Host "Cleanup failed while removing worktree. Metadata was not changed." -ForegroundColor Red
+            }
             exit $LASTEXITCODE
         }
+        $worktreeRemoved = -not (Test-Path -LiteralPath $task.worktreePath)
     }
 
     if (-not (Test-GitBranchExists -Branch $task.branch)) {
-        Write-Host "Warning: recorded branch is already missing: $($task.branch)" -ForegroundColor Yellow
+        $cleanupWarnings += "Recorded branch is already missing: $($task.branch)"
+        if (-not $Json) {
+            Write-Host "Warning: recorded branch is already missing: $($task.branch)" -ForegroundColor Yellow
+        }
         if ($taskFoundInMetadata) {
-            Remove-TaskMetadataRecord -TasksPath $tasksPath -Tasks $tasks -Slug $Slug
+            Remove-TaskMetadataRecord -TasksPath $tasksPath -Tasks $tasks -Slug $Slug -Quiet $Json
+            $metadataRemoved = $true
+        }
+        if ($Json) {
+            Write-CommandResult `
+                -Command "task cleanup" `
+                -Success $true `
+                -Severity "warning" `
+                -Warnings @($cleanupWarnings | ForEach-Object { [pscustomobject]@{ message = [string]$_ } }) `
+                -SuggestedNextActions @("refresh-runtime-state") `
+                -Payload ([pscustomobject]([ordered]@{
+                    slug = $Slug
+                    worktreePath = $runtimeInfo.worktree.path
+                    branch = $runtimeInfo.branch
+                    metadataRemoved = $metadataRemoved
+                    branchRemoved = $false
+                    worktreeRemoved = $worktreeRemoved
+                    force = $Force
+                    cleanupWarnings = @($cleanupWarnings)
+                }))
         }
         return
     }
 
     if ($Force) {
-        git branch -D $task.branch
+        if ($Json) {
+            $gitOutput = @(git branch -D $task.branch 2>&1)
+        }
+        else {
+            git branch -D $task.branch
+        }
     }
     else {
-        git branch -d $task.branch
+        if ($Json) {
+            $gitOutput = @(git branch -d $task.branch 2>&1)
+        }
+        else {
+            git branch -d $task.branch
+        }
     }
 
     if ($LASTEXITCODE -ne 0) {
-        Write-Host "Cleanup failed while deleting branch. Metadata was not changed." -ForegroundColor Red
+        if ($Json) {
+            Write-CommandResult `
+                -Command "task cleanup" `
+                -Success $false `
+                -Severity "error" `
+                -Errors @([pscustomobject]([ordered]@{
+                    code = "git-branch-delete-failed"
+                    message = "Cleanup failed while deleting branch. Metadata was not changed."
+                    details = [pscustomobject]([ordered]@{
+                        slug = $Slug
+                        branch = $task.branch
+                        gitOutput = @($gitOutput | ForEach-Object { [string]$_ })
+                        exitCode = $LASTEXITCODE
+                    })
+                })) `
+                -Payload ([pscustomobject]([ordered]@{
+                    slug = $Slug
+                    worktreePath = $runtimeInfo.worktree.path
+                    branch = $runtimeInfo.branch
+                    metadataRemoved = $metadataRemoved
+                    branchRemoved = $branchRemoved
+                    worktreeRemoved = $worktreeRemoved
+                    force = $Force
+                    cleanupWarnings = @($cleanupWarnings)
+                }))
+        }
+        else {
+            Write-Host "Cleanup failed while deleting branch. Metadata was not changed." -ForegroundColor Red
+        }
         exit $LASTEXITCODE
     }
+    $branchRemoved = -not (Test-GitBranchExists -Branch $task.branch)
 
     if ($taskFoundInMetadata) {
-        Remove-TaskMetadataRecord -TasksPath $tasksPath -Tasks $tasks -Slug $Slug
+        Remove-TaskMetadataRecord -TasksPath $tasksPath -Tasks $tasks -Slug $Slug -Quiet $Json
+        $metadataRemoved = $true
+    }
+
+    if ($Json) {
+        $severity = "info"
+        if ($cleanupWarnings.Count -gt 0) {
+            $severity = "warning"
+        }
+        Write-CommandResult `
+            -Command "task cleanup" `
+            -Success $true `
+            -Severity $severity `
+            -Warnings @($cleanupWarnings | ForEach-Object { [pscustomobject]@{ message = [string]$_ } }) `
+            -SuggestedNextActions @("refresh-runtime-state") `
+            -Payload ([pscustomobject]([ordered]@{
+                slug = $Slug
+                worktreePath = $runtimeInfo.worktree.path
+                branch = $runtimeInfo.branch
+                metadataRemoved = $metadataRemoved
+                branchRemoved = $branchRemoved
+                worktreeRemoved = $worktreeRemoved
+                force = $Force
+                cleanupWarnings = @($cleanupWarnings)
+            }))
     }
 }
 
@@ -5337,23 +5596,32 @@ switch ($Command.ToLowerInvariant()) {
             "cleanup" {
                 $taskSlug = $null
                 $forceCleanup = $false
+                $jsonOutput = $false
                 if ($null -ne $RemainingArgs) {
                     foreach ($taskArg in $RemainingArgs) {
                         if ($taskArg -eq "--force") {
                             $forceCleanup = $true
                         }
+                        elseif ($taskArg -eq "--json") {
+                            $jsonOutput = $true
+                        }
                         elseif ([string]::IsNullOrWhiteSpace($taskSlug)) {
                             $taskSlug = [string]$taskArg
                         }
                         else {
-                            Write-Host "Unknown argument for brevity task cleanup: $taskArg" -ForegroundColor Red
-                            Write-Host "Usage: .\brevity.ps1 task cleanup <slug> [--force]"
+                            if ($jsonOutput) {
+                                Write-CommandErrorResult -Command "task cleanup" -Code "unknown-argument" -Message "Unknown argument for brevity task cleanup: $taskArg"
+                            }
+                            else {
+                                Write-Host "Unknown argument for brevity task cleanup: $taskArg" -ForegroundColor Red
+                                Write-Host "Usage: .\brevity.ps1 task cleanup <slug> [--force]"
+                            }
                             exit 1
                         }
                     }
                 }
 
-                Remove-TaskWorktree -Slug $taskSlug -Force $forceCleanup
+                Remove-TaskWorktree -Slug $taskSlug -Force $forceCleanup -Json $jsonOutput
             }
             "cleanup-orphans" {
                 $dryRunCleanup = $false
