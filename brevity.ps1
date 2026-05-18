@@ -4848,7 +4848,8 @@ function Resolve-WorkerExecutablePath {
 
 function Invoke-WorkerCommand {
     param(
-        [object]$WorkerCommand
+        [object]$WorkerCommand,
+        [bool]$SuppressOutput = $false
     )
 
     $workerOutput = New-Object 'System.Collections.Generic.List[object]'
@@ -4911,14 +4912,18 @@ function Invoke-WorkerCommand {
 
         if (-not [string]::IsNullOrEmpty($stdout)) {
             foreach ($line in (Split-ProcessOutputLines -Value $stdout)) {
-                Write-Host $line
+                if (-not $SuppressOutput) {
+                    Write-Host $line
+                }
                 $workerOutput.Add($line)
             }
         }
 
         if (-not [string]::IsNullOrEmpty($stderr)) {
             foreach ($line in (Split-ProcessOutputLines -Value $stderr)) {
-                [Console]::Error.WriteLine([string]$line)
+                if (-not $SuppressOutput) {
+                    [Console]::Error.WriteLine([string]$line)
+                }
                 $workerOutput.Add([string]$line)
             }
         }
@@ -4991,12 +4996,22 @@ function Show-TaskRun {
         [bool]$Execute = $false,
         [string]$ProfileName,
         [bool]$Smoke = $false,
-        [bool]$ForceProvider = $false
+        [bool]$ForceProvider = $false,
+        [bool]$Json = $false
     )
 
     if ([string]::IsNullOrWhiteSpace($Slug)) {
+        if ($Json) {
+            Write-CommandErrorResult -Command "task run" -Code "missing-slug" -Message "Missing task slug."
+            exit 1
+        }
         Write-Host "Missing task slug." -ForegroundColor Red
         Write-Host "Usage: .\brevity.ps1 task run <slug> [--execute] [--profile <name>]"
+        exit 1
+    }
+
+    if ($Json -and -not $Execute) {
+        Write-CommandErrorResult -Command "task run" -Code "execute-required" -Message "Structured task run results are only available for synchronous --execute runs."
         exit 1
     }
 
@@ -5005,6 +5020,10 @@ function Show-TaskRun {
     $tasksPath = Join-Path $repoRoot ".brevity\tasks.json"
 
     if (-not (Test-Path -LiteralPath $tasksPath)) {
+        if ($Json) {
+            Write-CommandErrorResult -Command "task run" -Code "task-metadata-missing" -Message "No Brevity task metadata exists." -Details ([pscustomobject]@{ slug = $Slug; tasksPath = $tasksPath })
+            exit 1
+        }
         Write-Host "Task not found: $Slug" -ForegroundColor Red
         Write-Host "No Brevity task metadata exists at: $tasksPath"
         exit 1
@@ -5012,6 +5031,10 @@ function Show-TaskRun {
 
     $rawTasks = Get-Content -LiteralPath $tasksPath -Raw
     if ([string]::IsNullOrWhiteSpace($rawTasks)) {
+        if ($Json) {
+            Write-CommandErrorResult -Command "task run" -Code "task-metadata-empty" -Message "Brevity task metadata is empty." -Details ([pscustomobject]@{ slug = $Slug; tasksPath = $tasksPath })
+            exit 1
+        }
         Write-Host "Task not found: $Slug" -ForegroundColor Red
         Write-Host "No Brevity task metadata exists at: $tasksPath"
         exit 1
@@ -5022,28 +5045,48 @@ function Show-TaskRun {
     $task = $tasks | Where-Object { $_.slug -eq $Slug } | Select-Object -First 1
 
     if ($null -eq $task) {
+        if ($Json) {
+            Write-CommandErrorResult -Command "task run" -Code "task-not-found" -Message "Task not found." -Details ([pscustomobject]@{ slug = $Slug })
+            exit 1
+        }
         Write-Host "Task not found: $Slug" -ForegroundColor Red
         Write-Host "Use .\brevity.ps1 task status to list known tasks."
         exit 1
     }
 
     if ([string]::IsNullOrWhiteSpace($task.worktreePath)) {
+        if ($Json) {
+            Write-CommandErrorResult -Command "task run" -Code "missing-worktree-path" -Message "Task metadata is missing worktreePath." -Details ([pscustomobject]@{ slug = $Slug })
+            exit 1
+        }
         Write-Host "Task metadata is missing worktreePath for: $Slug" -ForegroundColor Red
         exit 1
     }
 
     if ([string]::IsNullOrWhiteSpace($task.promptPath)) {
+        if ($Json) {
+            Write-CommandErrorResult -Command "task run" -Code "missing-prompt-path" -Message "Task metadata is missing promptPath." -Details ([pscustomobject]@{ slug = $Slug })
+            exit 1
+        }
         Write-Host "Task metadata is missing promptPath for: $Slug" -ForegroundColor Red
         exit 1
     }
 
     if (-not (Test-Path -LiteralPath $task.worktreePath)) {
+        if ($Json) {
+            Write-CommandErrorResult -Command "task run" -Code "worktree-missing" -Message "Task worktree path does not exist." -Details ([pscustomobject]@{ slug = $Slug; worktreePath = $task.worktreePath })
+            exit 1
+        }
         Write-Host "Task worktree path does not exist for: $Slug" -ForegroundColor Red
         Write-Host "Expected path: $($task.worktreePath)"
         exit 1
     }
 
     if (-not (Test-Path -LiteralPath $task.promptPath)) {
+        if ($Json) {
+            Write-CommandErrorResult -Command "task run" -Code "prompt-missing" -Message "Task prompt file does not exist." -Details ([pscustomobject]@{ slug = $Slug; promptPath = $task.promptPath })
+            exit 1
+        }
         Write-Host "Task prompt file does not exist for: $Slug" -ForegroundColor Red
         Write-Host "Expected path: $($task.promptPath)"
         exit 1
@@ -5062,6 +5105,10 @@ function Show-TaskRun {
             $effectiveProfileName = $resolvedProfile.CanonicalName
         }
         catch {
+            if ($Json) {
+                Write-CommandErrorResult -Command "task run" -Code "profile-not-found" -Message $_.Exception.Message -Details ([pscustomobject]@{ slug = $Slug; profile = $ProfileName })
+                exit 1
+            }
             Write-Host $_.Exception.Message -ForegroundColor Red
             exit 1
         }
@@ -5093,9 +5140,14 @@ function Show-TaskRun {
         }
     }
     catch {
+        if ($Json) {
+            Write-CommandErrorResult -Command "task run" -Code "worker-command-error" -Message $_.Exception.Message -Details ([pscustomobject]@{ slug = $Slug; profile = $effectiveProfileName })
+            exit 1
+        }
         Write-Host $_.Exception.Message -ForegroundColor Red
         exit 1
     }
+    $runWarnings = @()
     $providerHealth = Read-ProviderHealth
     $health = $providerHealth.health
     $providerName = ([string]$workerCommand.provider).ToLowerInvariant()
@@ -5111,41 +5163,75 @@ function Show-TaskRun {
             $providerStatus -ne "healthy" -and
             $providerStatus -ne "unknown") {
 
-            Write-Host "Warning: provider '$providerName' is currently $providerStatus." -ForegroundColor Yellow
+            $runWarnings += [pscustomobject]([ordered]@{
+                code = "provider-$providerStatus"
+                message = "Provider '$providerName' is currently $providerStatus."
+                details = [pscustomobject]@{ provider = $providerName; status = $providerStatus; note = $providerNote }
+            })
 
-            if (-not [string]::IsNullOrWhiteSpace($providerNote)) {
-                Write-Host "Provider note: $providerNote" -ForegroundColor Gray
-            }
+            if (-not $Json) {
+                Write-Host "Warning: provider '$providerName' is currently $providerStatus." -ForegroundColor Yellow
 
-            $suggestedProfile = Get-PreferredHealthyProfile -Health $health -CurrentProvider $providerName
-            if (-not [string]::IsNullOrWhiteSpace($suggestedProfile)) {
-                Write-Host "Suggested alternative profile: $suggestedProfile" -ForegroundColor Gray
+                if (-not [string]::IsNullOrWhiteSpace($providerNote)) {
+                    Write-Host "Provider note: $providerNote" -ForegroundColor Gray
+                }
+
+                $suggestedProfile = Get-PreferredHealthyProfile -Health $health -CurrentProvider $providerName
+                if (-not [string]::IsNullOrWhiteSpace($suggestedProfile)) {
+                    Write-Host "Suggested alternative profile: $suggestedProfile" -ForegroundColor Gray
+                }
             }
         }
     }
     if ($providerStatus -eq "unavailable") {
-        Write-Host ""
-        Write-Host "Provider '$providerName' is currently unavailable." -ForegroundColor Red
+        if ($Json -and -not $ForceProvider) {
+            $payload = [pscustomobject]([ordered]@{
+                slug = $Slug
+                provider = $workerCommand.provider
+                profile = $effectiveProfileName
+                worktreePath = $task.worktreePath
+                promptPath = $task.promptPath
+                executionMode = "sync"
+                startedAt = $null
+                finishedAt = $null
+                exitCode = $null
+                workerStatus = "blocked"
+                failureType = "provider-unavailable"
+                logPath = $null
+            })
+            Write-CommandResult -Command "task run" -Success $false -Severity "error" -Warnings $runWarnings -Errors @([pscustomobject]([ordered]@{ code = "provider-unavailable"; message = "Provider '$providerName' is currently unavailable."; details = [pscustomobject]@{ provider = $providerName; status = $providerStatus; note = $providerNote } })) -SuggestedNextActions @("Use a different profile, reset provider state, or pass --force-provider.") -Payload $payload
+            exit 1
+        }
+        if (-not $Json) {
+            Write-Host ""
+            Write-Host "Provider '$providerName' is currently unavailable." -ForegroundColor Red
+        }
 
         if (-not $ForceProvider) {
-            Write-Host "Execution blocked to avoid immediate worker failure." -ForegroundColor Red
-            Write-Host "Use a different profile, reset provider state, or pass --force-provider." -ForegroundColor Gray
+            if (-not $Json) {
+                Write-Host "Execution blocked to avoid immediate worker failure." -ForegroundColor Red
+                Write-Host "Use a different profile, reset provider state, or pass --force-provider." -ForegroundColor Gray
+            }
             exit 1
         }
 
-        Write-Host "Provider gate overridden with --force-provider." -ForegroundColor Yellow
+        if (-not $Json) {
+            Write-Host "Provider gate overridden with --force-provider." -ForegroundColor Yellow
+        }
     }
-    Write-Host "Task: $($task.slug)"
-    Write-Host "Worktree: $($task.worktreePath)"
-    Write-Host "Prompt: $($task.promptPath)"
-    Write-Host "Context: $(Join-Path $task.worktreePath ".brevity\context") ($($contextFiles.Count) file(s))"
-    if ($null -ne $resolvedProfile -and $resolvedProfile.IsAlias) {
-        Write-Host "Resolved profile alias: $($resolvedProfile.AliasName) -> $($resolvedProfile.CanonicalName)"
-    }
-    Write-Host "Provider: $($workerCommand.provider)"
-    Write-Host "Worker: $($workerCommand.display)"
-    if (-not [string]::IsNullOrWhiteSpace($workerCommand.executionPolicy)) {
-        Write-Host "ExecutionPolicy (worker process): $($workerCommand.executionPolicy)"
+    if (-not $Json) {
+        Write-Host "Task: $($task.slug)"
+        Write-Host "Worktree: $($task.worktreePath)"
+        Write-Host "Prompt: $($task.promptPath)"
+        Write-Host "Context: $(Join-Path $task.worktreePath ".brevity\context") ($($contextFiles.Count) file(s))"
+        if ($null -ne $resolvedProfile -and $resolvedProfile.IsAlias) {
+            Write-Host "Resolved profile alias: $($resolvedProfile.AliasName) -> $($resolvedProfile.CanonicalName)"
+        }
+        Write-Host "Provider: $($workerCommand.provider)"
+        Write-Host "Worker: $($workerCommand.display)"
+        if (-not [string]::IsNullOrWhiteSpace($workerCommand.executionPolicy)) {
+            Write-Host "ExecutionPolicy (worker process): $($workerCommand.executionPolicy)"
+        }
     }
 
     if (-not $Execute) {
@@ -5153,7 +5239,9 @@ function Show-TaskRun {
         return
     }
 
-    Write-Host "Executing $($workerCommand.provider) worker..."
+    if (-not $Json) {
+        Write-Host "Executing $($workerCommand.provider) worker..."
+    }
     $runStartedAt = (Get-Date).ToUniversalTime().ToString("o")
     Update-TaskWorkerLifecycle -TasksPath $tasksPath -Slug $Slug -StartedAt $runStartedAt -FinishedAt $null -ExitCode $null -FailureType $null -LogPath $null -Provider $workerCommand.provider -Profile $effectiveProfileName
     $previousExecutionPolicyPreference = $env:PSExecutionPolicyPreference
@@ -5177,7 +5265,7 @@ function Show-TaskRun {
 
         Push-Location -LiteralPath $workerCommand.workingDirectory
         try {
-            $workerResult = Invoke-WorkerCommand -WorkerCommand $workerCommand
+            $workerResult = Invoke-WorkerCommand -WorkerCommand $workerCommand -SuppressOutput $Json
             $workerOutput = @($workerResult.output)
             $exitCode = $workerResult.exitCode
             $runFinishedAt = (Get-Date).ToUniversalTime().ToString("o")
@@ -5205,7 +5293,9 @@ function Show-TaskRun {
             ) + ($workerOutput | ForEach-Object { [string]$_ })
 
             $logLines | Set-Content -LiteralPath $logPath -Encoding UTF8
-            Write-Host "Worker log: $logPath" -ForegroundColor Gray
+            if (-not $Json) {
+                Write-Host "Worker log: $logPath" -ForegroundColor Gray
+            }
 
             if ($exitCode -ne 0) {
                 $renderedOutput = ($workerOutput | ForEach-Object { [string]$_ }) -join [Environment]::NewLine
@@ -5246,12 +5336,31 @@ function Show-TaskRun {
                 $logLines | Set-Content -LiteralPath $logPath -Encoding UTF8
                 Update-TaskWorkerLifecycle -TasksPath $tasksPath -Slug $Slug -StartedAt $runStartedAt -FinishedAt $runFinishedAt -ExitCode $exitCode -FailureType $failureKind -LogPath $logPath -Provider $workerCommand.provider -Profile $effectiveProfileName
 
-                Write-Host ""
-                Write-Host "Worker failed with exit code $exitCode." -ForegroundColor Yellow
-                Write-Host "Failure kind: $failureKind" -ForegroundColor Yellow
-                Write-Host $failureHint -ForegroundColor Gray
-                Write-Host "Provider: $($workerCommand.provider)" -ForegroundColor Gray
-                Write-Host "Command: $($workerCommand.command)" -ForegroundColor Gray
+                if ($Json) {
+                    $payload = [pscustomobject]([ordered]@{
+                        slug = $Slug
+                        provider = $workerCommand.provider
+                        profile = $effectiveProfileName
+                        worktreePath = $task.worktreePath
+                        promptPath = $task.promptPath
+                        executionMode = "sync"
+                        startedAt = $runStartedAt
+                        finishedAt = $runFinishedAt
+                        exitCode = $exitCode
+                        workerStatus = "failed"
+                        failureType = $failureKind
+                        logPath = $logPath
+                    })
+                    Write-CommandResult -Command "task run" -Success $false -Severity "error" -Warnings $runWarnings -Errors @([pscustomobject]([ordered]@{ code = $failureKind; message = $failureHint; details = [pscustomobject]@{ exitCode = $exitCode; provider = $workerCommand.provider; command = $workerCommand.command } })) -SuggestedNextActions @("Review the worker log.", "Refresh runtime state.") -Payload $payload
+                }
+                else {
+                    Write-Host ""
+                    Write-Host "Worker failed with exit code $exitCode." -ForegroundColor Yellow
+                    Write-Host "Failure kind: $failureKind" -ForegroundColor Yellow
+                    Write-Host $failureHint -ForegroundColor Gray
+                    Write-Host "Provider: $($workerCommand.provider)" -ForegroundColor Gray
+                    Write-Host "Command: $($workerCommand.command)" -ForegroundColor Gray
+                }
 
                 if ($failureKind -eq "quota-constrained") {
                     Set-ProviderStatus `
@@ -5280,6 +5389,23 @@ function Show-TaskRun {
                     -ProviderName $workerCommand.provider `
                     -Status "healthy" `
                     -Note "Automatically marked healthy after successful worker execution."
+            }
+            if ($Json) {
+                $payload = [pscustomobject]([ordered]@{
+                    slug = $Slug
+                    provider = $workerCommand.provider
+                    profile = $effectiveProfileName
+                    worktreePath = $task.worktreePath
+                    promptPath = $task.promptPath
+                    executionMode = "sync"
+                    startedAt = $runStartedAt
+                    finishedAt = $runFinishedAt
+                    exitCode = $exitCode
+                    workerStatus = "succeeded"
+                    failureType = $null
+                    logPath = $logPath
+                })
+                Write-CommandResult -Command "task run" -Success $true -Severity "info" -Warnings $runWarnings -SuggestedNextActions @("Refresh runtime state.") -Payload $payload
             }
         }
         finally {
@@ -6504,6 +6630,7 @@ switch ($Command.ToLowerInvariant()) {
                 $profileName = $null
                 $smokeTask = $false
                 $forceProvider = $false
+                $jsonOutput = $false
                 if ($null -ne $RemainingArgs) {
                     $skipNext = $false
                     for ($i = 0; $i -lt $RemainingArgs.Length; $i++) {
@@ -6522,6 +6649,9 @@ switch ($Command.ToLowerInvariant()) {
                         elseif ($arg -eq "--force-provider") {
                             $forceProvider = $true
                         }
+                        elseif ($arg -eq "--json") {
+                            $jsonOutput = $true
+                        }
                         elseif ($arg -eq "--profile") {
                             if ($i + 1 -lt $RemainingArgs.Length) {
                                 $profileName = [string]$RemainingArgs[$i + 1]
@@ -6536,14 +6666,19 @@ switch ($Command.ToLowerInvariant()) {
                             $taskSlug = [string]$arg
                         }
                         else {
-                            Write-Host "Unknown argument for brevity task run: $arg" -ForegroundColor Red
-                            Write-Host "Usage: .\brevity.ps1 task run <slug> [--execute] [--profile <name>] [--smoke]"
+                            if ($jsonOutput) {
+                                Write-CommandErrorResult -Command "task run" -Code "unknown-argument" -Message "Unknown argument for brevity task run: $arg"
+                            }
+                            else {
+                                Write-Host "Unknown argument for brevity task run: $arg" -ForegroundColor Red
+                                Write-Host "Usage: .\brevity.ps1 task run <slug> [--execute] [--profile <name>] [--smoke]"
+                            }
                             exit 1
                         }
                     }
                 }
 
-                Show-TaskRun -Slug $taskSlug -Execute $executeTask -ProfileName $profileName -Smoke $smokeTask -ForceProvider $forceProvider
+                Show-TaskRun -Slug $taskSlug -Execute $executeTask -ProfileName $profileName -Smoke $smokeTask -ForceProvider $forceProvider -Json $jsonOutput
             }
             "status" { Show-TaskStatus }
             "runtime-info" {
