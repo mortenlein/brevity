@@ -650,29 +650,42 @@ function Show-ProviderProfiles {
 
 function Reset-ProviderStatus {
     param(
-        [string]$ProviderName
+        [string]$ProviderName,
+        [switch]$Json
     )
 
     Set-ProviderStatus `
         -ProviderName $ProviderName `
         -Status "unknown" `
-        -Note "Provider state reset."
+        -Note "Provider state reset." `
+        -Json:$Json `
+        -CommandName "provider reset"
 }
 
 function Set-ProviderStatus {
     param(
         [string]$ProviderName,
         [string]$Status,
-        [string]$Note = ""
+        [string]$Note = "",
+        [switch]$Json,
+        [string]$CommandName = "provider set"
     )
 
     if ([string]::IsNullOrWhiteSpace($ProviderName)) {
+        if ($Json) {
+            Write-CommandErrorResult -Command $CommandName -Code "missing-provider" -Message "Missing provider name."
+            exit 1
+        }
         Write-Host "Missing provider name." -ForegroundColor Red
         Write-Host "Usage: .\brevity.ps1 provider set <provider> <status> [-Note <note>]"
         exit 1
     }
 
     if ([string]::IsNullOrWhiteSpace($Status)) {
+        if ($Json) {
+            Write-CommandErrorResult -Command $CommandName -Code "missing-status" -Message "Missing provider status."
+            exit 1
+        }
         Write-Host "Missing provider status." -ForegroundColor Red
         Write-Host "Usage: .\brevity.ps1 provider set <provider> <status> [-Note <note>]"
         exit 1
@@ -682,6 +695,17 @@ function Set-ProviderStatus {
     $normalizedStatus = ([string]$Status).ToLowerInvariant()
 
     if (-not (Test-ProviderHealthStatus -Status $normalizedStatus)) {
+        if ($Json) {
+            Write-CommandErrorResult `
+                -Command $CommandName `
+                -Code "invalid-provider-status" `
+                -Message "Invalid provider status: $Status" `
+                -Details ([pscustomobject]@{
+                    status = $Status
+                    supportedStatuses = @(Get-SupportedProviderHealthStatuses)
+                })
+            exit 1
+        }
         Write-Host "Invalid provider status: $Status" -ForegroundColor Red
         Write-Host "Supported statuses: $((Get-SupportedProviderHealthStatuses) -join ', ')"
         exit 1
@@ -690,6 +714,17 @@ function Set-ProviderStatus {
     $providerHealth = Read-ProviderHealth
     $health = $providerHealth.health
     if (-not (Get-Member -InputObject $health -Name $normalizedProviderName -MemberType NoteProperty -ErrorAction SilentlyContinue)) {
+        if ($Json) {
+            Write-CommandErrorResult `
+                -Command $CommandName `
+                -Code "invalid-provider" `
+                -Message "Invalid provider: $ProviderName" `
+                -Details ([pscustomobject]@{
+                    provider = $ProviderName
+                    knownProviders = @($health.PSObject.Properties.Name | Sort-Object)
+                })
+            exit 1
+        }
         Write-Host "Invalid provider: $ProviderName" -ForegroundColor Red
         Write-Host "Known providers: $((@($health.PSObject.Properties.Name) | Sort-Object) -join ', ')"
         exit 1
@@ -701,13 +736,39 @@ function Set-ProviderStatus {
         $health.$normalizedProviderName = $provider
     }
 
+    $previousStatus = $null
+    if (Get-Member -InputObject $provider -Name "status" -MemberType NoteProperty -ErrorAction SilentlyContinue) {
+        $previousStatus = [string]$provider.status
+    }
+    $updatedAt = [DateTime]::UtcNow.ToString("o")
+
     Set-ConfigField -Config $provider -Name "status" -Value $normalizedStatus
     Set-ConfigField -Config $provider -Name "note" -Value ([string]$Note)
-    Set-ConfigField -Config $provider -Name "updatedAt" -Value ([DateTime]::UtcNow.ToString("o"))
+    Set-ConfigField -Config $provider -Name "updatedAt" -Value $updatedAt
 
     ConvertTo-Json -InputObject $health -Depth 10 | Set-Content -LiteralPath $providerHealth.path -Encoding ASCII
-    Write-Host "Updated provider health: $normalizedProviderName -> $normalizedStatus"
     Write-VaultRuntimeEvent -Type "provider" -Subject $normalizedProviderName -Message "Provider health set to $normalizedStatus."
+
+    if ($Json) {
+        $payload = [ordered]@{
+            provider = $normalizedProviderName
+            previousStatus = $previousStatus
+            newStatus = $normalizedStatus
+            updatedAt = $updatedAt
+        }
+        if ($CommandName -eq "provider set") {
+            $payload["note"] = [string]$Note
+        }
+
+        Write-CommandResult `
+            -Command $CommandName `
+            -Success $true `
+            -Severity "info" `
+            -Payload ([pscustomobject]$payload)
+        return
+    }
+
+    Write-Host "Updated provider health: $normalizedProviderName -> $normalizedStatus"
 }
 
 function Repair-ConfigField {
@@ -5361,23 +5422,52 @@ switch ($Command.ToLowerInvariant()) {
             }
             "reset" {
                 $providerName = $null
+                $jsonOutput = $false
+                if ($null -ne $RemainingArgs) {
+                    $jsonOutput = @($RemainingArgs) -contains "--json"
+                }
 
-                if ($null -ne $RemainingArgs -and $RemainingArgs.Length -gt 0) {
-                    $providerName = [string]$RemainingArgs[0]
+                if ($null -ne $RemainingArgs) {
+                    for ($i = 0; $i -lt $RemainingArgs.Length; $i++) {
+                        $arg = [string]$RemainingArgs[$i]
+                        if ($arg -eq "--json") {
+                            $jsonOutput = $true
+                        }
+                        elseif ([string]::IsNullOrWhiteSpace($providerName)) {
+                            $providerName = $arg
+                        }
+                        else {
+                            if ($jsonOutput) {
+                                Write-CommandErrorResult -Command "provider reset" -Code "unknown-argument" -Message "Unknown argument for brevity provider reset: $arg"
+                                exit 1
+                            }
+                            Write-Host "Unknown argument for brevity provider reset: $arg" -ForegroundColor Red
+                            Write-Host "Usage: .\brevity.ps1 provider reset <provider> [--json]"
+                            exit 1
+                        }
+                    }
                 }
 
                 if ([string]::IsNullOrWhiteSpace($providerName)) {
+                    if ($jsonOutput) {
+                        Write-CommandErrorResult -Command "provider reset" -Code "missing-provider" -Message "Missing provider name."
+                        exit 1
+                    }
                     Write-Host "Missing provider name." -ForegroundColor Red
-                    Write-Host "Usage: .\brevity.ps1 provider reset <provider>"
+                    Write-Host "Usage: .\brevity.ps1 provider reset <provider> [--json]"
                     exit 1
                 }
 
-                Reset-ProviderStatus -ProviderName $providerName
+                Reset-ProviderStatus -ProviderName $providerName -Json:$jsonOutput
             }
             "set" {
                 $providerName = $null
                 $providerStatus = $null
                 $providerNote = ""
+                $jsonOutput = $false
+                if ($null -ne $RemainingArgs) {
+                    $jsonOutput = @($RemainingArgs) -contains "--json"
+                }
 
                 if ($null -ne $RemainingArgs) {
                     $skipNext = $false
@@ -5388,12 +5478,19 @@ switch ($Command.ToLowerInvariant()) {
                         }
 
                         $arg = $RemainingArgs[$i]
-                        if ([string]::Equals($arg, "-Note", [System.StringComparison]::OrdinalIgnoreCase)) {
+                        if ($arg -eq "--json") {
+                            $jsonOutput = $true
+                        }
+                        elseif ([string]::Equals($arg, "-Note", [System.StringComparison]::OrdinalIgnoreCase)) {
                             if ($i + 1 -lt $RemainingArgs.Length) {
                                 $providerNote = [string]$RemainingArgs[$i + 1]
                                 $skipNext = $true
                             }
                             else {
+                                if ($jsonOutput) {
+                                    Write-CommandErrorResult -Command "provider set" -Code "missing-note" -Message "Missing value for -Note."
+                                    exit 1
+                                }
                                 Write-Host "Missing value for -Note." -ForegroundColor Red
                                 exit 1
                             }
@@ -5405,14 +5502,18 @@ switch ($Command.ToLowerInvariant()) {
                             $providerStatus = [string]$arg
                         }
                         else {
+                            if ($jsonOutput) {
+                                Write-CommandErrorResult -Command "provider set" -Code "unknown-argument" -Message "Unknown argument for brevity provider set: $arg"
+                                exit 1
+                            }
                             Write-Host "Unknown argument for brevity provider set: $arg" -ForegroundColor Red
-                            Write-Host "Usage: .\brevity.ps1 provider set <provider> <status> [-Note <note>]"
+                            Write-Host "Usage: .\brevity.ps1 provider set <provider> <status> [-Note <note>] [--json]"
                             exit 1
                         }
                     }
                 }
 
-                Set-ProviderStatus -ProviderName $providerName -Status $providerStatus -Note $providerNote
+                Set-ProviderStatus -ProviderName $providerName -Status $providerStatus -Note $providerNote -Json:$jsonOutput
             }
             default {
                 Write-Host "Unknown brevity provider command: $Subcommand" -ForegroundColor Red
