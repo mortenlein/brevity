@@ -33,9 +33,22 @@ actions, after known command completion, and at modest idle intervals when the
 view is active. Avoid tight polling loops; they add noise without improving the
 contract.
 
+The runtime-state producer is designed to stay read-only and bounded for polling
+use. Consumers should still choose modest refresh intervals, back off when the
+view is hidden or idle, and refresh immediately after a mutating command
+completes instead of spinning.
+
 Consumers should handle partial or missing data defensively. Prefer showing an
 empty section, a stale timestamp, or a conservative warning over failing the
 whole interface when one optional section is absent or incomplete.
+
+## Bounded Fields
+
+Runtime state should favor summaries over expansion. Current producer limits keep
+recent runtime memory, JSON depth, JSON collection size, and latest task
+run-history inspection bounded. Future fields that may require filesystem scans,
+large log reads, provider calls, or cleanup analysis should expose counts,
+statuses, and latest timestamps rather than full payloads.
 
 ## Rendering Guidance
 

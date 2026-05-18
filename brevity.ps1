@@ -14,6 +14,14 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
+# Runtime-state output is expected to be safe for repeated TUI polling.
+# Keep these budgets small and explicit when adding future fields.
+$script:BrevityRuntimeStateRecentMemoryLimit = 5
+$script:BrevityRuntimeStateJsonMaxDepth = 8
+$script:BrevityRuntimeStateJsonMaxEntries = 200
+$script:BrevityRuntimeStateRunHistoryLatestScanLimit = 1
+$script:BrevityRuntimeStateLogHeaderLineLimit = 40
+
 function Write-CommandResult {
     param(
         [string]$Command,
@@ -1317,7 +1325,7 @@ function Get-TaskWorkerRunHistory {
     return @($logs | ForEach-Object {
         $logFile = $_
         $header = @{}
-        $lines = @(Get-Content -LiteralPath $logFile.FullName -TotalCount 40 -ErrorAction SilentlyContinue)
+        $lines = @(Get-Content -LiteralPath $logFile.FullName -TotalCount $script:BrevityRuntimeStateLogHeaderLineLimit -ErrorAction SilentlyContinue)
         foreach ($line in $lines) {
             if ($line -eq "Output:") {
                 break
@@ -1358,7 +1366,7 @@ function Get-TaskWorkerRunHistorySummary {
         $runCount = @(Get-ChildItem -LiteralPath $taskLogsRoot -Filter "*.log" -File -ErrorAction SilentlyContinue).Count
     }
 
-    $latestRun = @(Get-TaskWorkerRunHistory -Slug $Slug -Count 1 | Select-Object -First 1)
+    $latestRun = @(Get-TaskWorkerRunHistory -Slug $Slug -Count $script:BrevityRuntimeStateRunHistoryLatestScanLimit | Select-Object -First 1)
     if ($latestRun.Count -eq 0) {
         return [pscustomobject]@{
             runCount = $runCount
@@ -3013,7 +3021,7 @@ function Get-SessionSummaryData {
     $runtimeLogPath = Join-Path $config.vaultPath "runtime-log.md"
     $recentRuntimeMemory = @()
     if (Test-Path -LiteralPath $runtimeLogPath) {
-        $recentRuntimeMemory = @(Get-Content -LiteralPath $runtimeLogPath -Tail 5)
+        $recentRuntimeMemory = @(Get-Content -LiteralPath $runtimeLogPath -Tail $script:BrevityRuntimeStateRecentMemoryLimit)
     }
 
     $suggestedNextActions = @("No immediate runtime action suggested.")
@@ -3095,8 +3103,8 @@ function ConvertTo-JsonSafeValue {
     param(
         [object]$Value,
         [int]$Depth = 0,
-        [int]$MaxDepth = 8,
-        [int]$MaxArrayItems = 200
+        [int]$MaxDepth = $script:BrevityRuntimeStateJsonMaxDepth,
+        [int]$MaxArrayItems = $script:BrevityRuntimeStateJsonMaxEntries
     )
 
     if ($null -eq $Value) {
@@ -3265,7 +3273,7 @@ function Get-RuntimeStateData {
     $runtimeLogPath = Join-Path $config.vaultPath "runtime-log.md"
     $recentRuntimeMemory = @()
     if (Test-Path -LiteralPath $runtimeLogPath) {
-        $recentRuntimeMemory = @(Get-Content -LiteralPath $runtimeLogPath -Tail 5)
+        $recentRuntimeMemory = @(Get-Content -LiteralPath $runtimeLogPath -Tail $script:BrevityRuntimeStateRecentMemoryLimit)
     }
 
     $runnableTasks = @($runtimeTasks | Where-Object { -not $_.runtime.stale -and -not $_.provider.gated -and $_.metadataStatus -eq "ready-for-worker" })

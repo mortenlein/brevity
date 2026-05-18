@@ -38,3 +38,19 @@ automation.
 
 Consumers that need to change Brevity state should invoke explicit commands and
 then refresh from `runtime state --json` after the command completes.
+
+## Performance Budget
+
+Runtime state is intended to be safe for repeated TUI polling. The producer keeps
+runtime-log memory recent-only, emits compact run-history fields, and serializes
+JSON through a bounded serializer. Current internal budgets are:
+
+- recent runtime-memory entries: 5 lines
+- JSON depth: 8 levels
+- JSON object or array entries per value: 200 entries
+- latest run-history scan per task summary: 1 latest run
+- worker-log header read per summarized run: 40 lines
+
+Cleanup candidates are read-only inspection records. They should remain concise;
+future expensive cleanup detail should be summarized or moved behind an explicit
+command instead of fully expanding inside runtime state.
