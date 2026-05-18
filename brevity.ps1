@@ -1,4 +1,4 @@
-﻿param(
+param(
     [Parameter(Position = 0)]
     [string]$Command = "help",
 
@@ -1142,15 +1142,30 @@ function Write-VaultRuntimeEvent {
     param(
         [string]$Type,
         [string]$Message,
-        [string]$Subject = ""
+        [string]$Subject = "",
+        [switch]$PassThru
     )
 
     if ([string]::IsNullOrWhiteSpace($Type) -or [string]::IsNullOrWhiteSpace($Message)) {
+        if ($PassThru) {
+            [pscustomobject]([ordered]@{
+                appended = $false
+                runtimeLogPath = $null
+                timestamp = $null
+            })
+        }
         return
     }
 
     $config = Read-BrevityConfig
     if ([string]::IsNullOrWhiteSpace($config.vaultPath)) {
+        if ($PassThru) {
+            [pscustomobject]([ordered]@{
+                appended = $false
+                runtimeLogPath = $null
+                timestamp = $null
+            })
+        }
         return
     }
 
@@ -1172,20 +1187,59 @@ function Write-VaultRuntimeEvent {
     }
 
     Add-Content -LiteralPath $logPath -Value "- $timestamp [$Type]$subjectText $cleanMessage" -Encoding ASCII
+
+    if ($PassThru) {
+        [pscustomobject]([ordered]@{
+            appended = $true
+            runtimeLogPath = $logPath
+            timestamp = $timestamp
+        })
+    }
 }
 
 function Add-MemoryNote {
-    param([string]$Message)
+    param(
+        [string]$Message,
+        [switch]$Json
+    )
 
     if ([string]::IsNullOrWhiteSpace($Message)) {
+        if ($Json) {
+            Write-CommandErrorResult -Command "memory note" -Code "missing-message" -Message "Missing memory note message."
+            exit 1
+        }
+
         Write-Host "Missing memory note message." -ForegroundColor Red
         Write-Host "Usage: .\brevity.ps1 memory note <message>"
         exit 1
     }
 
-    Write-VaultRuntimeEvent -Type "note" -Message $Message
+    $eventResult = Write-VaultRuntimeEvent -Type "note" -Message $Message -PassThru
     $config = Read-BrevityConfig
-    Write-Host "Wrote runtime memory: $(Join-Path $config.vaultPath "runtime-log.md")"
+    $runtimeLogPath = Join-Path $config.vaultPath "runtime-log.md"
+
+    if ($Json) {
+        if ($null -ne $eventResult -and -not [string]::IsNullOrWhiteSpace($eventResult.runtimeLogPath)) {
+            $runtimeLogPath = $eventResult.runtimeLogPath
+        }
+
+        $payload = [pscustomobject]([ordered]@{
+            message = $Message
+            runtimeLogPath = $runtimeLogPath
+            appended = ($null -ne $eventResult -and $eventResult.appended)
+            timestamp = if ($null -ne $eventResult) { $eventResult.timestamp } else { $null }
+        })
+
+        Write-CommandResult `
+            -Command "memory note" `
+            -Success $true `
+            -Severity "info" `
+            -Payload $payload `
+            -SuggestedNextActions @("refresh-runtime-state")
+        return
+    }
+
+    Write-Host "Wrote runtime memory: $runtimeLogPath"
 }
 
 function Get-RecentWorkerLogs {
@@ -5225,12 +5279,14 @@ switch ($Command.ToLowerInvariant()) {
         }
 
         if ($Subcommand.ToLowerInvariant() -eq "note") {
+            $jsonOutput = @($RemainingArgs) -contains "--json"
             $message = ""
             if ($null -ne $RemainingArgs) {
-                $message = ($RemainingArgs -join " ")
+                $messageParts = @($RemainingArgs | Where-Object { $_ -ne "--json" })
+                $message = ($messageParts -join " ")
             }
 
-            Add-MemoryNote -Message $message
+            Add-MemoryNote -Message $message -Json:$jsonOutput
         }
         else {
             Write-Host "Unknown brevity memory command: $Subcommand" -ForegroundColor Red
