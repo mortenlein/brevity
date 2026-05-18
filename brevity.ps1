@@ -967,6 +967,7 @@ function Show-Help {
     Write-Host "  .\brevity.ps1 task cleanup <slug> [--force]"
     Write-Host "  .\brevity.ps1 task cleanup-orphans --dry-run"
     Write-Host "  .\brevity.ps1 task cleanup-orphans --execute"
+    Write-Host "  .\brevity.ps1 task cleanup-orphan-branches --dry-run"
     Write-Host ""
     Write-Host "Planned commands:"
     Write-Host "  brevity onboard"
@@ -3225,6 +3226,27 @@ function Get-OrphanedTaskWorktreeRecords {
     })
 }
 
+function Get-OrphanedTaskBranchRecords {
+    param(
+        [object[]]$RuntimeTasks,
+        [object[]]$WorktreeRecords
+    )
+
+    $metadataBranches = @($RuntimeTasks | ForEach-Object { $_.branch } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+    $registeredWorktreeBranches = @($WorktreeRecords | ForEach-Object { $_.branch } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+    $taskBranches = @(Get-GitTaskBranches)
+    $mergedTaskBranches = @(Get-MergedTaskBranches)
+
+    return @($taskBranches | Where-Object {
+        ($metadataBranches -notcontains $_) -and ($registeredWorktreeBranches -notcontains $_)
+    } | Sort-Object | ForEach-Object {
+        [pscustomobject]@{
+            branch = $_
+            mergedIntoHead = ($mergedTaskBranches -contains $_)
+        }
+    })
+}
+
 function Format-GitCommandArgument {
     param([string]$Value)
 
@@ -3535,6 +3557,43 @@ function Invoke-OrphanCleanup {
 
     Write-Host ""
     Write-Host "Dry run only. No worktrees or branches were removed."
+}
+
+function Invoke-OrphanBranchCleanup {
+    param([bool]$DryRun = $false)
+
+    if (-not $DryRun) {
+        Write-Host "Refusing to inspect orphaned task branches without --dry-run." -ForegroundColor Yellow
+        Write-Host "Run:"
+        Write-Host "  .\brevity.ps1 task cleanup-orphan-branches --dry-run"
+        exit 1
+    }
+
+    $repoRoot = Get-RepositoryRoot
+    $runtimeTasks = @(Read-BrevityTasks | ForEach-Object { Get-TaskRuntimeInfo -Task $_ })
+    $worktreeRecords = @(Get-GitWorktreeRecords)
+    $orphanedBranches = @(Get-OrphanedTaskBranchRecords -RuntimeTasks $runtimeTasks -WorktreeRecords $worktreeRecords)
+
+    Write-Host "Brevity orphan branch cleanup dry run"
+    Write-Host "Repo: $repoRoot"
+    Write-Host "Candidates: $($orphanedBranches.Count)"
+
+    if ($orphanedBranches.Count -eq 0) {
+        Write-Host "No orphaned task branches found."
+        Write-Host "Dry run only. No branches were removed."
+        return
+    }
+
+    Write-Section "Orphaned task branches"
+    foreach ($candidate in $orphanedBranches) {
+        Write-Host "Branch: $($candidate.branch)"
+        Write-Host "Merged into current HEAD: $($candidate.mergedIntoHead)"
+        Write-Host "Suggested manual command:"
+        Write-Host "  git branch -D $(Format-GitCommandArgument -Value $candidate.branch)"
+        Write-Host ""
+    }
+
+    Write-Host "Dry run only. No branches were removed."
 }
 
 function Get-OrphanedWorktreeGuidance {
@@ -6206,6 +6265,23 @@ switch ($Command.ToLowerInvariant()) {
                 }
 
                 Invoke-OrphanCleanup -DryRun $dryRunCleanup -Execute $executeCleanup
+            }
+            "cleanup-orphan-branches" {
+                $dryRunCleanup = $false
+                if ($null -ne $RemainingArgs) {
+                    foreach ($taskArg in $RemainingArgs) {
+                        if ($taskArg -eq "--dry-run") {
+                            $dryRunCleanup = $true
+                        }
+                        else {
+                            Write-Host "Unknown argument for brevity task cleanup-orphan-branches: $taskArg" -ForegroundColor Red
+                            Write-Host "Usage: .\brevity.ps1 task cleanup-orphan-branches --dry-run"
+                            exit 1
+                        }
+                    }
+                }
+
+                Invoke-OrphanBranchCleanup -DryRun $dryRunCleanup
             }
             default {
                 Write-Host "Unknown brevity task command: $Subcommand" -ForegroundColor Red

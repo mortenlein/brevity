@@ -175,6 +175,7 @@ Brevity v0 supports:
 .\brevity.ps1 task status
 .\brevity.ps1 task merge <slug>
 .\brevity.ps1 task cleanup <slug> [--force]
+.\brevity.ps1 task cleanup-orphan-branches --dry-run
 ```
 
 ## Runtime State Contract
@@ -645,6 +646,18 @@ that is no longer registered, no longer under the active worktree root, no longe
 on a `task/*` branch, now has task metadata, or has dirty Git status. Dirty
 orphaned worktrees are not force deleted; Brevity prints inspection commands and
 safe next-step guidance instead.
+
+Orphan branch cleanup is dry-run only. It reports local `task/*` branches that
+have no `.brevity\tasks.json` metadata and are not checked out in any registered
+Git worktree:
+
+```powershell
+.\brevity.ps1 task cleanup-orphan-branches --dry-run
+```
+
+The report shows whether each branch appears merged into the current `HEAD` and
+prints the suggested manual `git branch -D <branch>` command. Without
+`--dry-run`, the command refuses safely.
 
 ## Workspace Lifecycle Hygiene
 

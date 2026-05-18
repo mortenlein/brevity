@@ -564,6 +564,12 @@ Dirty orphaned worktrees are treated as unsafe: Brevity reports tracked and
 untracked changes when detectable, prints inspection commands, and leaves the
 worktree untouched.
 
+`Brevity task cleanup-orphan-branches --dry-run` reports local `task/*` branches
+that have no matching `.brevity\tasks.json` metadata and are not currently
+checked out in any registered Git worktree. It prints whether each branch is
+merged into the current `HEAD` when Git can report that easily, plus the manual
+`git branch -D <branch>` command. Without `--dry-run`, it refuses safely.
+
 `Brevity task merge <slug>` reads the same metadata file, finds the matching task
 record, and merges the recorded branch into the current Git branch with
 `git merge <branch>`. When the merge succeeds, Brevity updates the task status to
