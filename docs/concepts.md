@@ -520,6 +520,35 @@ provider model IDs. The matrix is scheduler metadata for future routing, but it
 can also supply provider-native execution settings when those settings are
 explicitly known.
 
+Canonical profile names are the source of truth. Brevity v0 defines:
+
+- `gemini-lite`
+- `gemini-flash`
+- `gemini-pro`
+- `codex-fast`
+- `codex-balanced`
+- `codex-deep`
+- `copilot`
+
+Brevity also accepts aliases for operator ergonomics. An alias is resolved to
+its canonical profile before worker resolution, so the selected provider,
+model, and provider-native settings still come from the canonical profile.
+Aliases are convenience names only; they are not separate profiles.
+
+Common alias examples:
+
+```text
+gemini-fast -> gemini-flash
+codex-default -> codex-balanced
+```
+
+Practical usage:
+
+```powershell
+.\brevity.ps1 task run my-task --profile gemini-fast --execute
+.\brevity.ps1 task run my-task --profile codex-default --execute
+```
+
 `brevity.ps1` also defines planner-only complexity defaults in
 `Get-BrevityComplexityProfileDefaults`:
 
@@ -548,6 +577,12 @@ automatically, or override an explicit `--profile` selection.
 | `codex-fast` | low | fast | low | none by default |
 | `codex-balanced` | medium | balanced | medium | none by default |
 | `codex-deep` | high | deep | high | none by default |
+
+### Other Canonical Profiles
+
+| Profile | Cost | Capability | Complexity fit | Model |
+| --- | --- | --- | --- | --- |
+| `copilot` | low | default | low, medium, high | none by default |
 
 These are Brevity worker profiles, not Codex CLI config profiles. Passing
 `--profile codex-balanced` to `Brevity task run` must not become

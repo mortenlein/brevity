@@ -111,6 +111,26 @@ fallback strategies, see
 [Worker Profiles](docs/concepts.md#worker-profiles) in the concepts
 documentation.
 
+Canonical profiles are the source of truth: `gemini-lite`, `gemini-flash`,
+`gemini-pro`, `codex-fast`, `codex-balanced`, `codex-deep`, and `copilot`.
+Brevity also accepts operator-friendly aliases for common choices. Aliases are
+convenience names that resolve to canonical profiles before worker settings are
+selected; they do not create separate profiles.
+
+Examples:
+
+```text
+gemini-fast -> gemini-flash
+codex-default -> codex-balanced
+```
+
+Use either canonical names or aliases with `task run`:
+
+```powershell
+.\brevity.ps1 task run my-task --profile gemini-fast --execute
+.\brevity.ps1 task run my-task --profile codex-default --execute
+```
+
 ## Worker Fast Loop
 
 The recommended fast iteration loop for a Gemini worker on an **activated** task is:
