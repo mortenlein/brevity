@@ -4564,6 +4564,12 @@ function ConvertTo-RuntimeStateTaskSummary {
         worktreePath = $Task.worktree.path
         worktreeExists = $Task.worktree.exists
         worktreeRegistered = $Task.worktree.registered
+        context = [pscustomobject]@{
+            exists = $Task.context.exists
+            path = $Task.context.path
+            materializedFileCount = $Task.context.materializedFileCount
+            missingFiles = @($Task.context.missingFiles)
+        }
         promptPath = $Task.prompt.path
         promptExists = $Task.prompt.exists
         stale = $Task.runtime.stale

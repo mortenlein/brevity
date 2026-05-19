@@ -49,20 +49,43 @@ type TaskCounts struct {
 }
 
 type TaskSummary struct {
-	Slug            string          `json:"slug"`
-	Status          string          `json:"status"`
-	NormalizedState string          `json:"normalizedState"`
-	WorktreePath    string          `json:"worktreePath"`
-	Worktree        *TaskWorktree   `json:"worktree,omitempty"`
-	Execution       *TaskExecution  `json:"execution,omitempty"`
-	LatestRun       json.RawMessage `json:"latestRun,omitempty"`
-	Extras          map[string]any  `json:"-"`
+	Slug                  string              `json:"slug"`
+	Status                string              `json:"status"`
+	NormalizedState       string              `json:"normalizedState"`
+	Provider              string              `json:"provider"`
+	Profile               string              `json:"profile"`
+	LastProvider          string              `json:"lastProvider"`
+	LastProfile           string              `json:"lastProfile"`
+	WorktreePath          string              `json:"worktreePath"`
+	WorktreeExists        *bool               `json:"worktreeExists,omitempty"`
+	Worktree              *TaskWorktree       `json:"worktree,omitempty"`
+	Context               *TaskRuntimeContext `json:"context,omitempty"`
+	Execution             *TaskExecution      `json:"execution,omitempty"`
+	WorkerStatus          string              `json:"workerStatus"`
+	LastRunID             string              `json:"lastRunId"`
+	LastExitCode          any                 `json:"lastExitCode"`
+	LastLogPath           string              `json:"lastLogPath"`
+	LatestRunID           string              `json:"latestRunId"`
+	LatestRunLogPath      string              `json:"latestRunLogPath"`
+	LatestRunExitCode     any                 `json:"latestRunExitCode"`
+	LatestRunProvider     string              `json:"latestRunProvider"`
+	LatestRunProfile      string              `json:"latestRunProfile"`
+	LatestRunWorkerStatus string              `json:"latestRunWorkerStatus"`
+	LatestRun             json.RawMessage     `json:"latestRun,omitempty"`
+	Extras                map[string]any      `json:"-"`
 }
 
 type TaskWorktree struct {
 	Exists bool   `json:"exists"`
 	Path   string `json:"path"`
 	Branch string `json:"branch"`
+}
+
+type TaskRuntimeContext struct {
+	Exists                bool     `json:"exists"`
+	Path                  string   `json:"path"`
+	MaterializedFileCount int      `json:"materializedFileCount"`
+	MissingFiles          []string `json:"missingFiles"`
 }
 
 type TaskExecution struct {
@@ -89,14 +112,16 @@ type CleanupSummary struct {
 }
 
 type CleanupCandidate struct {
-	ID                string   `json:"id"`
-	Severity          string   `json:"severity"`
-	Category          string   `json:"category"`
-	Path              string   `json:"path"`
-	Branch            string   `json:"branch"`
-	Dirty             bool     `json:"dirty"`
-	DirtyReasons      []string `json:"dirtyReasons"`
-	SuggestedCommands []string `json:"suggestedCommands"`
+	ID                    string   `json:"id"`
+	Severity              string   `json:"severity"`
+	Category              string   `json:"category"`
+	Path                  string   `json:"path"`
+	Branch                string   `json:"branch"`
+	Dirty                 bool     `json:"dirty"`
+	DirtyReasons          []string `json:"dirtyReasons"`
+	SuggestedCommands     []string `json:"suggestedCommands"`
+	RemovableByExecute    *bool    `json:"removableByExecute,omitempty"`
+	DestructiveIfUnmerged *bool    `json:"destructiveIfUnmerged,omitempty"`
 }
 
 func ParseRuntimeState(input []byte) (RuntimeState, error) {

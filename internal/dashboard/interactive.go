@@ -129,7 +129,8 @@ func RenderInteractiveString(state contracts.RuntimeState, model InteractiveMode
 	fmt.Fprintln(&stdout, "=========================")
 	fmt.Fprintf(&stdout, "Repo: %s\n", fallback(state.RepoRoot, "(unknown)"))
 	fmt.Fprintf(&stdout, "Generated: %s\n", fallback(state.GeneratedAt, "(unknown)"))
-	fmt.Fprintln(&stdout, "Keys: q quit, r refresh, j/k move, enter/d details, ? help")
+	fmt.Fprintln(&stdout, "Keys: j/k move | d or Enter details | r refresh | ? help | q quit")
+	fmt.Fprintln(&stdout, "Input: line-oriented for now; type a key, then press Enter.")
 
 	renderInteractiveProviders(&stdout, state, items, model.SelectedIndex)
 	renderInteractiveTasks(&stdout, state, items, model.SelectedIndex)
@@ -250,16 +251,22 @@ func renderInteractiveDetails(stdout io.Writer, items []SelectionItem, selected 
 		fmt.Fprintf(stdout, "  type: provider\n")
 		fmt.Fprintf(stdout, "  name: %s\n", fallback(item.ProviderName, "(unknown)"))
 		fmt.Fprintf(stdout, "  status: %s\n", fallback(item.ProviderHealth.Status, "unknown"))
-		fmt.Fprintf(stdout, "  note: %s\n", fallback(item.ProviderHealth.Note, "(none)"))
 		fmt.Fprintf(stdout, "  updatedAt: %s\n", fallback(item.ProviderHealth.UpdatedAt, "(unknown)"))
+		fmt.Fprintf(stdout, "  note: %s\n", fallback(item.ProviderHealth.Note, "(none)"))
+		fmt.Fprintf(stdout, "  hint: %s\n", providerHint(item.ProviderHealth))
 	case SelectionTask:
 		task := item.Task
 		fmt.Fprintf(stdout, "  type: task\n")
 		fmt.Fprintf(stdout, "  slug: %s\n", fallback(task.Slug, "(unknown)"))
 		fmt.Fprintf(stdout, "  status: %s\n", fallback(task.Status, "(unknown)"))
 		fmt.Fprintf(stdout, "  normalizedState: %s\n", fallback(task.NormalizedState, "(unknown)"))
-		fmt.Fprintf(stdout, "  worktree: %s\n", fallback(taskWorktreePath(task), "(unknown)"))
+		fmt.Fprintf(stdout, "  worktreePath: %s\n", fallback(taskWorktreePath(task), "(unknown)"))
+		fmt.Fprintf(stdout, "  worktreeExists: %s\n", taskWorktreeExists(task))
+		fmt.Fprintf(stdout, "  contextMaterialized: %s\n", taskContextMaterialized(task))
+		fmt.Fprintf(stdout, "  contextMissing: %s\n", taskContextMissing(task))
 		fmt.Fprintf(stdout, "  latestRun: %s\n", fallback(taskLatestRun(task), "(none)"))
+		fmt.Fprintf(stdout, "  provider: %s\n", fallback(taskProvider(task), "(unknown)"))
+		fmt.Fprintf(stdout, "  profile: %s\n", fallback(taskProfile(task), "(unknown)"))
 	case SelectionCleanup:
 		candidate := item.CleanupCandidate
 		fmt.Fprintf(stdout, "  type: cleanup candidate\n")
@@ -269,11 +276,14 @@ func renderInteractiveDetails(stdout io.Writer, items []SelectionItem, selected 
 		fmt.Fprintf(stdout, "  path: %s\n", fallback(candidate.Path, "(none)"))
 		fmt.Fprintf(stdout, "  branch: %s\n", fallback(candidate.Branch, "(none)"))
 		fmt.Fprintf(stdout, "  dirty: %t\n", candidate.Dirty)
+		fmt.Fprintf(stdout, "  removableByExecute: %s\n", optionalBool(candidate.RemovableByExecute))
+		fmt.Fprintf(stdout, "  destructiveIfUnmerged: %s\n", optionalBool(candidate.DestructiveIfUnmerged))
 		renderStringList(stdout, "dirtyReasons", candidate.DirtyReasons)
 		renderStringList(stdout, "suggestedCommands", candidate.SuggestedCommands)
 	case SelectionAction:
 		fmt.Fprintf(stdout, "  type: suggested action\n")
 		fmt.Fprintf(stdout, "  action: %s\n", fallback(item.ActionText, "(none)"))
+		fmt.Fprintf(stdout, "  guidance: read-only guidance; no action is executed by this dashboard.\n")
 	}
 }
 
@@ -301,6 +311,30 @@ func taskWorktreePath(task contracts.TaskSummary) string {
 }
 
 func taskLatestRun(task contracts.TaskSummary) string {
+	parts := make([]string, 0, 4)
+	if task.LatestRunID != "" {
+		parts = append(parts, "id="+task.LatestRunID)
+	} else if task.LastRunID != "" {
+		parts = append(parts, "id="+task.LastRunID)
+	}
+	if task.LatestRunWorkerStatus != "" {
+		parts = append(parts, "status="+task.LatestRunWorkerStatus)
+	} else if task.WorkerStatus != "" {
+		parts = append(parts, "status="+task.WorkerStatus)
+	}
+	if task.LatestRunExitCode != nil {
+		parts = append(parts, "exit="+fmt.Sprint(task.LatestRunExitCode))
+	} else if task.LastExitCode != nil {
+		parts = append(parts, "exit="+fmt.Sprint(task.LastExitCode))
+	}
+	if task.LatestRunLogPath != "" {
+		parts = append(parts, "log="+task.LatestRunLogPath)
+	} else if task.LastLogPath != "" {
+		parts = append(parts, "log="+task.LastLogPath)
+	}
+	if len(parts) > 0 {
+		return strings.Join(parts, " ")
+	}
 	if task.Execution != nil {
 		parts := make([]string, 0, 3)
 		if task.Execution.LastRunID != "" {
@@ -323,8 +357,8 @@ func taskLatestRun(task contracts.TaskSummary) string {
 	if err := json.Unmarshal(task.LatestRun, &values); err != nil {
 		return string(task.LatestRun)
 	}
-	parts := make([]string, 0, 3)
-	for _, key := range []string{"runId", "workerStatus", "status", "logPath"} {
+	parts = make([]string, 0, 4)
+	for _, key := range []string{"runId", "workerStatus", "status", "exitCode", "logPath"} {
 		if value, ok := values[key]; ok {
 			parts = append(parts, fmt.Sprintf("%s=%v", key, value))
 		}
@@ -333,6 +367,69 @@ func taskLatestRun(task contracts.TaskSummary) string {
 		return string(task.LatestRun)
 	}
 	return strings.Join(parts, " ")
+}
+
+func providerHint(health contracts.ProviderHealth) string {
+	status := strings.ToLower(strings.TrimSpace(health.Status))
+	switch status {
+	case "degraded", "capacity-degraded":
+		return "provider is degraded; expect slower or less reliable worker starts"
+	case "unavailable", "down", "offline":
+		return "provider is unavailable; choose another healthy profile before starting work"
+	default:
+		return "(none)"
+	}
+}
+
+func taskWorktreeExists(task contracts.TaskSummary) string {
+	if task.WorktreeExists != nil {
+		return fmt.Sprint(*task.WorktreeExists)
+	}
+	if task.Worktree != nil {
+		return fmt.Sprint(task.Worktree.Exists)
+	}
+	return "(unknown)"
+}
+
+func taskContextMaterialized(task contracts.TaskSummary) string {
+	if task.Context == nil {
+		return "(unknown)"
+	}
+	return fmt.Sprint(task.Context.MaterializedFileCount)
+}
+
+func taskContextMissing(task contracts.TaskSummary) string {
+	if task.Context == nil {
+		return "(unknown)"
+	}
+	return fmt.Sprint(len(task.Context.MissingFiles))
+}
+
+func taskProvider(task contracts.TaskSummary) string {
+	if task.Provider != "" {
+		return task.Provider
+	}
+	if task.LatestRunProvider != "" {
+		return task.LatestRunProvider
+	}
+	return task.LastProvider
+}
+
+func taskProfile(task contracts.TaskSummary) string {
+	if task.Profile != "" {
+		return task.Profile
+	}
+	if task.LatestRunProfile != "" {
+		return task.LatestRunProfile
+	}
+	return task.LastProfile
+}
+
+func optionalBool(value *bool) string {
+	if value == nil {
+		return "(unknown)"
+	}
+	return fmt.Sprint(*value)
 }
 
 func renderStringList(stdout io.Writer, label string, values []string) {

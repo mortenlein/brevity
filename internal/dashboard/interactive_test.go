@@ -57,8 +57,54 @@ func TestRenderInteractiveDetailsForCleanupCandidate(t *testing.T) {
 	assertOutputContains(t, output, "type: cleanup candidate")
 	assertOutputContains(t, output, "id: orphan-worktree:my-task")
 	assertOutputContains(t, output, "dirty: true")
+	assertOutputContains(t, output, "removableByExecute: false")
+	assertOutputContains(t, output, "destructiveIfUnmerged: true")
 	assertOutputContains(t, output, "- modified tracked files detected")
 	assertOutputContains(t, output, "- git status --short")
+}
+
+func TestRenderInteractiveDetailsForProvider(t *testing.T) {
+	state := interactiveState()
+	state.Providers.Health["codex"] = contracts.ProviderHealth{
+		Status:    "capacity-degraded",
+		Note:      "quota pressure",
+		UpdatedAt: "2026-05-19T10:01:00Z",
+	}
+
+	output := RenderInteractiveString(state, InteractiveModel{SelectedIndex: 0, ShowDetails: true})
+
+	assertOutputContains(t, output, "type: provider")
+	assertOutputContains(t, output, "name: codex")
+	assertOutputContains(t, output, "status: capacity-degraded")
+	assertOutputContains(t, output, "updatedAt: 2026-05-19T10:01:00Z")
+	assertOutputContains(t, output, "note: quota pressure")
+	assertOutputContains(t, output, "hint: provider is degraded")
+}
+
+func TestRenderInteractiveDetailsForTask(t *testing.T) {
+	state := interactiveState()
+	output := RenderInteractiveString(state, InteractiveModel{SelectedIndex: 1, ShowDetails: true})
+
+	assertOutputContains(t, output, "type: task")
+	assertOutputContains(t, output, "slug: my-task")
+	assertOutputContains(t, output, "status: ready-for-worker")
+	assertOutputContains(t, output, "normalizedState: readyForWorker")
+	assertOutputContains(t, output, `worktreePath: C:\repo\worktrees\active\brevity-my-task`)
+	assertOutputContains(t, output, "worktreeExists: true")
+	assertOutputContains(t, output, "contextMaterialized: 3")
+	assertOutputContains(t, output, "contextMissing: 1")
+	assertOutputContains(t, output, `latestRun: id=run-1 status=failed exit=1 log=C:\repo\.brevity\logs\my-task\run-1.log`)
+	assertOutputContains(t, output, "provider: codex")
+	assertOutputContains(t, output, "profile: codex-balanced")
+}
+
+func TestRenderInteractiveDetailsForSuggestedAction(t *testing.T) {
+	state := interactiveState()
+	output := RenderInteractiveString(state, InteractiveModel{SelectedIndex: 3, ShowDetails: true})
+
+	assertOutputContains(t, output, "type: suggested action")
+	assertOutputContains(t, output, "action: Inspect state.")
+	assertOutputContains(t, output, "guidance: read-only guidance; no action is executed by this dashboard.")
 }
 
 func TestRenderInteractiveHelpToggle(t *testing.T) {
@@ -71,6 +117,8 @@ func TestRenderInteractiveHelpToggle(t *testing.T) {
 
 	withHelp := RenderInteractiveString(state, InteractiveModel{ShowHelp: true})
 	assertOutputContains(t, withHelp, "Help")
+	assertOutputContains(t, withHelp, "Keys: j/k move | d or Enter details | r refresh | ? help | q quit")
+	assertOutputContains(t, withHelp, "Input: line-oriented for now; type a key, then press Enter.")
 	assertOutputContains(t, withHelp, "q: quit")
 	assertOutputContains(t, withHelp, "Input is line-oriented")
 }
@@ -89,30 +137,43 @@ func interactiveState() contracts.RuntimeState {
 		TaskCounts: contracts.TaskCounts{Tracked: 1},
 		Tasks: []contracts.TaskSummary{
 			{
-				Slug:            "my-task",
-				Status:          "ready-for-worker",
-				NormalizedState: "readyForWorker",
-				Worktree:        &contracts.TaskWorktree{Path: `C:\repo\worktrees\active\brevity-my-task`},
-				Execution:       &contracts.TaskExecution{Status: "failed", LastRunID: "run-1", LogPath: `C:\repo\.brevity\logs\my-task\run-1.log`},
+				Slug:                  "my-task",
+				Status:                "ready-for-worker",
+				NormalizedState:       "readyForWorker",
+				Provider:              "codex",
+				Profile:               "codex-balanced",
+				Worktree:              &contracts.TaskWorktree{Path: `C:\repo\worktrees\active\brevity-my-task`},
+				WorktreeExists:        boolPtr(true),
+				Context:               &contracts.TaskRuntimeContext{MaterializedFileCount: 3, MissingFiles: []string{"runtime.md"}},
+				LatestRunID:           "run-1",
+				LatestRunWorkerStatus: "failed",
+				LatestRunExitCode:     float64(1),
+				LatestRunLogPath:      `C:\repo\.brevity\logs\my-task\run-1.log`,
 			},
 		},
 		Cleanup: &contracts.Cleanup{
 			Summary: &contracts.CleanupSummary{TotalCandidates: 1},
 			OrphanedTaskWorktrees: []contracts.CleanupCandidate{
 				{
-					ID:                "orphan-worktree:my-task",
-					Severity:          "warning",
-					Category:          "requires-inspection",
-					Path:              `C:\repo\worktrees\active\brevity-my-task`,
-					Branch:            "task/my-task",
-					Dirty:             true,
-					DirtyReasons:      []string{"modified tracked files detected"},
-					SuggestedCommands: []string{"git status --short"},
+					ID:                    "orphan-worktree:my-task",
+					Severity:              "warning",
+					Category:              "requires-inspection",
+					Path:                  `C:\repo\worktrees\active\brevity-my-task`,
+					Branch:                "task/my-task",
+					Dirty:                 true,
+					DirtyReasons:          []string{"modified tracked files detected"},
+					SuggestedCommands:     []string{"git status --short"},
+					RemovableByExecute:    boolPtr(false),
+					DestructiveIfUnmerged: boolPtr(true),
 				},
 			},
 		},
 		SuggestedNextActions: []string{"Inspect state."},
 	}
+}
+
+func boolPtr(value bool) *bool {
+	return &value
 }
 
 func assertOutputContains(t *testing.T, output string, want string) {
