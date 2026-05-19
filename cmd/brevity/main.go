@@ -44,20 +44,21 @@ const (
 )
 
 type cliOptions struct {
-	help     bool
-	kind     commandKind
-	once     bool
-	watch    bool
-	noClear  bool
-	refresh  time.Duration
-	provider string
-	status   string
-	slug     string
-	force    bool
-	execute  bool
-	dryRun   bool
-	profile  string
-	smoke    bool
+	help       bool
+	kind       commandKind
+	once       bool
+	watch      bool
+	noClear    bool
+	refresh    time.Duration
+	jsonSource string
+	provider   string
+	status     string
+	slug       string
+	force      bool
+	execute    bool
+	dryRun     bool
+	profile    string
+	smoke      bool
 }
 
 type actionCall func() ([]byte, error)
@@ -75,7 +76,7 @@ func usageError(command commands.Command) error {
 }
 
 func parseOptions(args []string) (cliOptions, error) {
-	options := cliOptions{kind: commandDashboard, refresh: 5 * time.Second}
+	options := cliOptions{kind: commandDashboard, refresh: 5 * time.Second, jsonSource: "powershell"}
 	for _, arg := range args {
 		if arg == "--help" || arg == "-h" {
 			options.help = true
@@ -99,7 +100,7 @@ func parseOptions(args []string) (cliOptions, error) {
 	flags.BoolVar(&options.watch, "watch", false, "refresh the dashboard until interrupted")
 	flags.BoolVar(&options.noClear, "no-clear", false, "do not clear the screen before changed dashboard renders")
 	refresh := flags.String("refresh", options.refresh.String(), "dashboard refresh interval")
-	jsonSource := flags.String("json-source", "powershell", "runtime JSON source")
+	jsonSource := flags.String("json-source", options.jsonSource, "runtime JSON source")
 
 	if err := flags.Parse(args); err != nil {
 		return cliOptions{}, err
@@ -112,9 +113,10 @@ func parseOptions(args []string) (cliOptions, error) {
 		return cliOptions{}, fmt.Errorf("invalid --refresh value %q: duration must be greater than zero", *refresh)
 	}
 	options.refresh = parsedRefresh
-	if *jsonSource != "powershell" {
+	if *jsonSource != "powershell" && *jsonSource != "native" {
 		return cliOptions{}, fmt.Errorf("unsupported json source: %s", *jsonSource)
 	}
+	options.jsonSource = *jsonSource
 	if options.once && options.watch {
 		return cliOptions{}, fmt.Errorf("--once and --watch cannot be used together")
 	}
@@ -322,7 +324,12 @@ func run(stdout io.Writer, args []string) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
 
-	return runWithContextOptions(ctx, stdout, runtimeclient.NewPowerShellClient(), options)
+	client := runtimeclient.Client(runtimeclient.NewPowerShellClient())
+	if options.kind == commandDashboard && options.jsonSource == "native" {
+		client = runtimeclient.NewNativeClient("")
+	}
+
+	return runWithContextOptions(ctx, stdout, client, options)
 }
 
 func runWithClient(stdout io.Writer, client runtimeclient.Client) error {
@@ -836,6 +843,7 @@ func writeUsage(stdout io.Writer) {
 	fmt.Fprintln(stdout, "  --once                    Render the dashboard once.")
 	fmt.Fprintln(stdout, "  --watch                   Refresh the dashboard until interrupted.")
 	fmt.Fprintln(stdout, "  --refresh <duration>      Set the dashboard refresh interval.")
+	fmt.Fprintln(stdout, "  --json-source <source>    Runtime JSON source: powershell or native.")
 	fmt.Fprintln(stdout, "  --no-clear                Do not clear before changed dashboard renders.")
 	fmt.Fprintln(stdout, "  -h, --help                Show this help text.")
 }

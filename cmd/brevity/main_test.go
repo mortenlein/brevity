@@ -137,6 +137,23 @@ func TestParseOptionsDefaultsToPowerShellSource(t *testing.T) {
 	if options.once {
 		t.Fatal("once = true, want false")
 	}
+	if options.jsonSource != "powershell" {
+		t.Fatalf("jsonSource = %q, want powershell", options.jsonSource)
+	}
+}
+
+func TestParseOptionsAcceptsNativeJSONSource(t *testing.T) {
+	options, err := parseOptions([]string{"--json-source", "native", "--once"})
+	if err != nil {
+		t.Fatalf("parseOptions returned error: %v", err)
+	}
+
+	if options.jsonSource != "native" {
+		t.Fatalf("jsonSource = %q, want native", options.jsonSource)
+	}
+	if !options.once {
+		t.Fatal("once = false, want true")
+	}
 }
 
 func TestParseOptionsAcceptsOnce(t *testing.T) {
