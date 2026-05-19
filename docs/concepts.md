@@ -210,6 +210,22 @@ The centralized contract index lives at [`docs/contracts.md`](contracts.md). It
 indexes runtime/TUI contracts and schemas for automation and TUI consumers,
 including runtime-state and command-result contracts.
 
+### TUI MVP
+
+`Brevity tui` is the first minimal interactive dashboard. It is read-only and
+polls `Brevity runtime state --json` on a conservative interval instead of
+owning orchestration state itself.
+
+The v1 TUI renders compact runtime summary, provider health, task counts by
+normalized state, recent tasks, cleanup warnings, and stale or incomplete run
+indicators. It deliberately avoids mutations, task execution, background
+workers, command palettes, event streaming, embedded Git UI, and embedded
+editing.
+
+Future interactive features should keep a clear boundary between the runtime
+client, renderer, and action system. Mutating actions should use structured
+command-result contracts and remain explicit.
+
 The v1 snapshot includes these major sections:
 
 - `providers` - provider health totals and per-provider health records.

@@ -158,6 +158,7 @@ Brevity v0 supports:
 .\brevity.ps1 logs task <slug> [--tail <n>]
 .\brevity.ps1 session summary [--json]
 .\brevity.ps1 runtime state [--json]
+.\brevity.ps1 tui
 .\brevity.ps1 status [-DevRoot <path>]
 .\brevity.ps1 provider status
 .\brevity.ps1 provider docs
@@ -181,6 +182,20 @@ Brevity v0 supports:
 .\brevity.ps1 task cleanup <slug> [--force]
 .\brevity.ps1 task cleanup-orphan-branches --dry-run
 ```
+
+## TUI
+
+`.\brevity.ps1 tui` starts the first read-only Brevity terminal dashboard. It
+polls `.\brevity.ps1 runtime state --json` every few seconds and renders a
+compact view of repo/runtime summary, provider health, task counts by
+normalized state, recent tasks, cleanup warnings, and stale or incomplete run
+indicators. Press `q` or `Esc` to quit.
+
+The TUI is intentionally a thin runtime-state consumer. It does not start
+workers, mutate task metadata, merge branches, edit files, stream events, or
+embed Git operations. Future mutation support should go through explicit
+command-result contracts rather than duplicating orchestration logic in the
+view layer.
 
 ## Runtime State Contract
 

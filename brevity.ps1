@@ -1,4 +1,4 @@
-﻿param(
+param(
     [Parameter(Position = 0)]
     [string]$Command = "help",
 
@@ -957,6 +957,7 @@ function Show-Help {
     Write-Host "  .\brevity.ps1 logs recent [--count <n>]"
     Write-Host "  .\brevity.ps1 logs task <slug> [--tail <n>]"
     Write-Host "  .\brevity.ps1 runtime state [--json]"
+    Write-Host "  .\brevity.ps1 tui"
     Write-Host "  .\brevity.ps1 session summary [--json]"
     Write-Host "  .\brevity.ps1 status [-DevRoot <path>]"
     Write-Host "  .\brevity.ps1 provider status"
@@ -4964,6 +4965,323 @@ function Get-OrphanedTaskWorktreeCleanupClassification {
     }
 }
 
+function Get-TuiPropertyValue {
+    param(
+        [AllowNull()][object]$InputObject,
+        [string]$Name,
+        [AllowNull()][object]$Default = $null
+    )
+
+    if ($null -eq $InputObject) {
+        return $Default
+    }
+
+    $property = $InputObject.PSObject.Properties[$Name]
+    if ($null -eq $property) {
+        return $Default
+    }
+
+    return $property.Value
+}
+
+function Format-TuiValue {
+    param([AllowNull()][object]$Value)
+
+    if ($null -eq $Value) {
+        return "-"
+    }
+
+    $text = [string]$Value
+    if ([string]::IsNullOrWhiteSpace($text)) {
+        return "-"
+    }
+
+    return $text
+}
+
+function Get-BrevityTuiRuntimeSnapshot {
+    param([int]$TimeoutSeconds = 20)
+
+    $scriptPath = $PSCommandPath
+    if ([string]::IsNullOrWhiteSpace($scriptPath)) {
+        $scriptPath = $MyInvocation.MyCommand.Path
+    }
+
+    $runtimeArgs = @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $scriptPath, "runtime", "state", "--json")
+    $process = New-Object System.Diagnostics.Process
+    $process.StartInfo.FileName = (Get-Command powershell.exe -ErrorAction SilentlyContinue | Select-Object -First 1).Source
+    if ([string]::IsNullOrWhiteSpace($process.StartInfo.FileName)) {
+        $process.StartInfo.FileName = "powershell"
+    }
+    $process.StartInfo.Arguments = Format-CommandLine -Parts $runtimeArgs
+    $process.StartInfo.WorkingDirectory = (Get-Location).Path
+    $process.StartInfo.UseShellExecute = $false
+    $process.StartInfo.RedirectStandardOutput = $true
+    $process.StartInfo.RedirectStandardError = $true
+    $process.StartInfo.CreateNoWindow = $true
+
+    $startedAt = Get-Date
+    [void]$process.Start()
+
+    if (-not $process.WaitForExit($TimeoutSeconds * 1000)) {
+        try {
+            $process.Kill()
+        }
+        catch {
+        }
+
+        return [pscustomobject]@{
+            ok = $false
+            state = $null
+            error = "Runtime poll timed out after $TimeoutSeconds second(s)."
+            stderr = ""
+            polledAt = $startedAt
+        }
+    }
+
+    $stdout = $process.StandardOutput.ReadToEnd()
+    $stderr = $process.StandardError.ReadToEnd()
+    if ($process.ExitCode -ne 0) {
+        return [pscustomobject]@{
+            ok = $false
+            state = $null
+            error = "Runtime poll exited with code $($process.ExitCode)."
+            stderr = $stderr.Trim()
+            polledAt = $startedAt
+        }
+    }
+
+    try {
+        $state = $stdout | ConvertFrom-Json
+    }
+    catch {
+        return [pscustomobject]@{
+            ok = $false
+            state = $null
+            error = "Runtime poll returned malformed JSON: $($_.Exception.Message)"
+            stderr = $stderr.Trim()
+            polledAt = $startedAt
+        }
+    }
+
+    $schema = [string](Get-TuiPropertyValue -InputObject $state -Name "schema" -Default "")
+    if ($schema -ne "brevity.runtime-state.v1") {
+        return [pscustomobject]@{
+            ok = $false
+            state = $state
+            error = "Unsupported runtime schema: $(Format-TuiValue $schema)."
+            stderr = $stderr.Trim()
+            polledAt = $startedAt
+        }
+    }
+
+    return [pscustomobject]@{
+        ok = $true
+        state = $state
+        error = ""
+        stderr = $stderr.Trim()
+        polledAt = $startedAt
+    }
+}
+
+function Get-TuiCountByNormalizedState {
+    param([AllowNull()][object]$State)
+
+    $counts = [ordered]@{
+        planned = 0
+        ready = 0
+        running = 0
+        succeeded = 0
+        failed = 0
+        reviewing = 0
+        merged = 0
+        stale = 0
+        blocked = 0
+        orphaned = 0
+    }
+
+    $groups = Get-TuiPropertyValue -InputObject $State -Name "groups"
+    $byState = Get-TuiPropertyValue -InputObject $groups -Name "byNormalizedState"
+    foreach ($key in @($counts.Keys)) {
+        $contractName = $key
+        if ($key -eq "ready") {
+            $contractName = "readyForWorker"
+        }
+
+        $items = @(Get-TuiPropertyValue -InputObject $byState -Name $contractName -Default @())
+        $counts[$key] = $items.Count
+    }
+
+    return $counts
+}
+
+function Write-BrevityTuiView {
+    param(
+        [object]$Snapshot,
+        [int]$IntervalSeconds,
+        [switch]$Plain
+    )
+
+    if (-not $Plain) {
+        Clear-Host
+    }
+
+    $polledText = (Get-Date).ToString("yyyy-MM-dd HH:mm:ss")
+    if ($null -ne $Snapshot -and $null -ne $Snapshot.polledAt) {
+        $polledText = ([datetime]$Snapshot.polledAt).ToString("yyyy-MM-dd HH:mm:ss")
+    }
+
+    Write-Host "Brevity TUI" -ForegroundColor Cyan
+    Write-Host "Read-only runtime dashboard | q quits | refresh ${IntervalSeconds}s | last poll $polledText" -ForegroundColor DarkGray
+    Write-Host ""
+
+    if ($null -eq $Snapshot -or -not $Snapshot.ok) {
+        $message = "Runtime polling failed."
+        if ($null -ne $Snapshot) {
+            $message = $Snapshot.error
+        }
+
+        Write-Host "Runtime warning" -ForegroundColor Yellow
+        Write-Host "  $message" -ForegroundColor Yellow
+        if ($null -ne $Snapshot -and -not [string]::IsNullOrWhiteSpace($Snapshot.stderr)) {
+            Write-Host "  $($Snapshot.stderr)" -ForegroundColor DarkYellow
+        }
+        Write-Host ""
+        Write-Host "Waiting for next poll..." -ForegroundColor DarkGray
+        return
+    }
+
+    $state = $Snapshot.state
+    $repoRoot = Format-TuiValue (Get-TuiPropertyValue -InputObject $state -Name "repoRoot")
+    $generatedAt = Format-TuiValue (Get-TuiPropertyValue -InputObject $state -Name "generatedAt")
+    $activeWorktreeCount = Format-TuiValue (Get-TuiPropertyValue -InputObject $state -Name "activeWorktreeCount")
+    $lock = Get-TuiPropertyValue -InputObject $state -Name "lock"
+    $lockText = "clear"
+    if ([bool](Get-TuiPropertyValue -InputObject $lock -Name "exists" -Default $false)) {
+        $lockText = "present"
+        $lockAge = Get-TuiPropertyValue -InputObject $lock -Name "ageMinutes"
+        if ($null -ne $lockAge) {
+            $lockText = "present ($([math]::Round([double]$lockAge, 1))m)"
+        }
+    }
+
+    Write-Host "Runtime" -ForegroundColor White
+    Write-Host "  Repo: $repoRoot"
+    Write-Host "  Generated: $generatedAt"
+    Write-Host "  Worktrees: $activeWorktreeCount active | lock: $lockText"
+    Write-Host ""
+
+    $providers = Get-TuiPropertyValue -InputObject $state -Name "providers"
+    $providerSummary = Get-TuiPropertyValue -InputObject $providers -Name "summary"
+    Write-Host "Providers" -ForegroundColor White
+    Write-Host "  total=$(Format-TuiValue (Get-TuiPropertyValue -InputObject $providerSummary -Name "total")) degraded=$(Format-TuiValue (Get-TuiPropertyValue -InputObject $providerSummary -Name "degraded")) unavailable=$(Format-TuiValue (Get-TuiPropertyValue -InputObject $providerSummary -Name "unavailable"))"
+    $providerHealth = Get-TuiPropertyValue -InputObject $providers -Name "health"
+    foreach ($provider in @($providerHealth.PSObject.Properties | Sort-Object Name | Select-Object -First 5)) {
+        $health = $provider.Value
+        Write-Host "  $($provider.Name): $(Format-TuiValue (Get-TuiPropertyValue -InputObject $health -Name "status"))"
+    }
+    Write-Host ""
+
+    $taskCounts = Get-TuiPropertyValue -InputObject $state -Name "taskCounts"
+    $normalizedCounts = Get-TuiCountByNormalizedState -State $state
+    Write-Host "Tasks" -ForegroundColor White
+    Write-Host "  tracked=$(Format-TuiValue (Get-TuiPropertyValue -InputObject $taskCounts -Name "tracked")) runnable=$(Format-TuiValue (Get-TuiPropertyValue -InputObject $taskCounts -Name "runnable")) blocked=$(Format-TuiValue (Get-TuiPropertyValue -InputObject $taskCounts -Name "blocked")) stale=$(Format-TuiValue (Get-TuiPropertyValue -InputObject $taskCounts -Name "stale")) review=$(Format-TuiValue (Get-TuiPropertyValue -InputObject $taskCounts -Name "review"))"
+    Write-Host "  states: planned=$($normalizedCounts.planned) ready=$($normalizedCounts.ready) running=$($normalizedCounts.running) succeeded=$($normalizedCounts.succeeded) failed=$($normalizedCounts.failed) reviewing=$($normalizedCounts.reviewing) merged=$($normalizedCounts.merged) stale=$($normalizedCounts.stale) blocked=$($normalizedCounts.blocked) orphaned=$($normalizedCounts.orphaned)"
+    Write-Host ""
+
+    $tasks = @(Get-TuiPropertyValue -InputObject $state -Name "tasks" -Default @())
+    Write-Host "Recent tasks" -ForegroundColor White
+    if ($tasks.Count -eq 0) {
+        Write-Host "  none"
+    }
+    else {
+        foreach ($task in @($tasks | Select-Object -First 8)) {
+            $runSignal = ""
+            if ([bool](Get-TuiPropertyValue -InputObject $task -Name "latestRunIncomplete" -Default $false)) {
+                $runSignal = " incomplete-run"
+            }
+            elseif ([bool](Get-TuiPropertyValue -InputObject $task -Name "latestRunStale" -Default $false)) {
+                $runSignal = " stale-run"
+            }
+
+            Write-Host "  $(Format-TuiValue (Get-TuiPropertyValue -InputObject $task -Name "slug")) | $(Format-TuiValue (Get-TuiPropertyValue -InputObject $task -Name "normalizedState")) | provider=$(Format-TuiValue (Get-TuiPropertyValue -InputObject $task -Name "provider"))$runSignal"
+        }
+    }
+    Write-Host ""
+
+    $cleanup = Get-TuiPropertyValue -InputObject $state -Name "cleanup"
+    $cleanupSummary = Get-TuiPropertyValue -InputObject $cleanup -Name "summary"
+    Write-Host "Cleanup warnings" -ForegroundColor White
+    Write-Host "  candidates=$(Format-TuiValue (Get-TuiPropertyValue -InputObject $cleanupSummary -Name "totalCandidates")) requiresInspection=$(Format-TuiValue (Get-TuiPropertyValue -InputObject $cleanupSummary -Name "requiresInspectionCount")) removableByExecute=$(Format-TuiValue (Get-TuiPropertyValue -InputObject $cleanupSummary -Name "removableByExecuteCount"))"
+    $worktreeCandidates = @(Get-TuiPropertyValue -InputObject $cleanup -Name "orphanedTaskWorktrees" -Default @())
+    $branchCandidates = @(Get-TuiPropertyValue -InputObject $cleanup -Name "orphanedTaskBranches" -Default @())
+    foreach ($candidate in @($worktreeCandidates | Select-Object -First 3)) {
+        Write-Host "  worktree: $(Format-TuiValue (Get-TuiPropertyValue -InputObject $candidate -Name "branch")) [$((Format-TuiValue (Get-TuiPropertyValue -InputObject $candidate -Name "category")))]" -ForegroundColor Yellow
+    }
+    foreach ($candidate in @($branchCandidates | Select-Object -First 3)) {
+        Write-Host "  branch: $(Format-TuiValue (Get-TuiPropertyValue -InputObject $candidate -Name "branch")) [$((Format-TuiValue (Get-TuiPropertyValue -InputObject $candidate -Name "category")))]" -ForegroundColor Yellow
+    }
+    Write-Host ""
+
+    $runIndicators = @($tasks | Where-Object {
+        ([bool](Get-TuiPropertyValue -InputObject $_ -Name "latestRunIncomplete" -Default $false)) -or
+        ([bool](Get-TuiPropertyValue -InputObject $_ -Name "latestRunStale" -Default $false))
+    })
+    Write-Host "Run indicators" -ForegroundColor White
+    if ($runIndicators.Count -eq 0) {
+        Write-Host "  none"
+    }
+    else {
+        foreach ($task in @($runIndicators | Select-Object -First 5)) {
+            Write-Host "  $(Format-TuiValue (Get-TuiPropertyValue -InputObject $task -Name "slug")) incomplete=$(Format-TuiValue (Get-TuiPropertyValue -InputObject $task -Name "latestRunIncomplete")) stale=$(Format-TuiValue (Get-TuiPropertyValue -InputObject $task -Name "latestRunStale")) ageMinutes=$(Format-TuiValue (Get-TuiPropertyValue -InputObject $task -Name "latestRunAgeMinutes"))" -ForegroundColor Yellow
+        }
+    }
+}
+
+function Start-BrevityTui {
+    param(
+        [int]$IntervalSeconds = 4,
+        [switch]$Once
+    )
+
+    if ($IntervalSeconds -lt 3) {
+        $IntervalSeconds = 3
+    }
+
+    if ($Once) {
+        $snapshot = Get-BrevityTuiRuntimeSnapshot
+        Write-BrevityTuiView -Snapshot $snapshot -IntervalSeconds $IntervalSeconds -Plain
+        if ($snapshot.ok) {
+            return
+        }
+        exit 1
+    }
+
+    try {
+        while ($true) {
+            $snapshot = Get-BrevityTuiRuntimeSnapshot
+            Write-BrevityTuiView -Snapshot $snapshot -IntervalSeconds $IntervalSeconds
+
+            $deadline = (Get-Date).AddSeconds($IntervalSeconds)
+            while ((Get-Date) -lt $deadline) {
+                if ([Console]::KeyAvailable) {
+                    $key = [Console]::ReadKey($true)
+                    if ($key.Key -eq [ConsoleKey]::Q -or $key.Key -eq [ConsoleKey]::Escape) {
+                        Clear-Host
+                        Write-Host "Brevity TUI closed."
+                        return
+                    }
+                }
+                Start-Sleep -Milliseconds 100
+            }
+        }
+    }
+    catch {
+        Write-Host "Brevity TUI stopped: $($_.Exception.Message)" -ForegroundColor Red
+        exit 1
+    }
+}
+
 function Get-OrphanedTaskBranchCleanupClassification {
     param([object]$Branch)
 
@@ -8097,6 +8415,41 @@ switch ($Command.ToLowerInvariant()) {
                 exit 1
             }
         }
+    }
+    "tui" {
+        $intervalSeconds = 4
+        $once = $false
+        $tuiArgs = @()
+        if (-not [string]::IsNullOrWhiteSpace($Subcommand)) {
+            $tuiArgs += $Subcommand
+        }
+        if ($null -ne $RemainingArgs) {
+            $tuiArgs += @($RemainingArgs)
+        }
+
+        for ($i = 0; $i -lt $tuiArgs.Count; $i++) {
+            $arg = [string]$tuiArgs[$i]
+            if ($arg -eq "--once") {
+                $once = $true
+            }
+            elseif ($arg -eq "--interval") {
+                if ($i + 1 -ge $tuiArgs.Count) {
+                    Write-Host "Missing value for brevity tui --interval." -ForegroundColor Red
+                    Write-Host "Usage: .\brevity.ps1 tui [--interval <seconds>]"
+                    exit 1
+                }
+
+                $i++
+                $intervalSeconds = [int]$tuiArgs[$i]
+            }
+            else {
+                Write-Host "Unknown brevity tui argument: $arg" -ForegroundColor Red
+                Write-Host "Usage: .\brevity.ps1 tui [--interval <seconds>]"
+                exit 1
+            }
+        }
+
+        Start-BrevityTui -IntervalSeconds $intervalSeconds -Once:$once
     }
     "session" {
         if ([string]::IsNullOrWhiteSpace($Subcommand)) {
