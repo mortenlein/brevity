@@ -1894,7 +1894,8 @@ function Get-WorkerRunIndexCompactionPlan {
     param(
         [string]$RunsPath = "",
         [int]$LatestRunsPerTask = 20,
-        [int]$CandidateSummaryLimit = 25
+        [int]$CandidateSummaryLimit = 25,
+        [bool]$IncludeRecords = $false
     )
 
     $runsPath = $RunsPath
@@ -1933,16 +1934,29 @@ function Get-WorkerRunIndexCompactionPlan {
                 $slug = "(missing slug)"
             }
 
+            $recordType = [string](Get-WorkerRunRecordProperty -Record $record -Name "recordType")
             $startedAt = Get-WorkerRunRecordProperty -Record $record -Name "startedAt"
             $finishedAt = Get-WorkerRunRecordProperty -Record $record -Name "finishedAt"
             $startedAtUtc = Convert-WorkerRunTimestampToUtc -Timestamp $startedAt
             $finishedAtUtc = Convert-WorkerRunTimestampToUtc -Timestamp $finishedAt
+            if ($recordType -eq "run-index-archive") {
+                $startedAt = Get-WorkerRunRecordProperty -Record $record -Name "archivedAt"
+                $startedAtUtc = Convert-WorkerRunTimestampToUtc -Timestamp $startedAt
+            }
             $sortTimestamp = $finishedAtUtc
             if ($null -eq $sortTimestamp) {
                 $sortTimestamp = $startedAtUtc
             }
 
             $runState = Resolve-WorkerRunIndexStatus -Record $record
+            if ($recordType -eq "run-index-archive") {
+                $runState = [pscustomobject]([ordered]@{
+                    workerStatus = "archived"
+                    incomplete = $false
+                    stale = $false
+                    ageMinutes = $null
+                })
+            }
             $exitCode = Get-WorkerRunRecordProperty -Record $record -Name "exitCode"
             $isFailed = ($runState.workerStatus -eq "failed")
             if (-not $isFailed -and $null -ne $exitCode -and [string]$exitCode -ne "0") {
@@ -1951,8 +1965,10 @@ function Get-WorkerRunIndexCompactionPlan {
 
             $records += [pscustomobject]([ordered]@{
                 lineNumber = $lineNumber
+                recordType = $recordType
                 runId = Get-WorkerRunRecordProperty -Record $record -Name "runId"
                 slug = $slug
+                rawLine = $line
                 provider = Get-WorkerRunRecordProperty -Record $record -Name "provider"
                 profile = Get-WorkerRunRecordProperty -Record $record -Name "profile"
                 startedAt = $startedAt
@@ -1971,7 +1987,7 @@ function Get-WorkerRunIndexCompactionPlan {
 
     $latestKeys = @{}
     $affectedTasks = @()
-    foreach ($slugGroup in @($records | Group-Object -Property slug)) {
+    foreach ($slugGroup in @($records | Where-Object { $_.recordType -ne "run-index-archive" } | Group-Object -Property slug)) {
         $affectedTasks += [string]$slugGroup.Name
         $latestForTask = @($slugGroup.Group |
             Sort-Object @{ Expression = { if ($null -eq $_.sortTimestamp) { [datetime]::MinValue } else { $_.sortTimestamp } }; Descending = $true }, @{ Expression = { [int]$_.lineNumber }; Descending = $true } |
@@ -1996,7 +2012,11 @@ function Get-WorkerRunIndexCompactionPlan {
             $preservedFailedRecords++
         }
 
-        if ($latestKeys.ContainsKey($lineKey)) {
+        if ($record.recordType -eq "run-index-archive") {
+            $record.retentionReason = "archive-summary-record"
+            $retainedRecords++
+        }
+        elseif ($latestKeys.ContainsKey($lineKey)) {
             $record.retentionReason = "latest-per-task"
             $retainedRecords++
         }
@@ -2027,7 +2047,7 @@ function Get-WorkerRunIndexCompactionPlan {
         }
     }
 
-    return [pscustomobject]([ordered]@{
+    $plan = [pscustomobject]([ordered]@{
         runsPath = $runsPath
         exists = $exists
         mode = "dry-run"
@@ -2045,13 +2065,237 @@ function Get-WorkerRunIndexCompactionPlan {
         affectedTasks = @($affectedTasks | Sort-Object)
         candidateSummaries = $candidateSummaries
     })
+
+    if ($IncludeRecords) {
+        Add-Member -InputObject $plan -MemberType NoteProperty -Name "records" -Value $records
+    }
+
+    return $plan
+}
+
+function Test-JsonLinesFile {
+    param([string]$Path)
+
+    if (-not (Test-Path -LiteralPath $Path)) {
+        return $false
+    }
+
+    $lineNumber = 0
+    foreach ($line in @(Get-Content -LiteralPath $Path -ErrorAction Stop)) {
+        if ([string]::IsNullOrWhiteSpace($line)) {
+            continue
+        }
+
+        $lineNumber++
+        try {
+            $parsed = $line | ConvertFrom-Json
+        }
+        catch {
+            return $false
+        }
+
+        if ($null -eq $parsed) {
+            return $false
+        }
+    }
+
+    return $true
+}
+
+function New-RunIndexArchiveBoundary {
+    param([object]$Record)
+
+    return [pscustomobject]([ordered]@{
+        runId = [string]$Record.runId
+        startedAt = [string]$Record.startedAt
+        finishedAt = $(if ([string]::IsNullOrWhiteSpace([string]$Record.finishedAt)) { $null } else { [string]$Record.finishedAt })
+        workerStatus = [string]$Record.workerStatus
+        exitCode = $(if ($null -eq $Record.exitCode -or [string]::IsNullOrWhiteSpace([string]$Record.exitCode)) { $null } else { [int]$Record.exitCode })
+    })
+}
+
+function Test-RunIndexArchiveRecord {
+    param([object]$Record)
+
+    if ($null -eq $Record) { return $false }
+    if ([string]$Record.schema -ne "brevity.run-index-archive.v1") { return $false }
+    if ([string]$Record.recordType -ne "run-index-archive") { return $false }
+    if ([string]::IsNullOrWhiteSpace([string]$Record.slug)) { return $false }
+    if ([string]::IsNullOrWhiteSpace([string]$Record.archivedAt)) { return $false }
+    if ([int]$Record.preservedRunCount -lt 1) { return $false }
+    if ($null -eq $Record.oldestRun -or $null -eq $Record.newestRun) { return $false }
+    if ([string]::IsNullOrWhiteSpace([string]$Record.oldestRun.runId)) { return $false }
+    if ([string]::IsNullOrWhiteSpace([string]$Record.newestRun.runId)) { return $false }
+    if ($null -eq $Record.archivedRunIds -and $null -eq $Record.archivedRunRanges) { return $false }
+    return $true
+}
+
+function Invoke-TaskRunsCompactExecute {
+    param([bool]$Json = $false)
+
+    $runsPath = Get-BrevityRunsIndexPath
+    $script:BrevityLastRunIndexCompactionBackupPath = $null
+    $mutationResult = Invoke-RunsIndexLock -RunsPath $runsPath -ScriptBlock {
+        $plan = Get-WorkerRunIndexCompactionPlan -RunsPath $runsPath -IncludeRecords $true
+        $archiveCandidates = @($plan.records | Where-Object { $_.retentionReason -eq "archive-summary-candidate" })
+
+        if ($archiveCandidates.Count -eq 0) {
+            return [pscustomobject]([ordered]@{
+                runsPath = $runsPath
+                mode = "execute"
+                mutatesRunsIndex = $false
+                mutatesLogs = $false
+                backupPath = $null
+                archiveSummaryCount = 0
+                archivedRunCount = 0
+                retainedRecordCount = $plan.retainedRecordCount
+                message = "No archive/summary candidates found; run index left unchanged."
+            })
+        }
+
+        if ($plan.invalidRecords -gt 0) {
+            throw "Refusing to compact run index with invalid JSON Lines records."
+        }
+
+        $brevityRoot = Split-Path -Parent $runsPath
+        if (-not (Test-Path -LiteralPath $brevityRoot)) {
+            New-Item -ItemType Directory -Path $brevityRoot | Out-Null
+        }
+
+        $timestamp = (Get-Date).ToUniversalTime().ToString("yyyyMMddTHHmmssfffZ")
+        $backupPath = Join-Path $brevityRoot "runs.jsonl.$timestamp.bak"
+        $tempPath = Join-Path $brevityRoot "runs.jsonl.$timestamp.tmp"
+
+        Copy-Item -LiteralPath $runsPath -Destination $backupPath -Force
+        $script:BrevityLastRunIndexCompactionBackupPath = $backupPath
+
+        $outputLines = @()
+        foreach ($record in @($plan.records | Where-Object { $_.retentionReason -ne "archive-summary-candidate" } | Sort-Object -Property lineNumber)) {
+            $outputLines += [string]$record.rawLine
+        }
+
+        $archiveRecords = @()
+        $archivedAt = (Get-Date).ToUniversalTime().ToString("o")
+        foreach ($slugGroup in @($archiveCandidates | Group-Object -Property slug)) {
+            $groupRecords = @($slugGroup.Group | Sort-Object -Property lineNumber)
+            $oldestRun = $groupRecords[0]
+            $newestRun = $groupRecords[$groupRecords.Count - 1]
+            $archiveRecord = [pscustomobject]([ordered]@{
+                schema = "brevity.run-index-archive.v1"
+                recordType = "run-index-archive"
+                slug = [string]$slugGroup.Name
+                archivedAt = $archivedAt
+                preservedRunCount = $groupRecords.Count
+                oldestRun = New-RunIndexArchiveBoundary -Record $oldestRun
+                newestRun = New-RunIndexArchiveBoundary -Record $newestRun
+                successCount = @($groupRecords | Where-Object { -not $_.failed -and -not $_.stale -and -not $_.incomplete }).Count
+                failureCount = @($groupRecords | Where-Object { $_.failed }).Count
+                staleCount = @($groupRecords | Where-Object { $_.stale }).Count
+                incompleteCount = @($groupRecords | Where-Object { $_.incomplete }).Count
+                archivedRunIds = @($groupRecords | ForEach-Object { [string]$_.runId } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+                archivedRunRanges = @()
+            })
+
+            if (-not (Test-RunIndexArchiveRecord -Record $archiveRecord)) {
+                throw "Archive summary validation failed for task '$($slugGroup.Name)'."
+            }
+
+            $archiveRecords += $archiveRecord
+            $outputLines += ($archiveRecord | ConvertTo-Json -Compress -Depth 8)
+        }
+
+        [System.IO.File]::WriteAllText($tempPath, ([string]::Join("`r`n", $outputLines) + "`r`n"), [System.Text.Encoding]::ASCII)
+
+        if (-not (Test-JsonLinesFile -Path $tempPath)) {
+            throw "Compacted run index validation failed before replacement."
+        }
+
+        Move-Item -LiteralPath $tempPath -Destination $runsPath -Force
+
+        return [pscustomobject]([ordered]@{
+            runsPath = $runsPath
+            mode = "execute"
+            mutatesRunsIndex = $true
+            mutatesLogs = $false
+            backupPath = $backupPath
+            archiveSummaryCount = $archiveRecords.Count
+            archivedRunCount = $archiveCandidates.Count
+            retainedRecordCount = $plan.retainedRecordCount
+            latestRunsPerTask = $plan.latestRunsPerTask
+        })
+    }
+
+    if ($Json) {
+        Write-CommandResult -Command "task runs compact" -Success $true -Severity "info" -SuggestedNextActions @("Refresh runtime state.", "Keep the backup until the compacted index has been reviewed.") -Payload $mutationResult
+        return
+    }
+
+    Write-Host "Worker run compaction executed"
+    Write-Host "Run index: $($mutationResult.runsPath)"
+    Write-Host "Mutates runs index: $($mutationResult.mutatesRunsIndex)"
+    Write-Host "Mutates logs: $($mutationResult.mutatesLogs)"
+    Write-Host "Backup: $($mutationResult.backupPath)"
+    Write-Host "Archive summary records: $($mutationResult.archiveSummaryCount)"
+    Write-Host "Archived raw records: $($mutationResult.archivedRunCount)"
+    Write-Host "Retained raw records: $($mutationResult.retainedRecordCount)"
 }
 
 function Show-TaskRunsCompact {
     param(
         [bool]$DryRun = $false,
+        [bool]$Execute = $false,
+        [bool]$Archive = $false,
         [bool]$Json = $false
     )
+
+    if ($Execute) {
+        if (-not $Archive) {
+            if ($Json) {
+                Write-CommandErrorResult `
+                    -Command "task runs compact" `
+                    -Code "archive-required" `
+                    -Message "Refusing to mutate worker run compaction without --archive." `
+                    -Details ([pscustomobject]([ordered]@{
+                        usage = ".\brevity.ps1 task runs compact --execute --archive --json"
+                        mutatesRunsIndex = $false
+                        mutatesLogs = $false
+                    }))
+                exit 1
+            }
+
+            Write-Host "Refusing to mutate worker run compaction without --archive." -ForegroundColor Red
+            Write-Host "Usage: .\brevity.ps1 task runs compact --execute --archive [--json]"
+            Write-Host "This command only compacts when additive archive summaries are also written."
+            exit 1
+        }
+
+        try {
+            Invoke-TaskRunsCompactExecute -Json $Json
+        }
+        catch {
+            if ($Json) {
+                Write-CommandErrorResult `
+                    -Command "task runs compact" `
+                    -Code "compaction-execute-failed" `
+                    -Message "Run index compaction failed before replacement completed." `
+                    -Details ([pscustomobject]([ordered]@{
+                        runsPath = Get-BrevityRunsIndexPath
+                        backupPath = $script:BrevityLastRunIndexCompactionBackupPath
+                        mutatesLogs = $false
+                        error = $_.Exception.Message
+                    }))
+                exit 1
+            }
+
+            Write-Host "Run index compaction failed before replacement completed." -ForegroundColor Red
+            if (-not [string]::IsNullOrWhiteSpace([string]$script:BrevityLastRunIndexCompactionBackupPath)) {
+                Write-Host "Backup: $($script:BrevityLastRunIndexCompactionBackupPath)"
+            }
+            Write-Host $_.Exception.Message
+            exit 1
+        }
+        return
+    }
 
     if (-not $DryRun) {
         if ($Json) {
@@ -7819,6 +8063,8 @@ switch ($Command.ToLowerInvariant()) {
                 $retention = $false
                 $compact = $false
                 $dryRun = $false
+                $executeRuns = $false
+                $archiveRuns = $false
                 if ($null -ne $RemainingArgs) {
                     foreach ($taskArg in $RemainingArgs) {
                         if ($taskArg -eq "reconcile" -and [string]::IsNullOrWhiteSpace($taskSlug) -and -not $reconcile) {
@@ -7832,6 +8078,12 @@ switch ($Command.ToLowerInvariant()) {
                         }
                         elseif ($taskArg -eq "--dry-run" -and ($reconcile -or $retention -or $compact)) {
                             $dryRun = $true
+                        }
+                        elseif ($taskArg -eq "--execute" -and $compact) {
+                            $executeRuns = $true
+                        }
+                        elseif ($taskArg -eq "--archive" -and $compact) {
+                            $archiveRuns = $true
                         }
                         elseif ($taskArg -eq "--json") {
                             $jsonOutput = $true
@@ -7849,6 +8101,7 @@ switch ($Command.ToLowerInvariant()) {
                                 Write-Host "Usage: .\brevity.ps1 task runs reconcile --dry-run [--json]"
                                 Write-Host "Usage: .\brevity.ps1 task runs retention --dry-run [--json]"
                                 Write-Host "Usage: .\brevity.ps1 task runs compact --dry-run [--json]"
+                                Write-Host "Usage: .\brevity.ps1 task runs compact --execute --archive [--json]"
                             }
                             exit 1
                         }
@@ -7862,7 +8115,7 @@ switch ($Command.ToLowerInvariant()) {
                     Show-TaskRunsRetention -DryRun $dryRun -Json $jsonOutput
                 }
                 elseif ($compact) {
-                    Show-TaskRunsCompact -DryRun $dryRun -Json $jsonOutput
+                    Show-TaskRunsCompact -DryRun $dryRun -Execute $executeRuns -Archive $archiveRuns -Json $jsonOutput
                 }
                 else {
                     Show-TaskRuns -Slug $taskSlug -Json $jsonOutput
