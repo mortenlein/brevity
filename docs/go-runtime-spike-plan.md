@@ -27,7 +27,8 @@ reference behavior, a stable contract, and a rollback path. Go must not mutate
 The current Go runtime spike is a PowerShell-backed client. The dashboard reads
 PowerShell-produced runtime state, and the action runners invoke PowerShell
 commands that return command-result JSON. Native Go runtime state ownership has
-not started.
+not started. The current supported and deferred command surface is tracked in
+[`docs/go-support-matrix.md`](go-support-matrix.md).
 
 Initial inputs:
 
@@ -82,7 +83,8 @@ write `.brevity` metadata or own runtime state.
 
 PowerShell remains the reference runtime for state interpretation,
 orchestration behavior, mutations, worker lifecycle, cleanup, and branch
-integration.
+integration. Keep [`docs/go-support-matrix.md`](go-support-matrix.md) updated
+when the Go command surface changes.
 
 ## Non-Goals
 

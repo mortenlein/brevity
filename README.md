@@ -220,6 +220,8 @@ integration, and all `.brevity` mutations. Go does not mutate `.brevity`
 directly. Go action commands dispatch to `.\brevity.ps1 ... --json`, parse the
 PowerShell command-result contract, and render a concise operator result.
 
+The supported command surface is tracked in the
+[`docs/go-support-matrix.md`](docs/go-support-matrix.md) support matrix.
 Currently supported Go commands are:
 
 ```powershell
