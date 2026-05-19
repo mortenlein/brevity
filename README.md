@@ -226,6 +226,29 @@ Major sections include:
   entries.
 - `suggestedNextActions` - operator guidance derived from the current snapshot.
 
+## Run Index Retention Policy
+
+`.brevity\runs.jsonl` is the append-only worker run index. Brevity uses it for
+recent run history, runtime-state summaries, stale/incomplete run detection, and
+future TUI inspection. Worker logs remain the durable detailed output for each
+run, and Brevity v1 must not delete those logs automatically.
+
+The default retention policy for future run-index compaction is conservative:
+
+- Preserve at least the latest 20 indexed runs for each task.
+- Preserve all incomplete or stale run records until reconciliation has reviewed
+  them.
+- Preserve failed runs longer than successful runs, because failures are usually
+  more useful for diagnosis.
+- Archive or summarize older completed run records before removal from the hot
+  index; do not silently discard history.
+- Treat retention warnings in a future TUI as advisory operator signals, not as
+  automatic cleanup instructions.
+
+For now, `.\brevity.ps1 task runs retention --dry-run` is report-only. Any
+future compaction must be explicit, dry-run-first, and guarded by locking before
+it mutates `.brevity\runs.jsonl`.
+
 The init command prepares the current Git repository for Brevity. It creates
 repo-local Brevity state when missing:
 

@@ -120,6 +120,26 @@ oldest and newest timestamps, top tasks by record count, and stale/incomplete
 record counts. It refuses without `--dry-run` and does not mutate
 `.brevity\runs.jsonl`. Use `--json` for structured output.
 
+### Run Index Retention
+
+`.brevity\runs.jsonl` remains an append-only worker run index for now. It is the
+fast source for recent per-task run history and latest-run runtime summaries,
+while worker logs remain the source of detailed output. Brevity v1 should never
+delete worker logs automatically.
+
+The default retention policy for future run-index compaction is:
+
+- Keep at least the latest 20 indexed runs per task.
+- Keep every incomplete or stale record until reconciliation has reviewed it.
+- Keep failed runs longer than successful runs.
+- Prefer archival or summary records for old completed runs instead of silent
+  discard.
+- Treat retention warnings in a future TUI as advisory until an operator chooses
+  an explicit action.
+
+No compaction command exists yet. Future compaction must be explicit,
+dry-run-first, and protected by locking before it mutates `.brevity\runs.jsonl`.
+
 ### Runtime State JSON
 
 `Brevity runtime state --json` emits the read-only runtime inspection contract
