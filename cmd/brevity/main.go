@@ -22,9 +22,10 @@ func main() {
 type commandKind string
 
 const (
-	commandDashboard     commandKind = "dashboard"
-	commandProviderSet   commandKind = "provider-set"
-	commandProviderReset commandKind = "provider-reset"
+	commandDashboard      commandKind = "dashboard"
+	commandProviderSet    commandKind = "provider-set"
+	commandProviderReset  commandKind = "provider-reset"
+	commandContextRefresh commandKind = "context-refresh"
 )
 
 type cliOptions struct {
@@ -33,6 +34,7 @@ type cliOptions struct {
 	once     bool
 	provider string
 	status   string
+	slug     string
 }
 
 func parseOptions(args []string) (cliOptions, error) {
@@ -46,6 +48,9 @@ func parseOptions(args []string) (cliOptions, error) {
 
 	if len(args) > 0 && args[0] == "provider" {
 		return parseProviderOptions(args)
+	}
+	if len(args) > 0 && args[0] == "task" {
+		return parseTaskOptions(args)
 	}
 
 	flags := flag.NewFlagSet("brevity", flag.ContinueOnError)
@@ -89,6 +94,20 @@ func parseProviderOptions(args []string) (cliOptions, error) {
 	return options, nil
 }
 
+func parseTaskOptions(args []string) (cliOptions, error) {
+	if len(args) < 2 {
+		return cliOptions{}, fmt.Errorf("missing task command: supported commands: context refresh")
+	}
+	if len(args) != 4 || args[1] != "context" || args[2] != "refresh" {
+		return cliOptions{}, fmt.Errorf("usage: brevity task context refresh <slug>")
+	}
+	if args[3] == "" {
+		return cliOptions{}, fmt.Errorf("usage: brevity task context refresh <slug>")
+	}
+
+	return cliOptions{kind: commandContextRefresh, slug: args[3]}, nil
+}
+
 func run(stdout io.Writer, args []string) error {
 	options, err := parseOptions(args)
 	if err != nil {
@@ -110,6 +129,9 @@ func runWithOptions(stdout io.Writer, client runtimeclient.Client, options cliOp
 	if options.kind == commandProviderSet || options.kind == commandProviderReset {
 		return runProviderAction(stdout, client, options)
 	}
+	if options.kind == commandContextRefresh {
+		return runTaskContextRefresh(stdout, client, options)
+	}
 
 	output, err := client.RuntimeStateJSON()
 	if err != nil {
@@ -122,6 +144,29 @@ func runWithOptions(stdout io.Writer, client runtimeclient.Client, options cliOp
 	}
 
 	dashboard.Render(stdout, state)
+	return nil
+}
+
+func runTaskContextRefresh(stdout io.Writer, client runtimeclient.Client, options cliOptions) error {
+	output, err := client.TaskContextRefreshJSON(options.slug)
+	result, parseErr := contracts.ParseCommandResult(output)
+	if parseErr != nil {
+		if err != nil {
+			return fmt.Errorf("%v; additionally failed to parse command result: %w", err, parseErr)
+		}
+		return parseErr
+	}
+
+	if renderErr := actions.RenderTaskContextRefreshResult(stdout, result); renderErr != nil {
+		return renderErr
+	}
+	if err != nil {
+		return err
+	}
+	if !result.Success {
+		return fmt.Errorf("%s reported success=false", result.Command)
+	}
+
 	return nil
 }
 
@@ -168,9 +213,10 @@ func writeUsage(stdout io.Writer) {
 	fmt.Fprintln(stdout, "  brevity [--once]")
 	fmt.Fprintln(stdout, "  brevity provider set <provider> <status>")
 	fmt.Fprintln(stdout, "  brevity provider reset <provider>")
+	fmt.Fprintln(stdout, "  brevity task context refresh <slug>")
 	fmt.Fprintln(stdout)
-	fmt.Fprintln(stdout, "The dashboard remains read-only. Provider mutations are dispatched")
-	fmt.Fprintln(stdout, `through .\brevity.ps1 provider ... --json command-result contracts.`)
+	fmt.Fprintln(stdout, "The dashboard remains read-only. Mutating actions are dispatched")
+	fmt.Fprintln(stdout, `through .\brevity.ps1 ... --json command-result contracts.`)
 	fmt.Fprintln(stdout)
 	fmt.Fprintln(stdout, "Flags:")
 	fmt.Fprintln(stdout, "  --once                    Render the dashboard once.")

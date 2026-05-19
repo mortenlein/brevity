@@ -7,12 +7,13 @@ import (
 )
 
 type fakeRuntimeClient struct {
-	output        []byte
-	err           error
-	providerSet   []byte
-	providerReset []byte
-	actionErr     error
-	calls         []string
+	output         []byte
+	err            error
+	providerSet    []byte
+	providerReset  []byte
+	contextRefresh []byte
+	actionErr      error
+	calls          []string
 }
 
 func (client *fakeRuntimeClient) RuntimeStateJSON() ([]byte, error) {
@@ -28,6 +29,11 @@ func (client *fakeRuntimeClient) ProviderSetJSON(provider string, status string)
 func (client *fakeRuntimeClient) ProviderResetJSON(provider string) ([]byte, error) {
 	client.calls = append(client.calls, "provider-reset:"+provider)
 	return client.providerReset, client.actionErr
+}
+
+func (client *fakeRuntimeClient) TaskContextRefreshJSON(slug string) ([]byte, error) {
+	client.calls = append(client.calls, "context-refresh:"+slug)
+	return client.contextRefresh, client.actionErr
 }
 
 func TestRunWithClientRendersRuntimeState(t *testing.T) {
@@ -105,6 +111,20 @@ func TestParseOptionsAcceptsProviderReset(t *testing.T) {
 	}
 }
 
+func TestParseOptionsAcceptsTaskContextRefresh(t *testing.T) {
+	options, err := parseOptions([]string{"task", "context", "refresh", "my-task"})
+	if err != nil {
+		t.Fatalf("parseOptions returned error: %v", err)
+	}
+
+	if options.kind != commandContextRefresh {
+		t.Fatalf("kind = %q, want context-refresh", options.kind)
+	}
+	if options.slug != "my-task" {
+		t.Fatalf("slug = %q, want my-task", options.slug)
+	}
+}
+
 func TestParseOptionsAcceptsHelp(t *testing.T) {
 	for _, arg := range []string{"--help", "-h"} {
 		t.Run(arg, func(t *testing.T) {
@@ -128,9 +148,10 @@ func TestRunWritesHelp(t *testing.T) {
 	output := stdout.String()
 	for _, want := range []string{
 		"dashboard remains read-only",
-		`.\brevity.ps1 provider ... --json`,
+		`.\brevity.ps1 ... --json`,
 		"--once",
 		"provider set <provider> <status>",
+		"task context refresh <slug>",
 	} {
 		if !strings.Contains(output, want) {
 			t.Fatalf("help output missing %q:\n%s", want, output)
@@ -148,6 +169,25 @@ func TestParseOptionsRejectsUnknownFlag(t *testing.T) {
 	}
 }
 
+func TestParseOptionsRejectsInvalidTaskContextRefresh(t *testing.T) {
+	for _, args := range [][]string{
+		{"task"},
+		{"task", "context"},
+		{"task", "context", "refresh"},
+		{"task", "context", "status", "my-task"},
+	} {
+		t.Run(strings.Join(args, " "), func(t *testing.T) {
+			_, err := parseOptions(args)
+			if err == nil {
+				t.Fatal("parseOptions returned nil error")
+			}
+			if !strings.Contains(err.Error(), "task") && !strings.Contains(err.Error(), "usage") {
+				t.Fatalf("unexpected error: %v", err)
+			}
+		})
+	}
+}
+
 func TestParseOptionsRejectsUnsupportedProviderCommand(t *testing.T) {
 	_, err := parseOptions([]string{"provider", "status"})
 	if err == nil {
@@ -155,6 +195,55 @@ func TestParseOptionsRejectsUnsupportedProviderCommand(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), `unsupported provider command "status"`) {
 		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestRunTaskContextRefreshUsesClientAndRendersResult(t *testing.T) {
+	client := &fakeRuntimeClient{
+		contextRefresh: []byte(`{"schema":"brevity.command-result.v1","command":"task context refresh","success":true,"severity":"info","suggestedNextActions":["Refresh runtime state."],"payload":{"slug":"my-task","refreshed":true,"contextPath":"C:\\repo\\worktrees\\active\\my-task\\.brevity\\context","generatedAt":"2026-05-19T13:00:00Z","normalizedState":"ready-for-worker"}}`),
+	}
+
+	var stdout bytes.Buffer
+	err := runWithOptions(&stdout, client, cliOptions{kind: commandContextRefresh, slug: "my-task"})
+	if err != nil {
+		t.Fatalf("runWithOptions returned error: %v", err)
+	}
+
+	if len(client.calls) != 1 || client.calls[0] != "context-refresh:my-task" {
+		t.Fatalf("calls = %#v, want context refresh only", client.calls)
+	}
+
+	output := stdout.String()
+	for _, want := range []string{
+		"Task context refresh: success",
+		"slug: my-task",
+		"refreshed: true",
+		"contextPath: C:\\repo\\worktrees\\active\\my-task\\.brevity\\context",
+		"generatedAt: 2026-05-19T13:00:00Z",
+		"normalizedState: ready-for-worker",
+		"- Refresh runtime state.",
+	} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("output missing %q:\n%s", want, output)
+		}
+	}
+}
+
+func TestRunTaskContextRefreshReturnsErrorWhenResultFails(t *testing.T) {
+	client := &fakeRuntimeClient{
+		contextRefresh: []byte(`{"schema":"brevity.command-result.v1","command":"task context refresh","success":false,"severity":"error","errors":[{"code":"missing-task","message":"Task not found: nope"}],"payload":{"slug":"nope","refreshed":false,"contextPath":"","generatedAt":"2026-05-19T13:00:00Z"}}`),
+	}
+
+	var stdout bytes.Buffer
+	err := runWithOptions(&stdout, client, cliOptions{kind: commandContextRefresh, slug: "nope"})
+	if err == nil {
+		t.Fatal("runWithOptions returned nil error")
+	}
+	if !strings.Contains(err.Error(), "task context refresh reported success=false") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(stdout.String(), "error: missing-task: Task not found: nope") {
+		t.Fatalf("output missing structured error:\n%s", stdout.String())
 	}
 }
 

@@ -30,6 +30,27 @@ func TestParseCommandResultAcceptsProviderPayload(t *testing.T) {
 	}
 }
 
+func TestParseCommandResultAcceptsTaskContextRefreshPayload(t *testing.T) {
+	result, err := ParseCommandResult([]byte(`{"schema":"brevity.command-result.v1","command":"task context refresh","success":true,"severity":"info","payload":{"slug":"my-task","refreshed":true,"contextPath":"C:\\repo\\worktrees\\active\\my-task\\.brevity\\context","generatedAt":"2026-05-19T13:00:00Z","normalizedState":"ready-for-worker"}}`))
+	if err != nil {
+		t.Fatalf("ParseCommandResult returned error: %v", err)
+	}
+
+	payload, err := ParseTaskContextRefreshPayload(result)
+	if err != nil {
+		t.Fatalf("ParseTaskContextRefreshPayload returned error: %v", err)
+	}
+	if payload.Slug != "my-task" {
+		t.Fatalf("Slug = %q, want my-task", payload.Slug)
+	}
+	if !payload.Refreshed {
+		t.Fatal("Refreshed = false, want true")
+	}
+	if payload.NormalizedState != "ready-for-worker" {
+		t.Fatalf("NormalizedState = %q, want ready-for-worker", payload.NormalizedState)
+	}
+}
+
 func TestParseCommandResultRejectsWrongSchema(t *testing.T) {
 	_, err := ParseCommandResult([]byte(`{"schema":"other","command":"provider set","success":true,"severity":"info","payload":{}}`))
 	if err == nil {

@@ -68,6 +68,15 @@ type ProviderActionPayload struct {
 	Note           string `json:"note"`
 }
 
+type TaskContextRefreshPayload struct {
+	Slug            string `json:"slug"`
+	Refreshed       bool   `json:"refreshed"`
+	ContextPath     string `json:"contextPath"`
+	GeneratedAt     string `json:"generatedAt"`
+	LatestRunID     string `json:"latestRunId"`
+	NormalizedState string `json:"normalizedState"`
+}
+
 func ParseCommandResult(input []byte) (CommandResult, error) {
 	var result CommandResult
 	if err := json.Unmarshal(input, &result); err != nil {
@@ -92,6 +101,19 @@ func ParseProviderActionPayload(result CommandResult) (ProviderActionPayload, er
 	var payload ProviderActionPayload
 	if err := json.Unmarshal(result.Payload, &payload); err != nil {
 		return ProviderActionPayload{}, fmt.Errorf("invalid provider action payload: %w", err)
+	}
+
+	return payload, nil
+}
+
+func ParseTaskContextRefreshPayload(result CommandResult) (TaskContextRefreshPayload, error) {
+	if len(result.Payload) == 0 {
+		return TaskContextRefreshPayload{}, errors.New("task context refresh result missing payload")
+	}
+
+	var payload TaskContextRefreshPayload
+	if err := json.Unmarshal(result.Payload, &payload); err != nil {
+		return TaskContextRefreshPayload{}, fmt.Errorf("invalid task context refresh payload: %w", err)
 	}
 
 	return payload, nil
