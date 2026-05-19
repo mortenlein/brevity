@@ -12,10 +12,9 @@ operator-facing command results.
 
 Go starts as a frontend/runtime client and spike. Its first responsibility is
 to consume existing runtime contracts, render the same operational view that
-PowerShell already exposes, and dispatch selected actions through the
-PowerShell JSON command-result surface. Compatibility is driven by documented
-JSON contracts, smoke validation, and observable parity with PowerShell
-behavior.
+PowerShell already exposes, and dispatch selected actions through PowerShell
+JSON command-result contracts. Compatibility is driven by documented JSON
+contracts, smoke validation, and observable parity with PowerShell behavior.
 
 The PowerShell runtime should continue to own `.brevity` mutation, worker
 lifecycle, cleanup, and branch integration until a Go behavior has a clear
@@ -24,13 +23,14 @@ reference behavior, a stable contract, and a rollback path. Go must not mutate
 
 ## Current Go Scope
 
-The current Go runtime spike is a PowerShell-backed client. The dashboard reads
-PowerShell-produced runtime state, and the action runners invoke PowerShell
-commands that return command-result JSON. Native Go runtime state ownership has
-not started. The current supported and deferred command surface is tracked in
+The current Go runtime spike is a PowerShell-backed frontend/runtime client.
+The dashboard reads the PowerShell-produced `brevity.runtime-state.v1`
+contract, and action runners invoke PowerShell commands that return
+`brevity.command-result.v1`. Native Go runtime state ownership has not started.
+The current supported and deferred command surface is tracked in
 [`docs/go-support-matrix.md`](go-support-matrix.md).
 
-Initial inputs:
+Future native-reader inputs:
 
 - `.brevity\config.json`
 - `.brevity\tasks.json`
@@ -49,7 +49,8 @@ Native `.brevity` file reading can follow once the JSON contract path is stable.
 
 ## Current Go Command Surface
 
-The Go client requires Go on `PATH` and runs from the repository root:
+The Go client requires Go on `PATH` and runs from the repository root. The
+dashboard commands are:
 
 ```powershell
 go run ./cmd/brevity
@@ -60,31 +61,15 @@ The dashboard invokes `.\brevity.ps1 runtime state --json`, validates the
 `brevity.runtime-state.v1` schema, and renders a plain dashboard from that
 PowerShell-produced snapshot.
 
-The currently supported Go action commands are:
-
-```powershell
-go run ./cmd/brevity doctor
-go run ./cmd/brevity provider set <provider> <status>
-go run ./cmd/brevity provider reset <provider>
-go run ./cmd/brevity task new <slug>
-go run ./cmd/brevity task cleanup <slug> --force
-go run ./cmd/brevity task context refresh <slug>
-go run ./cmd/brevity task runtime-info <slug>
-go run ./cmd/brevity task runs <slug>
-go run ./cmd/brevity task run <slug> --execute [--profile <profile>] [--smoke]
-go run ./cmd/brevity task runs reconcile --dry-run
-go run ./cmd/brevity task runs retention --dry-run
-go run ./cmd/brevity task runs compact --dry-run
-```
-
-These commands route to PowerShell JSON contracts. They may cause PowerShell to
-perform the requested mutation or execution, but the Go client itself does not
-write `.brevity` metadata or own runtime state.
+Current Go action commands route to PowerShell JSON contracts. They may cause
+PowerShell to perform the requested mutation or execution, but the Go client
+itself does not write `.brevity` metadata or own runtime state.
 
 PowerShell remains the reference runtime for state interpretation,
 orchestration behavior, mutations, worker lifecycle, cleanup, and branch
-integration. Keep [`docs/go-support-matrix.md`](go-support-matrix.md) updated
-when the Go command surface changes.
+integration. [`docs/go-support-matrix.md`](go-support-matrix.md) is the source
+of truth for implemented and deferred Go commands; update it whenever the Go
+command surface changes.
 
 ## Non-Goals
 

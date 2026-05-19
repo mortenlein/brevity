@@ -1,12 +1,12 @@
 # Go Frontend Support Matrix
 
 Brevity's Go command under `cmd\brevity` is currently a frontend/runtime
-client. PowerShell remains the authoritative runtime backend for state
-interpretation, orchestration behavior, worker lifecycle, cleanup, branch
-integration, and `.brevity` mutation.
+client. PowerShell remains the authoritative runtime backend and the source of
+truth for state interpretation, orchestration behavior, worker lifecycle,
+cleanup, branch integration, `.brevity` mutation, and JSON contracts.
 
-The Go client does not mutate `.brevity` files directly. Implemented Go actions
-invoke `.\brevity.ps1 ... --json`, parse the structured
+The Go client does not mutate `.brevity` files directly. Current Go actions are
+PowerShell-backed: they invoke `.\brevity.ps1 ... --json`, parse the structured
 `brevity.command-result.v1` contract, and render concise operator output. The
 dashboard path reads the PowerShell-produced `brevity.runtime-state.v1`
 snapshot.

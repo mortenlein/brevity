@@ -201,14 +201,14 @@ view layer.
 
 The experimental Go layer requires Go to be installed and available on `PATH`.
 Run it from the repository root. It is currently a frontend/runtime client over
-the PowerShell runtime, not a replacement runtime:
+the PowerShell backend, not a replacement runtime:
 
 ```powershell
 go run ./cmd/brevity
 go run ./cmd/brevity --once
 ```
 
-The dashboard command renders PowerShell-produced runtime state:
+The dashboard reads the PowerShell-produced runtime-state contract:
 
 ```powershell
 .\brevity.ps1 runtime state --json
@@ -217,33 +217,15 @@ The dashboard command renders PowerShell-produced runtime state:
 PowerShell remains the authoritative runtime backend and the source of truth for
 runtime state, command-result JSON contracts, worker lifecycle, cleanup, branch
 integration, and all `.brevity` mutations. Go does not mutate `.brevity`
-directly. Go action commands dispatch to `.\brevity.ps1 ... --json`, parse the
-PowerShell command-result contract, and render a concise operator result.
+directly. Current Go actions are PowerShell-backed: they dispatch to
+`.\brevity.ps1 ... --json`, parse the PowerShell command-result contract, and
+render concise operator output.
 
-The supported command surface is tracked in the
-[`docs/go-support-matrix.md`](docs/go-support-matrix.md) support matrix.
-Currently supported Go commands are:
-
-```powershell
-go run ./cmd/brevity
-go run ./cmd/brevity --once
-go run ./cmd/brevity doctor
-go run ./cmd/brevity provider set <provider> <status>
-go run ./cmd/brevity provider reset <provider>
-go run ./cmd/brevity task new <slug>
-go run ./cmd/brevity task cleanup <slug> --force
-go run ./cmd/brevity task context refresh <slug>
-go run ./cmd/brevity task runtime-info <slug>
-go run ./cmd/brevity task runs <slug>
-go run ./cmd/brevity task run <slug> --execute [--profile <profile>] [--smoke]
-go run ./cmd/brevity task runs reconcile --dry-run
-go run ./cmd/brevity task runs retention --dry-run
-go run ./cmd/brevity task runs compact --dry-run
-```
-
-There is no TUI mutation UI yet and no native Go runtime state ownership yet.
-The supported Go surface should stay conservative until the PowerShell JSON
-contracts and parity checks make a behavior safe to move.
+The supported Go command surface, including implemented and deferred commands,
+is tracked in [`docs/go-support-matrix.md`](docs/go-support-matrix.md). There is
+no TUI mutation UI yet and no native Go runtime state ownership yet. The Go
+surface should stay conservative until the PowerShell JSON contracts and parity
+checks make a behavior safe to move.
 
 ## Runtime State Contract
 
