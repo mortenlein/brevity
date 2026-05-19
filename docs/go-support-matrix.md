@@ -17,6 +17,9 @@ PowerShell-backed: they invoke `.\brevity.ps1 ... --json`, parse the structured
 dashboard path reads the PowerShell-produced `brevity.runtime-state.v1`
 snapshot.
 
+The dashboard UX and interactive action roadmap is documented in
+[`docs/go-dashboard-ux-plan.md`](go-dashboard-ux-plan.md).
+
 This matrix is intentionally conservative. "Mutating" means the command can
 cause PowerShell to change runtime state, worktrees, branches, logs, or provider
 metadata. It does not mean Go writes those files itself.

@@ -241,6 +241,9 @@ and no native Go runtime state ownership yet. The Go surface should stay
 conservative until the PowerShell JSON contracts and parity checks make a
 behavior safe to move.
 
+The future operator UX roadmap for the Go dashboard is documented in
+[`docs/go-dashboard-ux-plan.md`](docs/go-dashboard-ux-plan.md).
+
 ## Runtime State Contract
 
 `.\brevity.ps1 runtime state --json` prints the machine-readable runtime state

@@ -35,6 +35,9 @@ contract, and action runners invoke PowerShell commands that return
 The current supported and deferred command surface is tracked in
 [`docs/go-support-matrix.md`](go-support-matrix.md).
 
+The Go dashboard/operator UX roadmap is tracked in
+[`docs/go-dashboard-ux-plan.md`](go-dashboard-ux-plan.md).
+
 Both the PowerShell TUI and the Go dashboard consume runtime-state style data.
 Neither path currently provides an interactive mutation UI. Mutating Go command
 entries, where implemented, are explicit command-line actions that delegate to
