@@ -77,6 +77,17 @@ type TaskContextRefreshPayload struct {
 	NormalizedState string `json:"normalizedState"`
 }
 
+type TaskCleanupPayload struct {
+	Slug            string   `json:"slug"`
+	WorktreePath    string   `json:"worktreePath"`
+	Branch          string   `json:"branch"`
+	MetadataRemoved bool     `json:"metadataRemoved"`
+	BranchRemoved   bool     `json:"branchRemoved"`
+	WorktreeRemoved bool     `json:"worktreeRemoved"`
+	Force           bool     `json:"force"`
+	CleanupWarnings []string `json:"cleanupWarnings"`
+}
+
 func ParseCommandResult(input []byte) (CommandResult, error) {
 	var result CommandResult
 	if err := json.Unmarshal(input, &result); err != nil {
@@ -114,6 +125,19 @@ func ParseTaskContextRefreshPayload(result CommandResult) (TaskContextRefreshPay
 	var payload TaskContextRefreshPayload
 	if err := json.Unmarshal(result.Payload, &payload); err != nil {
 		return TaskContextRefreshPayload{}, fmt.Errorf("invalid task context refresh payload: %w", err)
+	}
+
+	return payload, nil
+}
+
+func ParseTaskCleanupPayload(result CommandResult) (TaskCleanupPayload, error) {
+	if len(result.Payload) == 0 {
+		return TaskCleanupPayload{}, errors.New("task cleanup result missing payload")
+	}
+
+	var payload TaskCleanupPayload
+	if err := json.Unmarshal(result.Payload, &payload); err != nil {
+		return TaskCleanupPayload{}, fmt.Errorf("invalid task cleanup payload: %w", err)
 	}
 
 	return payload, nil

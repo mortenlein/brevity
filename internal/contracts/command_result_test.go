@@ -51,6 +51,27 @@ func TestParseCommandResultAcceptsTaskContextRefreshPayload(t *testing.T) {
 	}
 }
 
+func TestParseCommandResultAcceptsTaskCleanupPayload(t *testing.T) {
+	result, err := ParseCommandResult([]byte(`{"schema":"brevity.command-result.v1","command":"task cleanup","success":true,"severity":"info","payload":{"slug":"my-task","worktreePath":"C:\\repo\\worktrees\\active\\brevity-my-task","branch":"task/my-task","metadataRemoved":true,"branchRemoved":true,"worktreeRemoved":true,"force":true,"cleanupWarnings":["Runtime state is stale."]}}`))
+	if err != nil {
+		t.Fatalf("ParseCommandResult returned error: %v", err)
+	}
+
+	payload, err := ParseTaskCleanupPayload(result)
+	if err != nil {
+		t.Fatalf("ParseTaskCleanupPayload returned error: %v", err)
+	}
+	if payload.Slug != "my-task" {
+		t.Fatalf("Slug = %q, want my-task", payload.Slug)
+	}
+	if !payload.WorktreeRemoved || !payload.BranchRemoved || !payload.MetadataRemoved {
+		t.Fatalf("removal flags = worktree:%t branch:%t metadata:%t, want all true", payload.WorktreeRemoved, payload.BranchRemoved, payload.MetadataRemoved)
+	}
+	if len(payload.CleanupWarnings) != 1 || payload.CleanupWarnings[0] != "Runtime state is stale." {
+		t.Fatalf("CleanupWarnings = %#v, want stale warning", payload.CleanupWarnings)
+	}
+}
+
 func TestParseCommandResultRejectsWrongSchema(t *testing.T) {
 	_, err := ParseCommandResult([]byte(`{"schema":"other","command":"provider set","success":true,"severity":"info","payload":{}}`))
 	if err == nil {

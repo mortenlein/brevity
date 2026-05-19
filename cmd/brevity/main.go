@@ -26,6 +26,7 @@ const (
 	commandProviderSet    commandKind = "provider-set"
 	commandProviderReset  commandKind = "provider-reset"
 	commandContextRefresh commandKind = "context-refresh"
+	commandTaskCleanup    commandKind = "task-cleanup"
 )
 
 type cliOptions struct {
@@ -35,6 +36,7 @@ type cliOptions struct {
 	provider string
 	status   string
 	slug     string
+	force    bool
 }
 
 func parseOptions(args []string) (cliOptions, error) {
@@ -96,16 +98,47 @@ func parseProviderOptions(args []string) (cliOptions, error) {
 
 func parseTaskOptions(args []string) (cliOptions, error) {
 	if len(args) < 2 {
-		return cliOptions{}, fmt.Errorf("missing task command: supported commands: context refresh")
+		return cliOptions{}, fmt.Errorf("missing task command: supported commands: context refresh, cleanup")
 	}
-	if len(args) != 4 || args[1] != "context" || args[2] != "refresh" {
-		return cliOptions{}, fmt.Errorf("usage: brevity task context refresh <slug>")
+	if args[1] == "context" {
+		if len(args) != 4 || args[2] != "refresh" {
+			return cliOptions{}, fmt.Errorf("usage: brevity task context refresh <slug>")
+		}
+		if args[3] == "" {
+			return cliOptions{}, fmt.Errorf("usage: brevity task context refresh <slug>")
+		}
+
+		return cliOptions{kind: commandContextRefresh, slug: args[3]}, nil
 	}
-	if args[3] == "" {
-		return cliOptions{}, fmt.Errorf("usage: brevity task context refresh <slug>")
+	if args[1] == "cleanup" {
+		return parseTaskCleanupOptions(args)
 	}
 
-	return cliOptions{kind: commandContextRefresh, slug: args[3]}, nil
+	return cliOptions{}, fmt.Errorf("unsupported task command %q: supported commands: context refresh, cleanup", args[1])
+}
+
+func parseTaskCleanupOptions(args []string) (cliOptions, error) {
+	if len(args) < 3 {
+		return cliOptions{}, fmt.Errorf("usage: brevity task cleanup <slug> --force")
+	}
+
+	options := cliOptions{kind: commandTaskCleanup, slug: args[2]}
+	if options.slug == "" || options.slug == "--force" {
+		return cliOptions{}, fmt.Errorf("usage: brevity task cleanup <slug> --force")
+	}
+
+	for _, arg := range args[3:] {
+		if arg == "--force" {
+			options.force = true
+			continue
+		}
+		return cliOptions{}, fmt.Errorf("unknown argument for brevity task cleanup: %s", arg)
+	}
+	if !options.force {
+		return cliOptions{}, fmt.Errorf("brevity task cleanup requires --force")
+	}
+
+	return options, nil
 }
 
 func run(stdout io.Writer, args []string) error {
@@ -132,6 +165,9 @@ func runWithOptions(stdout io.Writer, client runtimeclient.Client, options cliOp
 	if options.kind == commandContextRefresh {
 		return runTaskContextRefresh(stdout, client, options)
 	}
+	if options.kind == commandTaskCleanup {
+		return runTaskCleanup(stdout, client, options)
+	}
 
 	output, err := client.RuntimeStateJSON()
 	if err != nil {
@@ -144,6 +180,33 @@ func runWithOptions(stdout io.Writer, client runtimeclient.Client, options cliOp
 	}
 
 	dashboard.Render(stdout, state)
+	return nil
+}
+
+func runTaskCleanup(stdout io.Writer, client runtimeclient.Client, options cliOptions) error {
+	if !options.force {
+		return fmt.Errorf("brevity task cleanup requires --force")
+	}
+
+	output, err := client.TaskCleanupJSON(options.slug)
+	result, parseErr := contracts.ParseCommandResult(output)
+	if parseErr != nil {
+		if err != nil {
+			return fmt.Errorf("%v; additionally failed to parse command result: %w", err, parseErr)
+		}
+		return parseErr
+	}
+
+	if renderErr := actions.RenderTaskCleanupResult(stdout, result); renderErr != nil {
+		return renderErr
+	}
+	if err != nil {
+		return err
+	}
+	if !result.Success {
+		return fmt.Errorf("%s reported success=false", result.Command)
+	}
+
 	return nil
 }
 
@@ -214,6 +277,7 @@ func writeUsage(stdout io.Writer) {
 	fmt.Fprintln(stdout, "  brevity provider set <provider> <status>")
 	fmt.Fprintln(stdout, "  brevity provider reset <provider>")
 	fmt.Fprintln(stdout, "  brevity task context refresh <slug>")
+	fmt.Fprintln(stdout, "  brevity task cleanup <slug> --force")
 	fmt.Fprintln(stdout)
 	fmt.Fprintln(stdout, "The dashboard remains read-only. Mutating actions are dispatched")
 	fmt.Fprintln(stdout, `through .\brevity.ps1 ... --json command-result contracts.`)

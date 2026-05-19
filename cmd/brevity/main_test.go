@@ -12,6 +12,7 @@ type fakeRuntimeClient struct {
 	providerSet    []byte
 	providerReset  []byte
 	contextRefresh []byte
+	taskCleanup    []byte
 	actionErr      error
 	calls          []string
 }
@@ -34,6 +35,11 @@ func (client *fakeRuntimeClient) ProviderResetJSON(provider string) ([]byte, err
 func (client *fakeRuntimeClient) TaskContextRefreshJSON(slug string) ([]byte, error) {
 	client.calls = append(client.calls, "context-refresh:"+slug)
 	return client.contextRefresh, client.actionErr
+}
+
+func (client *fakeRuntimeClient) TaskCleanupJSON(slug string) ([]byte, error) {
+	client.calls = append(client.calls, "task-cleanup:"+slug)
+	return client.taskCleanup, client.actionErr
 }
 
 func TestRunWithClientRendersRuntimeState(t *testing.T) {
@@ -125,6 +131,23 @@ func TestParseOptionsAcceptsTaskContextRefresh(t *testing.T) {
 	}
 }
 
+func TestParseOptionsAcceptsTaskCleanupWithForce(t *testing.T) {
+	options, err := parseOptions([]string{"task", "cleanup", "my-task", "--force"})
+	if err != nil {
+		t.Fatalf("parseOptions returned error: %v", err)
+	}
+
+	if options.kind != commandTaskCleanup {
+		t.Fatalf("kind = %q, want task-cleanup", options.kind)
+	}
+	if options.slug != "my-task" {
+		t.Fatalf("slug = %q, want my-task", options.slug)
+	}
+	if !options.force {
+		t.Fatal("force = false, want true")
+	}
+}
+
 func TestParseOptionsAcceptsHelp(t *testing.T) {
 	for _, arg := range []string{"--help", "-h"} {
 		t.Run(arg, func(t *testing.T) {
@@ -152,6 +175,7 @@ func TestRunWritesHelp(t *testing.T) {
 		"--once",
 		"provider set <provider> <status>",
 		"task context refresh <slug>",
+		"task cleanup <slug> --force",
 	} {
 		if !strings.Contains(output, want) {
 			t.Fatalf("help output missing %q:\n%s", want, output)
@@ -185,6 +209,16 @@ func TestParseOptionsRejectsInvalidTaskContextRefresh(t *testing.T) {
 				t.Fatalf("unexpected error: %v", err)
 			}
 		})
+	}
+}
+
+func TestParseOptionsRejectsTaskCleanupWithoutForce(t *testing.T) {
+	_, err := parseOptions([]string{"task", "cleanup", "my-task"})
+	if err == nil {
+		t.Fatal("parseOptions returned nil error")
+	}
+	if !strings.Contains(err.Error(), "requires --force") {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }
 
@@ -243,6 +277,72 @@ func TestRunTaskContextRefreshReturnsErrorWhenResultFails(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if !strings.Contains(stdout.String(), "error: missing-task: Task not found: nope") {
+		t.Fatalf("output missing structured error:\n%s", stdout.String())
+	}
+}
+
+func TestRunTaskCleanupUsesClientAndRendersResult(t *testing.T) {
+	client := &fakeRuntimeClient{
+		taskCleanup: []byte(`{"schema":"brevity.command-result.v1","command":"task cleanup","success":true,"severity":"warning","warnings":[{"message":"Runtime state is stale."}],"suggestedNextActions":["refresh-runtime-state"],"payload":{"slug":"my-task","worktreePath":"C:\\repo\\worktrees\\active\\brevity-my-task","branch":"task/my-task","metadataRemoved":true,"branchRemoved":true,"worktreeRemoved":true,"force":true,"cleanupWarnings":["Runtime state is stale."]}}`),
+	}
+
+	var stdout bytes.Buffer
+	err := runWithOptions(&stdout, client, cliOptions{kind: commandTaskCleanup, slug: "my-task", force: true})
+	if err != nil {
+		t.Fatalf("runWithOptions returned error: %v", err)
+	}
+
+	if len(client.calls) != 1 || client.calls[0] != "task-cleanup:my-task" {
+		t.Fatalf("calls = %#v, want task cleanup only", client.calls)
+	}
+
+	output := stdout.String()
+	for _, want := range []string{
+		"Task cleanup: success",
+		"slug: my-task",
+		"worktreeRemoved: true",
+		"branchRemoved: true",
+		"metadataRemoved: true",
+		"cleanupWarning: Runtime state is stale.",
+		"warning: Runtime state is stale.",
+		"- refresh-runtime-state",
+	} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("output missing %q:\n%s", want, output)
+		}
+	}
+}
+
+func TestRunTaskCleanupFailsBeforeClientWithoutForce(t *testing.T) {
+	client := &fakeRuntimeClient{}
+
+	var stdout bytes.Buffer
+	err := runWithOptions(&stdout, client, cliOptions{kind: commandTaskCleanup, slug: "my-task"})
+	if err == nil {
+		t.Fatal("runWithOptions returned nil error")
+	}
+	if !strings.Contains(err.Error(), "requires --force") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(client.calls) != 0 {
+		t.Fatalf("calls = %#v, want no PowerShell calls", client.calls)
+	}
+}
+
+func TestRunTaskCleanupReturnsErrorWhenResultFails(t *testing.T) {
+	client := &fakeRuntimeClient{
+		taskCleanup: []byte(`{"schema":"brevity.command-result.v1","command":"task cleanup","success":false,"severity":"error","errors":[{"code":"task-not-found","message":"Task not found: nope"}],"payload":{"slug":"nope","metadataRemoved":false,"branchRemoved":false,"worktreeRemoved":false,"force":true,"cleanupWarnings":[]}}`),
+	}
+
+	var stdout bytes.Buffer
+	err := runWithOptions(&stdout, client, cliOptions{kind: commandTaskCleanup, slug: "nope", force: true})
+	if err == nil {
+		t.Fatal("runWithOptions returned nil error")
+	}
+	if !strings.Contains(err.Error(), "task cleanup reported success=false") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(stdout.String(), "error: task-not-found: Task not found: nope") {
 		t.Fatalf("output missing structured error:\n%s", stdout.String())
 	}
 }
