@@ -46,6 +46,7 @@ type cliOptions struct {
 	kind     commandKind
 	once     bool
 	watch    bool
+	noClear  bool
 	refresh  time.Duration
 	provider string
 	status   string
@@ -94,6 +95,7 @@ func parseOptions(args []string) (cliOptions, error) {
 	flags.SetOutput(io.Discard)
 	flags.BoolVar(&options.once, "once", false, "render the dashboard once")
 	flags.BoolVar(&options.watch, "watch", false, "refresh the dashboard until interrupted")
+	flags.BoolVar(&options.noClear, "no-clear", false, "do not clear the screen before changed dashboard renders")
 	refresh := flags.String("refresh", options.refresh.String(), "dashboard refresh interval")
 	jsonSource := flags.String("json-source", "powershell", "runtime JSON source")
 
@@ -346,23 +348,34 @@ func runWithContextOptions(ctx context.Context, stdout io.Writer, client runtime
 			if options.refresh <= 0 {
 				options.refresh = 5 * time.Second
 			}
-			return watchDashboard(ctx, stdout, client, options.refresh)
+			return watchDashboard(ctx, stdout, client, watchOptions{
+				refresh: options.refresh,
+				clear:   !options.noClear,
+			})
 		}
 		return routeDashboardCommand(stdout, client)
 	}
 }
 
 func routeDashboardCommand(stdout io.Writer, client runtimeclient.Client) error {
-	return renderDashboardRefresh(stdout, client, time.Now, false, "", false)
+	_, err := renderDashboardRefresh(stdout, client, time.Now, false, "", false)
+	return err
 }
 
-func watchDashboard(ctx context.Context, stdout io.Writer, client runtimeclient.Client, refresh time.Duration) error {
+type watchOptions struct {
+	refresh time.Duration
+	clear   bool
+}
+
+func watchDashboard(ctx context.Context, stdout io.Writer, client runtimeclient.Client, options watchOptions) error {
 	lastSuccess := ""
-	if err := renderDashboardRefresh(stdout, client, time.Now, true, lastSuccess, true); err == nil {
+	lastRenderKey := ""
+	if render, err := renderDashboardRefresh(stdout, client, time.Now, options.clear, lastSuccess, true); err == nil {
+		lastRenderKey = render.key
 		lastSuccess = time.Now().Format(time.RFC3339)
 	}
 
-	ticker := time.NewTicker(refresh)
+	ticker := time.NewTicker(options.refresh)
 	defer ticker.Stop()
 
 	for {
@@ -371,39 +384,72 @@ func watchDashboard(ctx context.Context, stdout io.Writer, client runtimeclient.
 			fmt.Fprintln(stdout, "\nStopped.")
 			return nil
 		case <-ticker.C:
-			if err := renderDashboardRefresh(stdout, client, time.Now, true, lastSuccess, true); err == nil {
-				lastSuccess = time.Now().Format(time.RFC3339)
+			render, err := renderDashboardSnapshot(client)
+			if err != nil {
+				if options.clear {
+					clearScreen(stdout)
+				}
+				renderDashboardError(stdout, time.Now, lastSuccess, err)
+				continue
 			}
+			if render.key == lastRenderKey {
+				lastSuccess = time.Now().Format(time.RFC3339)
+				continue
+			}
+			if options.clear {
+				clearScreen(stdout)
+			}
+			fmt.Fprint(stdout, render.body)
+			fmt.Fprintf(stdout, "\nLast successful refresh: %s\n", time.Now().Format(time.RFC3339))
+			lastRenderKey = render.key
+			lastSuccess = time.Now().Format(time.RFC3339)
 		}
 	}
 }
 
-func renderDashboardRefresh(stdout io.Writer, client runtimeclient.Client, now func() time.Time, clear bool, lastSuccess string, showErrors bool) error {
+func renderDashboardRefresh(stdout io.Writer, client runtimeclient.Client, now func() time.Time, clear bool, lastSuccess string, showErrors bool) (dashboardSnapshot, error) {
 	if clear {
 		clearScreen(stdout)
 	}
 
-	output, err := client.RuntimeStateJSON()
+	render, err := renderDashboardSnapshot(client)
 	if err != nil {
 		if showErrors {
 			renderDashboardError(stdout, now, lastSuccess, err)
 		}
-		return err
+		return dashboardSnapshot{}, err
+	}
+
+	fmt.Fprint(stdout, render.body)
+	if showErrors {
+		fmt.Fprintf(stdout, "\nLast successful refresh: %s\n", now().Format(time.RFC3339))
+	}
+	return render, nil
+}
+
+type dashboardSnapshot struct {
+	body string
+	key  string
+}
+
+func renderDashboardSnapshot(client runtimeclient.Client) (dashboardSnapshot, error) {
+	output, err := client.RuntimeStateJSON()
+	if err != nil {
+		return dashboardSnapshot{}, err
 	}
 
 	state, err := contracts.ParseRuntimeState(output)
 	if err != nil {
-		if showErrors {
-			renderDashboardError(stdout, now, lastSuccess, err)
-		}
-		return err
+		return dashboardSnapshot{}, err
 	}
 
-	dashboard.Render(stdout, state)
-	if showErrors {
-		fmt.Fprintf(stdout, "\nLast successful refresh: %s\n", now().Format(time.RFC3339))
-	}
-	return nil
+	keyState := state
+	keyState.GeneratedAt = ""
+
+	return dashboardSnapshot{
+		body: dashboard.RenderString(state),
+		key:  dashboard.RenderString(keyState),
+	}, nil
 }
 
 func renderDashboardError(stdout io.Writer, now func() time.Time, lastSuccess string, err error) {
@@ -658,5 +704,8 @@ func writeUsage(stdout io.Writer) {
 	fmt.Fprintln(stdout)
 	fmt.Fprintln(stdout, "Flags:")
 	fmt.Fprintln(stdout, "  --once                    Render the dashboard once.")
+	fmt.Fprintln(stdout, "  --watch                   Refresh the dashboard until interrupted.")
+	fmt.Fprintln(stdout, "  --refresh <duration>      Set the dashboard refresh interval.")
+	fmt.Fprintln(stdout, "  --no-clear                Do not clear before changed dashboard renders.")
 	fmt.Fprintln(stdout, "  -h, --help                Show this help text.")
 }

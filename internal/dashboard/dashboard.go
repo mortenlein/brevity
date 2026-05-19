@@ -1,6 +1,7 @@
 package dashboard
 
 import (
+	"bytes"
 	"fmt"
 	"io"
 	"sort"
@@ -10,14 +11,20 @@ import (
 )
 
 func Render(stdout io.Writer, state contracts.RuntimeState) {
-	fmt.Fprintln(stdout, "Brevity Runtime Dashboard")
-	fmt.Fprintln(stdout, "=========================")
-	fmt.Fprintf(stdout, "Repo: %s\n", fallback(state.RepoRoot, "(unknown)"))
-	fmt.Fprintf(stdout, "Generated: %s\n\n", fallback(state.GeneratedAt, "(unknown)"))
+	fmt.Fprint(stdout, RenderString(state))
+}
 
-	fmt.Fprintln(stdout, "Providers")
+func RenderString(state contracts.RuntimeState) string {
+	var stdout bytes.Buffer
+
+	fmt.Fprintln(&stdout, "Brevity Runtime Dashboard")
+	fmt.Fprintln(&stdout, "=========================")
+	fmt.Fprintf(&stdout, "Repo: %s\n", fallback(state.RepoRoot, "(unknown)"))
+	fmt.Fprintf(&stdout, "Generated: %s\n\n", fallback(state.GeneratedAt, "(unknown)"))
+
+	fmt.Fprintln(&stdout, "Providers")
 	fmt.Fprintf(
-		stdout,
+		&stdout,
 		"  total: %d, degraded: %d, unavailable: %d\n",
 		state.Providers.Summary.Total,
 		state.Providers.Summary.Degraded,
@@ -32,32 +39,34 @@ func Render(stdout io.Writer, state contracts.RuntimeState) {
 		if health.Note != "" {
 			line += " - " + health.Note
 		}
-		fmt.Fprintln(stdout, line)
+		fmt.Fprintln(&stdout, line)
 	}
 
-	fmt.Fprintln(stdout, "\nTasks")
-	fmt.Fprintf(stdout, "  tracked: %d\n", state.TaskCounts.Tracked)
-	fmt.Fprintf(stdout, "  runnable: %d\n", state.TaskCounts.Runnable)
-	fmt.Fprintf(stdout, "  blocked: %d\n", state.TaskCounts.Blocked)
-	fmt.Fprintf(stdout, "  stale: %d\n", state.TaskCounts.Stale)
-	fmt.Fprintf(stdout, "  provider gated: %d\n", state.TaskCounts.ProviderGated)
-	fmt.Fprintf(stdout, "  review: %d\n", state.TaskCounts.Review)
+	fmt.Fprintln(&stdout, "\nTasks")
+	fmt.Fprintf(&stdout, "  tracked: %d\n", state.TaskCounts.Tracked)
+	fmt.Fprintf(&stdout, "  runnable: %d\n", state.TaskCounts.Runnable)
+	fmt.Fprintf(&stdout, "  blocked: %d\n", state.TaskCounts.Blocked)
+	fmt.Fprintf(&stdout, "  stale: %d\n", state.TaskCounts.Stale)
+	fmt.Fprintf(&stdout, "  provider gated: %d\n", state.TaskCounts.ProviderGated)
+	fmt.Fprintf(&stdout, "  review: %d\n", state.TaskCounts.Review)
 
 	if state.Cleanup != nil && state.Cleanup.Summary != nil {
-		renderCleanup(stdout, *state.Cleanup.Summary)
+		renderCleanup(&stdout, *state.Cleanup.Summary)
 	}
 
-	fmt.Fprintln(stdout, "\nSuggested Next Actions")
+	fmt.Fprintln(&stdout, "\nSuggested Next Actions")
 	if len(state.SuggestedNextActions) == 0 {
-		fmt.Fprintln(stdout, "  none")
-		return
+		fmt.Fprintln(&stdout, "  none")
+		return stdout.String()
 	}
 	for _, action := range state.SuggestedNextActions {
 		if strings.TrimSpace(action) == "" {
 			continue
 		}
-		fmt.Fprintf(stdout, "  - %s\n", action)
+		fmt.Fprintf(&stdout, "  - %s\n", action)
 	}
+
+	return stdout.String()
 }
 
 func renderCleanup(stdout io.Writer, summary contracts.CleanupSummary) {

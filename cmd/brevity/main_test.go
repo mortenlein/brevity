@@ -163,6 +163,20 @@ func TestParseOptionsAcceptsWatchRefresh(t *testing.T) {
 	}
 }
 
+func TestParseOptionsAcceptsNoClear(t *testing.T) {
+	options, err := parseOptions([]string{"--watch", "--no-clear"})
+	if err != nil {
+		t.Fatalf("parseOptions returned error: %v", err)
+	}
+
+	if !options.watch {
+		t.Fatal("watch = false, want true")
+	}
+	if !options.noClear {
+		t.Fatal("noClear = false, want true")
+	}
+}
+
 func TestParseOptionsRejectsInvalidRefresh(t *testing.T) {
 	_, err := parseOptions([]string{"--watch", "--refresh", "not-a-duration"})
 	if err == nil {
@@ -186,12 +200,13 @@ func TestParseOptionsRejectsOnceWithWatch(t *testing.T) {
 func TestWatchDashboardRefreshesUntilContextCancel(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	client := &fakeRuntimeClient{
-		output: []byte(`{"schema":"brevity.runtime-state.v1","repoRoot":"C:\\repo","taskCounts":{"tracked":3}}`),
-		afterRuntimeState: func(callCount int) {
-			if callCount >= 2 {
-				cancel()
-			}
-		},
+		output: []byte(`{"schema":"brevity.runtime-state.v1","repoRoot":"C:\\repo","generatedAt":"2026-05-19T10:00:00Z","taskCounts":{"tracked":3}}`),
+	}
+	client.afterRuntimeState = func(callCount int) {
+		if callCount == 2 {
+			client.output = []byte(`{"schema":"brevity.runtime-state.v1","repoRoot":"C:\\repo","generatedAt":"2026-05-19T10:00:02Z","taskCounts":{"tracked":3}}`)
+			cancel()
+		}
 	}
 
 	var stdout bytes.Buffer
@@ -207,6 +222,83 @@ func TestWatchDashboardRefreshesUntilContextCancel(t *testing.T) {
 		if !strings.Contains(output, want) {
 			t.Fatalf("output missing %q:\n%s", want, output)
 		}
+	}
+}
+
+func TestWatchDashboardSkipsUnchangedRender(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	client := &fakeRuntimeClient{
+		output: []byte(`{"schema":"brevity.runtime-state.v1","repoRoot":"C:\\repo","taskCounts":{"tracked":3}}`),
+		afterRuntimeState: func(callCount int) {
+			if callCount >= 2 {
+				cancel()
+			}
+		},
+	}
+
+	var stdout bytes.Buffer
+	err := runWithContextOptions(ctx, &stdout, client, cliOptions{kind: commandDashboard, watch: true, refresh: time.Millisecond})
+	if err != nil {
+		t.Fatalf("runWithContextOptions returned error: %v", err)
+	}
+
+	output := stdout.String()
+	if got := strings.Count(output, "Brevity Runtime Dashboard"); got != 1 {
+		t.Fatalf("dashboard render count = %d, want 1\n%s", got, output)
+	}
+	if got := strings.Count(output, "\x1b[H\x1b[2J"); got != 1 {
+		t.Fatalf("clear count = %d, want 1\n%s", got, output)
+	}
+}
+
+func TestWatchDashboardNoClearSkipsClear(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	client := &fakeRuntimeClient{
+		output: []byte(`{"schema":"brevity.runtime-state.v1","repoRoot":"C:\\repo","taskCounts":{"tracked":3}}`),
+		afterRuntimeState: func(callCount int) {
+			cancel()
+		},
+	}
+
+	var stdout bytes.Buffer
+	err := runWithContextOptions(ctx, &stdout, client, cliOptions{kind: commandDashboard, watch: true, noClear: true, refresh: time.Millisecond})
+	if err != nil {
+		t.Fatalf("runWithContextOptions returned error: %v", err)
+	}
+	if strings.Contains(stdout.String(), "\x1b[H\x1b[2J") {
+		t.Fatalf("output contains clear sequence:\n%s", stdout.String())
+	}
+}
+
+func TestWatchDashboardRendersChangedState(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	client := &fakeRuntimeClient{
+		output: []byte(`{"schema":"brevity.runtime-state.v1","repoRoot":"C:\\repo","taskCounts":{"tracked":3}}`),
+	}
+	client.afterRuntimeState = func(callCount int) {
+		if callCount == 2 {
+			client.output = []byte(`{"schema":"brevity.runtime-state.v1","repoRoot":"C:\\repo","taskCounts":{"tracked":4}}`)
+			return
+		}
+		if callCount >= 3 {
+			cancel()
+		}
+	}
+
+	var stdout bytes.Buffer
+	err := runWithContextOptions(ctx, &stdout, client, cliOptions{kind: commandDashboard, watch: true, refresh: time.Millisecond})
+	if err != nil {
+		t.Fatalf("runWithContextOptions returned error: %v", err)
+	}
+
+	output := stdout.String()
+	for _, want := range []string{"tracked: 3", "tracked: 4"} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("output missing %q:\n%s", want, output)
+		}
+	}
+	if got := strings.Count(output, "Brevity Runtime Dashboard"); got != 2 {
+		t.Fatalf("dashboard render count = %d, want 2\n%s", got, output)
 	}
 }
 
