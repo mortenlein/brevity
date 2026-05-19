@@ -4999,6 +4999,27 @@ function Format-TuiValue {
     return $text
 }
 
+function Format-TuiTimestamp {
+    param([AllowNull()][object]$Value)
+
+    if ($null -eq $Value) {
+        return "-"
+    }
+
+    try {
+        return ([datetime]$Value).ToString("yyyy-MM-dd HH:mm:ss")
+    }
+    catch {
+        return (Format-TuiValue $Value)
+    }
+}
+
+function Write-TuiSection {
+    param([string]$Title)
+
+    Write-Host $Title -ForegroundColor White
+}
+
 function Get-BrevityTuiRuntimeSnapshot {
     param([int]$TimeoutSeconds = 20)
 
@@ -5046,6 +5067,16 @@ function Get-BrevityTuiRuntimeSnapshot {
             ok = $false
             state = $null
             error = "Runtime poll exited with code $($process.ExitCode)."
+            stderr = $stderr.Trim()
+            polledAt = $startedAt
+        }
+    }
+
+    if ([string]::IsNullOrWhiteSpace($stdout)) {
+        return [pscustomobject]@{
+            ok = $false
+            state = $null
+            error = "Runtime poll returned no JSON output."
             stderr = $stderr.Trim()
             polledAt = $startedAt
         }
@@ -5119,6 +5150,7 @@ function Write-BrevityTuiView {
     param(
         [object]$Snapshot,
         [int]$IntervalSeconds,
+        [AllowNull()][object]$LastSuccessfulPollAt = $null,
         [switch]$Plain
     )
 
@@ -5126,13 +5158,11 @@ function Write-BrevityTuiView {
         Clear-Host
     }
 
-    $polledText = (Get-Date).ToString("yyyy-MM-dd HH:mm:ss")
-    if ($null -ne $Snapshot -and $null -ne $Snapshot.polledAt) {
-        $polledText = ([datetime]$Snapshot.polledAt).ToString("yyyy-MM-dd HH:mm:ss")
-    }
+    $polledText = Format-TuiTimestamp (Get-TuiPropertyValue -InputObject $Snapshot -Name "polledAt" -Default (Get-Date))
+    $lastSuccessText = Format-TuiTimestamp $LastSuccessfulPollAt
 
     Write-Host "Brevity TUI" -ForegroundColor Cyan
-    Write-Host "Read-only runtime dashboard | q quits | refresh ${IntervalSeconds}s | last poll $polledText" -ForegroundColor DarkGray
+    Write-Host "Read-only runtime dashboard | refresh ${IntervalSeconds}s | last poll $polledText | last ok $lastSuccessText" -ForegroundColor DarkGray
     Write-Host ""
 
     if ($null -eq $Snapshot -or -not $Snapshot.ok) {
@@ -5141,19 +5171,20 @@ function Write-BrevityTuiView {
             $message = $Snapshot.error
         }
 
-        Write-Host "Runtime warning" -ForegroundColor Yellow
+        Write-TuiSection "Runtime"
+        Write-Host "  ! poll failed" -ForegroundColor Yellow
         Write-Host "  $message" -ForegroundColor Yellow
         if ($null -ne $Snapshot -and -not [string]::IsNullOrWhiteSpace($Snapshot.stderr)) {
             Write-Host "  $($Snapshot.stderr)" -ForegroundColor DarkYellow
         }
         Write-Host ""
-        Write-Host "Waiting for next poll..." -ForegroundColor DarkGray
+        Write-Host "Footer: q quit | Esc quit | waiting for next poll" -ForegroundColor DarkGray
         return
     }
 
     $state = $Snapshot.state
     $repoRoot = Format-TuiValue (Get-TuiPropertyValue -InputObject $state -Name "repoRoot")
-    $generatedAt = Format-TuiValue (Get-TuiPropertyValue -InputObject $state -Name "generatedAt")
+    $generatedAt = Format-TuiTimestamp (Get-TuiPropertyValue -InputObject $state -Name "generatedAt")
     $activeWorktreeCount = Format-TuiValue (Get-TuiPropertyValue -InputObject $state -Name "activeWorktreeCount")
     $lock = Get-TuiPropertyValue -InputObject $state -Name "lock"
     $lockText = "clear"
@@ -5165,7 +5196,7 @@ function Write-BrevityTuiView {
         }
     }
 
-    Write-Host "Runtime" -ForegroundColor White
+    Write-TuiSection "Repo / Runtime"
     Write-Host "  Repo: $repoRoot"
     Write-Host "  Generated: $generatedAt"
     Write-Host "  Worktrees: $activeWorktreeCount active | lock: $lockText"
@@ -5173,26 +5204,41 @@ function Write-BrevityTuiView {
 
     $providers = Get-TuiPropertyValue -InputObject $state -Name "providers"
     $providerSummary = Get-TuiPropertyValue -InputObject $providers -Name "summary"
-    Write-Host "Providers" -ForegroundColor White
+    $providerWarnings = [int](Get-TuiPropertyValue -InputObject $providerSummary -Name "degraded" -Default 0) + [int](Get-TuiPropertyValue -InputObject $providerSummary -Name "unavailable" -Default 0)
+    Write-TuiSection "Providers"
+    if ($providerWarnings -gt 0) {
+        Write-Host "  ! provider warnings: $providerWarnings" -ForegroundColor Yellow
+    }
     Write-Host "  total=$(Format-TuiValue (Get-TuiPropertyValue -InputObject $providerSummary -Name "total")) degraded=$(Format-TuiValue (Get-TuiPropertyValue -InputObject $providerSummary -Name "degraded")) unavailable=$(Format-TuiValue (Get-TuiPropertyValue -InputObject $providerSummary -Name "unavailable"))"
     $providerHealth = Get-TuiPropertyValue -InputObject $providers -Name "health"
     foreach ($provider in @($providerHealth.PSObject.Properties | Sort-Object Name | Select-Object -First 5)) {
         $health = $provider.Value
-        Write-Host "  $($provider.Name): $(Format-TuiValue (Get-TuiPropertyValue -InputObject $health -Name "status"))"
+        $status = Format-TuiValue (Get-TuiPropertyValue -InputObject $health -Name "status")
+        if ($status -eq "degraded" -or $status -eq "unavailable") {
+            Write-Host "  ! $($provider.Name): $status" -ForegroundColor Yellow
+        }
+        else {
+            Write-Host "  - $($provider.Name): $status"
+        }
     }
     Write-Host ""
 
     $taskCounts = Get-TuiPropertyValue -InputObject $state -Name "taskCounts"
     $normalizedCounts = Get-TuiCountByNormalizedState -State $state
-    Write-Host "Tasks" -ForegroundColor White
-    Write-Host "  tracked=$(Format-TuiValue (Get-TuiPropertyValue -InputObject $taskCounts -Name "tracked")) runnable=$(Format-TuiValue (Get-TuiPropertyValue -InputObject $taskCounts -Name "runnable")) blocked=$(Format-TuiValue (Get-TuiPropertyValue -InputObject $taskCounts -Name "blocked")) stale=$(Format-TuiValue (Get-TuiPropertyValue -InputObject $taskCounts -Name "stale")) review=$(Format-TuiValue (Get-TuiPropertyValue -InputObject $taskCounts -Name "review"))"
+    $trackedTaskCount = [int](Get-TuiPropertyValue -InputObject $taskCounts -Name "tracked" -Default 0)
+    $taskWarningCount = [int](Get-TuiPropertyValue -InputObject $taskCounts -Name "blocked" -Default 0) + [int](Get-TuiPropertyValue -InputObject $taskCounts -Name "stale" -Default 0) + [int](Get-TuiPropertyValue -InputObject $taskCounts -Name "providerGated" -Default 0)
+    Write-TuiSection "Tasks"
+    Write-Host "  tracked=$trackedTaskCount runnable=$(Format-TuiValue (Get-TuiPropertyValue -InputObject $taskCounts -Name "runnable")) blocked=$(Format-TuiValue (Get-TuiPropertyValue -InputObject $taskCounts -Name "blocked")) stale=$(Format-TuiValue (Get-TuiPropertyValue -InputObject $taskCounts -Name "stale")) providerGated=$(Format-TuiValue (Get-TuiPropertyValue -InputObject $taskCounts -Name "providerGated")) review=$(Format-TuiValue (Get-TuiPropertyValue -InputObject $taskCounts -Name "review"))"
+    if ($taskWarningCount -gt 0) {
+        Write-Host "  ! task warnings: $taskWarningCount" -ForegroundColor Yellow
+    }
     Write-Host "  states: planned=$($normalizedCounts.planned) ready=$($normalizedCounts.ready) running=$($normalizedCounts.running) succeeded=$($normalizedCounts.succeeded) failed=$($normalizedCounts.failed) reviewing=$($normalizedCounts.reviewing) merged=$($normalizedCounts.merged) stale=$($normalizedCounts.stale) blocked=$($normalizedCounts.blocked) orphaned=$($normalizedCounts.orphaned)"
     Write-Host ""
 
     $tasks = @(Get-TuiPropertyValue -InputObject $state -Name "tasks" -Default @())
-    Write-Host "Recent tasks" -ForegroundColor White
+    Write-TuiSection "Task List"
     if ($tasks.Count -eq 0) {
-        Write-Host "  none"
+        Write-Host "  No tracked tasks yet."
     }
     else {
         foreach ($task in @($tasks | Select-Object -First 8)) {
@@ -5204,22 +5250,33 @@ function Write-BrevityTuiView {
                 $runSignal = " stale-run"
             }
 
-            Write-Host "  $(Format-TuiValue (Get-TuiPropertyValue -InputObject $task -Name "slug")) | $(Format-TuiValue (Get-TuiPropertyValue -InputObject $task -Name "normalizedState")) | provider=$(Format-TuiValue (Get-TuiPropertyValue -InputObject $task -Name "provider"))$runSignal"
+            $slug = Format-TuiValue (Get-TuiPropertyValue -InputObject $task -Name "slug")
+            $stateName = Format-TuiValue (Get-TuiPropertyValue -InputObject $task -Name "normalizedState")
+            $providerName = Format-TuiValue (Get-TuiPropertyValue -InputObject $task -Name "provider")
+            $workerStatus = Format-TuiValue (Get-TuiPropertyValue -InputObject $task -Name "workerStatus")
+            Write-Host "  - $slug | $stateName | provider=$providerName | run=$workerStatus$runSignal"
         }
     }
     Write-Host ""
 
     $cleanup = Get-TuiPropertyValue -InputObject $state -Name "cleanup"
     $cleanupSummary = Get-TuiPropertyValue -InputObject $cleanup -Name "summary"
-    Write-Host "Cleanup warnings" -ForegroundColor White
-    Write-Host "  candidates=$(Format-TuiValue (Get-TuiPropertyValue -InputObject $cleanupSummary -Name "totalCandidates")) requiresInspection=$(Format-TuiValue (Get-TuiPropertyValue -InputObject $cleanupSummary -Name "requiresInspectionCount")) removableByExecute=$(Format-TuiValue (Get-TuiPropertyValue -InputObject $cleanupSummary -Name "removableByExecuteCount"))"
+    $cleanupWarnings = [int](Get-TuiPropertyValue -InputObject $cleanupSummary -Name "requiresInspectionCount" -Default 0)
+    Write-TuiSection "Cleanup Warnings"
+    if ($cleanupWarnings -gt 0) {
+        Write-Host "  ! requires inspection: $cleanupWarnings" -ForegroundColor Yellow
+    }
+    Write-Host "  candidates=$(Format-TuiValue (Get-TuiPropertyValue -InputObject $cleanupSummary -Name "totalCandidates")) worktrees=$(Format-TuiValue (Get-TuiPropertyValue -InputObject $cleanupSummary -Name "orphanedTaskWorktreeCount")) branches=$(Format-TuiValue (Get-TuiPropertyValue -InputObject $cleanupSummary -Name "orphanedTaskBranchCount")) requiresInspection=$(Format-TuiValue (Get-TuiPropertyValue -InputObject $cleanupSummary -Name "requiresInspectionCount")) removableByExecute=$(Format-TuiValue (Get-TuiPropertyValue -InputObject $cleanupSummary -Name "removableByExecuteCount"))"
     $worktreeCandidates = @(Get-TuiPropertyValue -InputObject $cleanup -Name "orphanedTaskWorktrees" -Default @())
     $branchCandidates = @(Get-TuiPropertyValue -InputObject $cleanup -Name "orphanedTaskBranches" -Default @())
+    if ($worktreeCandidates.Count -eq 0 -and $branchCandidates.Count -eq 0) {
+        Write-Host "  No orphaned worktree or branch cleanup candidates."
+    }
     foreach ($candidate in @($worktreeCandidates | Select-Object -First 3)) {
-        Write-Host "  worktree: $(Format-TuiValue (Get-TuiPropertyValue -InputObject $candidate -Name "branch")) [$((Format-TuiValue (Get-TuiPropertyValue -InputObject $candidate -Name "category")))]" -ForegroundColor Yellow
+        Write-Host "  ! worktree: $(Format-TuiValue (Get-TuiPropertyValue -InputObject $candidate -Name "branch")) [$((Format-TuiValue (Get-TuiPropertyValue -InputObject $candidate -Name "category")))]" -ForegroundColor Yellow
     }
     foreach ($candidate in @($branchCandidates | Select-Object -First 3)) {
-        Write-Host "  branch: $(Format-TuiValue (Get-TuiPropertyValue -InputObject $candidate -Name "branch")) [$((Format-TuiValue (Get-TuiPropertyValue -InputObject $candidate -Name "category")))]" -ForegroundColor Yellow
+        Write-Host "  ! branch: $(Format-TuiValue (Get-TuiPropertyValue -InputObject $candidate -Name "branch")) [$((Format-TuiValue (Get-TuiPropertyValue -InputObject $candidate -Name "category")))]" -ForegroundColor Yellow
     }
     Write-Host ""
 
@@ -5227,15 +5284,17 @@ function Write-BrevityTuiView {
         ([bool](Get-TuiPropertyValue -InputObject $_ -Name "latestRunIncomplete" -Default $false)) -or
         ([bool](Get-TuiPropertyValue -InputObject $_ -Name "latestRunStale" -Default $false))
     })
-    Write-Host "Run indicators" -ForegroundColor White
+    Write-TuiSection "Latest Runs"
     if ($runIndicators.Count -eq 0) {
-        Write-Host "  none"
+        Write-Host "  No stale or incomplete latest runs."
     }
     else {
         foreach ($task in @($runIndicators | Select-Object -First 5)) {
-            Write-Host "  $(Format-TuiValue (Get-TuiPropertyValue -InputObject $task -Name "slug")) incomplete=$(Format-TuiValue (Get-TuiPropertyValue -InputObject $task -Name "latestRunIncomplete")) stale=$(Format-TuiValue (Get-TuiPropertyValue -InputObject $task -Name "latestRunStale")) ageMinutes=$(Format-TuiValue (Get-TuiPropertyValue -InputObject $task -Name "latestRunAgeMinutes"))" -ForegroundColor Yellow
+            Write-Host "  ! $(Format-TuiValue (Get-TuiPropertyValue -InputObject $task -Name "slug")) incomplete=$(Format-TuiValue (Get-TuiPropertyValue -InputObject $task -Name "latestRunIncomplete")) stale=$(Format-TuiValue (Get-TuiPropertyValue -InputObject $task -Name "latestRunStale")) ageMinutes=$(Format-TuiValue (Get-TuiPropertyValue -InputObject $task -Name "latestRunAgeMinutes"))" -ForegroundColor Yellow
         }
     }
+    Write-Host ""
+    Write-Host "Footer: q quit | Esc quit | read-only runtime state consumer" -ForegroundColor DarkGray
 }
 
 function Start-BrevityTui {
@@ -5250,7 +5309,11 @@ function Start-BrevityTui {
 
     if ($Once) {
         $snapshot = Get-BrevityTuiRuntimeSnapshot
-        Write-BrevityTuiView -Snapshot $snapshot -IntervalSeconds $IntervalSeconds -Plain
+        $lastSuccessfulPollAt = $null
+        if ($snapshot.ok) {
+            $lastSuccessfulPollAt = $snapshot.polledAt
+        }
+        Write-BrevityTuiView -Snapshot $snapshot -IntervalSeconds $IntervalSeconds -LastSuccessfulPollAt $lastSuccessfulPollAt -Plain
         if ($snapshot.ok) {
             return
         }
@@ -5258,9 +5321,13 @@ function Start-BrevityTui {
     }
 
     try {
+        $lastSuccessfulPollAt = $null
         while ($true) {
             $snapshot = Get-BrevityTuiRuntimeSnapshot
-            Write-BrevityTuiView -Snapshot $snapshot -IntervalSeconds $IntervalSeconds
+            if ($snapshot.ok) {
+                $lastSuccessfulPollAt = $snapshot.polledAt
+            }
+            Write-BrevityTuiView -Snapshot $snapshot -IntervalSeconds $IntervalSeconds -LastSuccessfulPollAt $lastSuccessfulPollAt
 
             $deadline = (Get-Date).AddSeconds($IntervalSeconds)
             while ((Get-Date) -lt $deadline) {
