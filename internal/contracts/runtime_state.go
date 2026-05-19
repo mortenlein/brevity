@@ -9,16 +9,19 @@ import (
 const RuntimeStateSchema = "brevity.runtime-state.v1"
 
 type RuntimeState struct {
-	Schema               string         `json:"schema"`
-	RepoRoot             string         `json:"repoRoot"`
-	GeneratedAt          string         `json:"generatedAt"`
-	Providers            Providers      `json:"providers"`
-	TaskCounts           TaskCounts     `json:"taskCounts"`
-	Tasks                []TaskSummary  `json:"tasks"`
-	Cleanup              *Cleanup       `json:"cleanup,omitempty"`
-	SuggestedNextActions []string       `json:"suggestedNextActions"`
-	Groups               map[string]any `json:"groups"`
-	Extras               map[string]any `json:"-"`
+	Schema                string           `json:"schema"`
+	RepoRoot              string           `json:"repoRoot"`
+	GeneratedAt           string           `json:"generatedAt"`
+	Providers             Providers        `json:"providers"`
+	TaskCounts            TaskCounts       `json:"taskCounts"`
+	Tasks                 []TaskSummary    `json:"tasks"`
+	Cleanup               *Cleanup         `json:"cleanup,omitempty"`
+	OrphanedTaskWorktrees []WorktreeRecord `json:"orphanedTaskWorktrees"`
+	ActiveWorktreeCount   int              `json:"activeWorktreeCount"`
+	ActiveWorktrees       []WorktreeRecord `json:"activeWorktrees"`
+	SuggestedNextActions  []string         `json:"suggestedNextActions"`
+	Groups                map[string]any   `json:"groups"`
+	Extras                map[string]any   `json:"-"`
 }
 
 type Providers struct {
@@ -56,6 +59,7 @@ type TaskSummary struct {
 	Profile               string              `json:"profile"`
 	LastProvider          string              `json:"lastProvider"`
 	LastProfile           string              `json:"lastProfile"`
+	Branch                string              `json:"branch"`
 	WorktreePath          string              `json:"worktreePath"`
 	WorktreeExists        *bool               `json:"worktreeExists,omitempty"`
 	Worktree              *TaskWorktree       `json:"worktree,omitempty"`
@@ -79,6 +83,14 @@ type TaskWorktree struct {
 	Exists bool   `json:"exists"`
 	Path   string `json:"path"`
 	Branch string `json:"branch"`
+}
+
+type WorktreeRecord struct {
+	Path     string `json:"path"`
+	Branch   string `json:"branch"`
+	Head     string `json:"head,omitempty"`
+	Bare     bool   `json:"bare,omitempty"`
+	Detached bool   `json:"detached,omitempty"`
 }
 
 type TaskRuntimeContext struct {

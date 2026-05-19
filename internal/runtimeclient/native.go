@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -53,8 +54,10 @@ func (client NativeClient) RuntimeState() (contracts.RuntimeState, error) {
 		Providers: contracts.Providers{
 			Health: map[string]contracts.ProviderHealth{},
 		},
-		Tasks:  []contracts.TaskSummary{},
-		Groups: map[string]any{},
+		Tasks:                 []contracts.TaskSummary{},
+		Groups:                map[string]any{},
+		OrphanedTaskWorktrees: []contracts.WorktreeRecord{},
+		ActiveWorktrees:       []contracts.WorktreeRecord{},
 		SuggestedNextActions: []string{
 			"Native Go runtime reader is experimental and partial; PowerShell remains source of truth.",
 		},
@@ -90,6 +93,24 @@ func (client NativeClient) RuntimeState() (contracts.RuntimeState, error) {
 	state.Tasks = tasks
 	state.TaskCounts = countTasks(tasks)
 	state.Groups = groupTasks(tasks)
+
+	worktrees, err := readGitWorktrees(repoRoot)
+	if err != nil {
+		state.SuggestedNextActions = append(state.SuggestedNextActions, fmt.Sprintf("Native worktree scan skipped: %v.", err))
+	} else {
+		state.ActiveWorktrees = worktrees
+		state.ActiveWorktreeCount = len(worktrees)
+		state.OrphanedTaskWorktrees = orphanedTaskWorktrees(tasks, worktrees)
+		if len(state.OrphanedTaskWorktrees) > 0 {
+			candidates := cleanupCandidatesForOrphanedTaskWorktrees(state.OrphanedTaskWorktrees)
+			state.Cleanup = &contracts.Cleanup{
+				Summary:               cleanupSummary(candidates),
+				OrphanedTaskWorktrees: candidates,
+				OrphanedTaskBranches:  []contracts.CleanupCandidate{},
+			}
+			state.SuggestedNextActions = append(state.SuggestedNextActions, "Review native orphaned task worktree findings with PowerShell before cleanup; native Go remains read-only.")
+		}
+	}
 
 	return state, nil
 }
@@ -200,6 +221,162 @@ func readLatestRuns(path string) (map[string]json.RawMessage, bool, error) {
 		return nil, false, fmt.Errorf("scan runs index: %w", err)
 	}
 	return latest, false, nil
+}
+
+func readGitWorktrees(repoRoot string) ([]contracts.WorktreeRecord, error) {
+	command := exec.Command("git", "worktree", "list", "--porcelain")
+	command.Dir = repoRoot
+	output, err := command.Output()
+	if err != nil {
+		return nil, fmt.Errorf("git worktree list --porcelain failed: %w", err)
+	}
+	return parseGitWorktreePorcelain(string(output)), nil
+}
+
+func parseGitWorktreePorcelain(output string) []contracts.WorktreeRecord {
+	var records []contracts.WorktreeRecord
+	var current contracts.WorktreeRecord
+	hasCurrent := false
+
+	flush := func() {
+		if hasCurrent && strings.TrimSpace(current.Path) != "" {
+			records = append(records, current)
+		}
+		current = contracts.WorktreeRecord{}
+		hasCurrent = false
+	}
+
+	scanner := bufio.NewScanner(strings.NewReader(output))
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" {
+			flush()
+			continue
+		}
+		key, value, ok := strings.Cut(line, " ")
+		if !ok {
+			key = line
+			value = ""
+		}
+		switch key {
+		case "worktree":
+			flush()
+			current.Path = value
+			hasCurrent = true
+		case "HEAD":
+			current.Head = value
+		case "branch":
+			current.Branch = strings.TrimPrefix(value, "refs/heads/")
+		case "bare":
+			current.Bare = true
+		case "detached":
+			current.Detached = true
+		}
+	}
+	flush()
+	return records
+}
+
+func orphanedTaskWorktrees(tasks []contracts.TaskSummary, worktrees []contracts.WorktreeRecord) []contracts.WorktreeRecord {
+	metadataBranches := map[string]bool{}
+	metadataPaths := map[string]bool{}
+	for _, task := range tasks {
+		addMetadataValue(metadataBranches, task.Branch)
+		if task.Worktree != nil {
+			addMetadataValue(metadataBranches, task.Worktree.Branch)
+			addMetadataValue(metadataPaths, comparablePath(task.Worktree.Path))
+		}
+		addMetadataValue(metadataPaths, comparablePath(task.WorktreePath))
+	}
+
+	var orphaned []contracts.WorktreeRecord
+	for _, worktree := range worktrees {
+		if !strings.HasPrefix(worktree.Branch, "task/") {
+			continue
+		}
+		if metadataBranches[worktree.Branch] || metadataPaths[comparablePath(worktree.Path)] {
+			continue
+		}
+		orphaned = append(orphaned, worktree)
+	}
+	sort.Slice(orphaned, func(i, j int) bool {
+		if orphaned[i].Path == orphaned[j].Path {
+			return orphaned[i].Branch < orphaned[j].Branch
+		}
+		return orphaned[i].Path < orphaned[j].Path
+	})
+	return orphaned
+}
+
+func addMetadataValue(values map[string]bool, value string) {
+	value = strings.TrimSpace(value)
+	if value != "" {
+		values[value] = true
+	}
+}
+
+func comparablePath(path string) string {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return ""
+	}
+	return strings.ToLower(filepath.Clean(path))
+}
+
+func cleanupCandidatesForOrphanedTaskWorktrees(worktrees []contracts.WorktreeRecord) []contracts.CleanupCandidate {
+	candidates := make([]contracts.CleanupCandidate, 0, len(worktrees))
+	removable := false
+	for _, worktree := range worktrees {
+		candidates = append(candidates, contracts.CleanupCandidate{
+			ID:                 "orphan-worktree:" + cleanupSafeID(worktree.Branch, worktree.Path),
+			Severity:           "warning",
+			Category:           "requires-inspection",
+			Path:               worktree.Path,
+			Branch:             worktree.Branch,
+			Dirty:              false,
+			DirtyReasons:       []string{"dirty status was not inspected by native runtime reader"},
+			SuggestedCommands:  []string{fmt.Sprintf("git -C %s status --short", quoteCommandArg(worktree.Path)), fmt.Sprintf("git -C %s diff --stat", quoteCommandArg(worktree.Path))},
+			RemovableByExecute: &removable,
+		})
+	}
+	return candidates
+}
+
+func cleanupSummary(candidates []contracts.CleanupCandidate) *contracts.CleanupSummary {
+	bySeverity := map[string]int{}
+	byCategory := map[string]int{}
+	for _, candidate := range candidates {
+		bySeverity[candidate.Severity]++
+		byCategory[candidate.Category]++
+	}
+	return &contracts.CleanupSummary{
+		TotalCandidates:           len(candidates),
+		RequiresInspectionCount:   byCategory["requires-inspection"],
+		RemovableByExecuteCount:   0,
+		OrphanedTaskWorktreeCount: len(candidates),
+		OrphanedTaskBranchCount:   0,
+		BySeverity:                bySeverity,
+		ByCategory:                byCategory,
+	}
+}
+
+func cleanupSafeID(branch string, path string) string {
+	value := strings.TrimSpace(branch)
+	if value == "" {
+		value = comparablePath(path)
+	}
+	replacer := strings.NewReplacer("\\", "-", "/", "-", ":", "-", " ", "-")
+	return strings.Trim(replacer.Replace(value), "-")
+}
+
+func quoteCommandArg(value string) string {
+	if strings.TrimSpace(value) == "" {
+		return `""`
+	}
+	if strings.ContainsAny(value, " \t\"") {
+		return `"` + strings.ReplaceAll(value, `"`, `\"`) + `"`
+	}
+	return value
 }
 
 func attachLatestRuns(tasks []contracts.TaskSummary, latestRuns map[string]json.RawMessage) {

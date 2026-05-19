@@ -101,6 +101,71 @@ func TestNativeRuntimeStateMissingFiles(t *testing.T) {
 	}
 }
 
+func TestParseGitWorktreePorcelain(t *testing.T) {
+	output := "worktree C:/repo\nHEAD abc123\nbranch refs/heads/main\n\nworktree C:/repo/worktrees/active/task-one\nHEAD def456\nbranch refs/heads/task/one\n\n"
+
+	records := parseGitWorktreePorcelain(output)
+	if len(records) != 2 {
+		t.Fatalf("records = %d, want 2", len(records))
+	}
+	if records[0].Path != "C:/repo" || records[0].Branch != "main" || records[0].Head != "abc123" {
+		t.Fatalf("first record = %#v, want parsed main worktree", records[0])
+	}
+	if records[1].Path != "C:/repo/worktrees/active/task-one" || records[1].Branch != "task/one" || records[1].Head != "def456" {
+		t.Fatalf("second record = %#v, want parsed task worktree", records[1])
+	}
+}
+
+func TestOrphanedTaskWorktreesDetectsTaskBranchesWithoutMetadata(t *testing.T) {
+	worktrees := []contracts.WorktreeRecord{
+		{Path: "C:/repo", Branch: "main"},
+		{Path: "C:/repo/worktrees/active/lost", Branch: "task/lost"},
+	}
+
+	orphaned := orphanedTaskWorktrees(nil, worktrees)
+	if len(orphaned) != 1 {
+		t.Fatalf("orphaned = %#v, want one task worktree", orphaned)
+	}
+	if orphaned[0].Branch != "task/lost" {
+		t.Fatalf("orphaned branch = %q, want task/lost", orphaned[0].Branch)
+	}
+}
+
+func TestOrphanedTaskWorktreesTreatsMissingTaskMetadataAsOrphan(t *testing.T) {
+	repoRoot := nativeTestRepo(t)
+	writeNativeTestFile(t, repoRoot, ".brevity/provider-health.json", `{}`)
+	writeNativeTestFile(t, repoRoot, ".brevity/tasks.json", `[]`)
+	stateTasks, _, err := readTasks(filepath.Join(repoRoot, ".brevity", "tasks.json"))
+	if err != nil {
+		t.Fatalf("readTasks returned error: %v", err)
+	}
+
+	orphaned := orphanedTaskWorktrees(stateTasks, []contracts.WorktreeRecord{
+		{Path: filepath.Join(repoRoot, "worktrees", "active", "missing"), Branch: "task/missing"},
+	})
+	if len(orphaned) != 1 {
+		t.Fatalf("orphaned = %#v, want missing metadata worktree", orphaned)
+	}
+}
+
+func TestOrphanedTaskWorktreesIgnoresMatchingMetadata(t *testing.T) {
+	worktreePath := "C:/repo/worktrees/active/known"
+	tasks := []contracts.TaskSummary{
+		{Slug: "known", Branch: "task/known", Worktree: &contracts.TaskWorktree{Path: worktreePath, Branch: "task/known"}},
+	}
+
+	orphaned := orphanedTaskWorktrees(tasks, []contracts.WorktreeRecord{
+		{Path: worktreePath, Branch: "task/known"},
+		{Path: "C:/repo/worktrees/active/other", Branch: "task/other"},
+	})
+	if len(orphaned) != 1 {
+		t.Fatalf("orphaned = %#v, want only unmatched task worktree", orphaned)
+	}
+	if orphaned[0].Branch != "task/other" {
+		t.Fatalf("orphaned branch = %q, want task/other", orphaned[0].Branch)
+	}
+}
+
 func nativeState(t *testing.T, repoRoot string) contracts.RuntimeState {
 	t.Helper()
 	client := NativeClient{
