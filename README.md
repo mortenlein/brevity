@@ -208,6 +208,7 @@ go run ./cmd/brevity
 go run ./cmd/brevity --once
 go run ./cmd/brevity --watch
 go run ./cmd/brevity --watch --refresh 5s
+go run ./cmd/brevity --watch --no-clear
 ```
 
 The dashboard reads the PowerShell-produced runtime-state contract:
@@ -218,8 +219,11 @@ The dashboard reads the PowerShell-produced runtime-state contract:
 
 `--watch` keeps the read-only dashboard open and periodically polls
 `.\brevity.ps1 runtime state --json`; `--refresh` accepts a Go duration such as
-`5s` and controls the polling interval. Press Ctrl+C to stop watch mode; the Go
-client exits cleanly without mutating `.brevity` state.
+`5s` and controls the polling interval. Watch mode suppresses redraws when the
+stable dashboard content is unchanged, so runtime `GeneratedAt` and poll
+timestamps do not force a redraw by themselves. `--no-clear` disables
+clear-screen behavior on changed renders. Press Ctrl+C to stop watch mode; the
+Go client exits cleanly without mutating `.brevity` state.
 
 PowerShell remains the authoritative runtime backend and the source of truth for
 runtime state, command-result JSON contracts, worker lifecycle, cleanup, branch

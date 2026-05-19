@@ -57,6 +57,7 @@ go run ./cmd/brevity
 go run ./cmd/brevity --once
 go run ./cmd/brevity --watch
 go run ./cmd/brevity --watch --refresh 5s
+go run ./cmd/brevity --watch --no-clear
 ```
 
 The dashboard invokes `.\brevity.ps1 runtime state --json`, validates the
@@ -64,9 +65,11 @@ The dashboard invokes `.\brevity.ps1 runtime state --json`, validates the
 PowerShell-produced snapshot.
 
 Watch mode keeps that same dashboard path read-only. It periodically polls the
-PowerShell runtime-state JSON contract, redraws the dashboard from the latest
-snapshot, and exits cleanly when interrupted with Ctrl+C. `--refresh` sets the
-polling interval using a Go duration such as `5s`.
+PowerShell runtime-state JSON contract, redraws the dashboard when stable
+dashboard content changes, and exits cleanly when interrupted with Ctrl+C.
+Runtime `GeneratedAt` and poll timestamps do not force redraws by themselves.
+`--refresh` sets the polling interval using a Go duration such as `5s`.
+`--no-clear` disables clear-screen behavior on changed renders.
 
 Current Go action commands route to PowerShell JSON contracts. They may cause
 PowerShell to perform the requested mutation or execution, but the Go client

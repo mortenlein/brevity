@@ -21,6 +21,7 @@ metadata. It does not mean Go writes those files itself.
 | `go run ./cmd/brevity --once` | Dashboard/frontend | PowerShell runtime state JSON | Read-only | Implemented | Renders one runtime-state snapshot and exits. |
 | `go run ./cmd/brevity --watch` | Dashboard/frontend | PowerShell runtime state JSON | Read-only | Implemented | Keeps polling runtime state until interrupted; Ctrl+C exits cleanly. |
 | `go run ./cmd/brevity --watch --refresh 5s` | Dashboard/frontend | PowerShell runtime state JSON | Read-only | Implemented | Uses a Go duration value for the watch-mode polling interval. |
+| `go run ./cmd/brevity --watch --no-clear` | Dashboard/frontend | PowerShell runtime state JSON | Read-only | Implemented | Suppresses screen clearing on changed renders; unchanged stable dashboard content does not redraw. |
 | `go run ./cmd/brevity provider set <provider> <status>` | PowerShell-backed action | PowerShell command-result JSON | Mutating | Implemented | Updates provider health through `.\brevity.ps1 provider set ... --json`. |
 | `go run ./cmd/brevity provider reset <provider>` | PowerShell-backed action | PowerShell command-result JSON | Mutating | Implemented | Resets provider health through `.\brevity.ps1 provider reset ... --json`. |
 | `go run ./cmd/brevity task new <slug>` | PowerShell-backed action | PowerShell command-result JSON | Mutating | Implemented | Creates task runtime metadata and worktree through PowerShell. |
@@ -45,6 +46,9 @@ metadata. It does not mean Go writes those files itself.
 - PowerShell remains the source of truth for behavior and JSON contracts.
 - Dashboard watch mode is still read-only: each refresh reads
   `brevity.runtime-state.v1` from PowerShell and renders it.
+- Watch mode suppresses redraws when stable dashboard content is unchanged.
+  Runtime `GeneratedAt` and poll timestamps do not force redraws by themselves.
+- `--no-clear` disables clear-screen behavior on changed dashboard renders.
 - Go support should stay narrower than the PowerShell surface until parity is
   explicit and tested.
 - New Go commands should be added here when they are exposed, even if the
