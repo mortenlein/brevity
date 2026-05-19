@@ -1,4 +1,4 @@
-param(
+﻿param(
     [Parameter(Position = 0)]
     [string]$Command = "help",
 
@@ -5543,8 +5543,112 @@ function Get-TaskMetadataLockInfo {
     }
 }
 
+function Get-DoctorReportData {
+    $repoRoot = Get-RepositoryRoot
+    $config = Read-BrevityConfig
+    $providerHealth = Read-ProviderHealth
+    $providerSummary = Get-ProviderHealthSummary -Health $providerHealth.health
+    $tasksPath = Join-Path $repoRoot ".brevity\tasks.json"
+    $tasks = @(Read-BrevityTasks)
+    $runtimeTasks = @($tasks | ForEach-Object { Get-TaskRuntimeInfo -Task $_ })
+    $taskBranches = @(Get-GitTaskBranches)
+    $mergedBranches = @(Get-MergedTaskBranches)
+    $worktreeRecords = @(Get-GitWorktreeRecords)
+    $metadataBranches = @($runtimeTasks | ForEach-Object { $_.branch } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+    $registeredWorktreeBranches = @($worktreeRecords | ForEach-Object { $_.branch } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+    $metadataOrphanedBranches = @($taskBranches | Where-Object { $metadataBranches -notcontains $_ })
+    $metadataOrphanedBranchRecords = @($metadataOrphanedBranches | Sort-Object | ForEach-Object {
+        [pscustomobject]@{
+            branch = $_
+            mergedIntoHead = ($mergedBranches -contains $_)
+            registeredWorktree = ($registeredWorktreeBranches -contains $_)
+        }
+    })
+    $orphanedBranches = @(Get-OrphanedTaskBranchRecords -RuntimeTasks $runtimeTasks -WorktreeRecords $worktreeRecords)
+    $orphanedWorktrees = @(Get-OrphanedTaskWorktreeRecords -RuntimeTasks $runtimeTasks -WorktreeRecords $worktreeRecords -ActiveWorktreesRoot $config.worktreesRoot)
+    $orphanedWorktreeCleanupCandidates = @($orphanedWorktrees | Sort-Object path | ForEach-Object { ConvertTo-OrphanedTaskWorktreeCleanupCandidate -Worktree $_ })
+    $orphanedBranchCleanupCandidates = @($orphanedBranches | Sort-Object branch | ForEach-Object { ConvertTo-OrphanedTaskBranchCleanupCandidate -Branch $_ })
+    $mergedTaskBranches = @($mergedBranches | Where-Object { $metadataBranches -contains $_ })
+    $staleTasks = @($runtimeTasks | Where-Object { $_.runtime.stale })
+    $missingWorktreeTasks = @($runtimeTasks | Where-Object { $_.runtime.missingWorktree })
+    $missingPromptTasks = @($runtimeTasks | Where-Object { $_.runtime.missingPrompt })
+    $lockInfo = Get-TaskMetadataLockInfo -TasksPath $tasksPath
+    $runSummaries = @($runtimeTasks | Sort-Object slug | ForEach-Object {
+        $summary = Get-TaskWorkerRunHistorySummary -Slug $_.slug
+        [pscustomobject]@{
+            slug = $_.slug
+            runCount = $summary.runCount
+            latestRunId = $summary.latestRunId
+            latestRunIncomplete = $summary.latestRunIncomplete
+            latestRunStale = $summary.latestRunStale
+            latestRunAgeMinutes = $summary.latestRunAgeMinutes
+            latestRunStaleThresholdMinutes = $summary.staleThresholdMinutes
+            latestRunWorkerStatus = $summary.latestRunWorkerStatus
+        }
+    })
+    $staleRunSummaries = @($runSummaries | Where-Object { $_.latestRunStale })
+    $incompleteRunSummaries = @($runSummaries | Where-Object { $_.latestRunIncomplete })
+    $runCountTotal = 0
+    foreach ($runSummary in $runSummaries) {
+        $runCountTotal += [int]$runSummary.runCount
+    }
+
+    $warnings = @()
+    if ($staleTasks.Count -gt 0) { $warnings += [pscustomobject]@{ code = "stale-task-metadata"; message = "Stale task metadata is present."; count = $staleTasks.Count } }
+    if ($orphanedWorktrees.Count -gt 0) { $warnings += [pscustomobject]@{ code = "orphaned-task-worktrees"; message = "Orphaned task worktrees are present."; count = $orphanedWorktrees.Count } }
+    if ($metadataOrphanedBranchRecords.Count -gt 0) { $warnings += [pscustomobject]@{ code = "orphaned-task-branches"; message = "Orphaned task branches are present."; count = $metadataOrphanedBranchRecords.Count } }
+    if ($lockInfo.exists) { $warnings += [pscustomobject]@{ code = "task-metadata-lock-present"; message = "Task metadata lock is present."; count = 1 } }
+    if ($providerSummary.degraded -gt 0 -or $providerSummary.unavailable -gt 0) { $warnings += [pscustomobject]@{ code = "provider-health"; message = "One or more providers are degraded or unavailable."; count = ($providerSummary.degraded + $providerSummary.unavailable) } }
+    if ($staleRunSummaries.Count -gt 0 -or $incompleteRunSummaries.Count -gt 0) { $warnings += [pscustomobject]@{ code = "stale-or-incomplete-runs"; message = "Stale or incomplete worker runs are present."; count = ($staleRunSummaries.Count + $incompleteRunSummaries.Count) } }
+
+    $suggestedNextActions = @("No immediate doctor action suggested.")
+    if ($lockInfo.exists -and $null -ne $lockInfo.ageMinutes -and $lockInfo.ageMinutes -ge 10) {
+        $suggestedNextActions = @("Run .\brevity.ps1 doctor --repair to remove a stale task metadata lock after confirming no Brevity process is active.")
+    }
+    elseif ($staleTasks.Count -gt 0) {
+        $suggestedNextActions = @("Review stale task metadata in the doctor report.")
+    }
+    elseif ($orphanedWorktrees.Count -gt 0 -or ($runtimeTasks.Count -eq 0 -and $worktreeRecords.Count -gt 0)) {
+        $suggestedNextActions = @(Get-OrphanedWorktreeGuidance -TrackedTaskCount $runtimeTasks.Count -RegisteredWorktreeCount $worktreeRecords.Count -OrphanedTaskWorktreeCount $orphanedWorktrees.Count)
+    }
+    elseif ($metadataOrphanedBranchRecords.Count -gt 0) {
+        $suggestedNextActions = @("Review orphaned task branch cleanup candidates before deleting branches.")
+    }
+    elseif ($providerSummary.degraded -gt 0 -or $providerSummary.unavailable -gt 0) {
+        $suggestedNextActions = @("Run .\brevity.ps1 provider status and choose a healthy worker profile before launching more work.")
+    }
+
+    return [pscustomobject]@{
+        repoRoot = $repoRoot
+        generatedAt = (Get-Date).ToString("o")
+        providers = [pscustomobject]@{ summary = $providerSummary; health = $providerHealth.health }
+        taskCounts = [pscustomobject]@{ tracked = $runtimeTasks.Count; stale = $staleTasks.Count; missingWorktree = $missingWorktreeTasks.Count; missingPrompt = $missingPromptTasks.Count }
+        branchCounts = [pscustomobject]@{ taskBranches = $taskBranches.Count; orphaned = $metadataOrphanedBranchRecords.Count; cleanupCandidates = $orphanedBranches.Count; mergedTracked = $mergedTaskBranches.Count }
+        worktreeCounts = [pscustomobject]@{ registered = $worktreeRecords.Count; orphanedTaskWorktrees = $orphanedWorktrees.Count }
+        runCounts = [pscustomobject]@{ tasksWithRuns = @($runSummaries | Where-Object { $_.runCount -gt 0 }).Count; totalKnownRuns = $runCountTotal; staleLatestRuns = $staleRunSummaries.Count; incompleteLatestRuns = $incompleteRunSummaries.Count }
+        orphanedTaskBranches = $metadataOrphanedBranchRecords
+        orphanedTaskWorktrees = $orphanedWorktrees
+        cleanup = [pscustomobject]@{ summary = Get-CleanupCandidateSummary -OrphanedTaskWorktreeCandidates $orphanedWorktreeCleanupCandidates -OrphanedTaskBranchCandidates $orphanedBranchCleanupCandidates; orphanedTaskWorktrees = $orphanedWorktreeCleanupCandidates; orphanedTaskBranches = $orphanedBranchCleanupCandidates }
+        lock = $lockInfo
+        runs = [pscustomobject]@{ staleLatest = $staleRunSummaries; incompleteLatest = $incompleteRunSummaries }
+        warningCount = $warnings.Count
+        errorCount = 0
+        warnings = $warnings
+        suggestedNextActions = $suggestedNextActions
+    }
+}
+
 function Show-DoctorReport {
-    param([bool]$Repair = $false)
+    param(
+        [bool]$Repair = $false,
+        [bool]$Json = $false
+    )
+
+    if ($Json) {
+        $report = Get-DoctorReportData
+        Write-CommandResult -Command "doctor" -Success $true -Severity "info" -Warnings @($report.warnings) -SuggestedNextActions @($report.suggestedNextActions) -Payload $report
+        return
+    }
 
     $repoRoot = Get-RepositoryRoot
     $tasksPath = Join-Path $repoRoot ".brevity\tasks.json"
@@ -7778,16 +7882,35 @@ switch ($Command.ToLowerInvariant()) {
     "doctor" {
         $repair = $false
         $showExecutionPolicy = $false
+        $json = $false
+        $allDoctorArgs = @()
+        if (-not [string]::IsNullOrWhiteSpace($Subcommand)) {
+            $allDoctorArgs += $Subcommand
+        }
+        if ($null -ne $RemainingArgs) {
+            $allDoctorArgs += @($RemainingArgs)
+        }
+        if (@($allDoctorArgs | Where-Object { $_ -eq "--json" }).Count -gt 0) {
+            $json = $true
+        }
         if (-not [string]::IsNullOrWhiteSpace($Subcommand)) {
             if ($Subcommand -eq "--repair") {
                 $repair = $true
+            }
+            elseif ($Subcommand -eq "--json") {
+                $json = $true
             }
             elseif ($Subcommand -eq "execution-policy") {
                 $showExecutionPolicy = $true
             }
             else {
+                if ($json) {
+                    Write-CommandErrorResult -Command "doctor" -Code "unknown-argument" -Message "Unknown brevity doctor argument: $Subcommand" -Details ([pscustomobject]@{ usage = ".\brevity.ps1 doctor [--repair] [--json]" })
+                    exit 1
+                }
                 Write-Host "Unknown brevity doctor argument: $Subcommand" -ForegroundColor Red
                 Write-Host "Usage: .\brevity.ps1 doctor [--repair]"
+                Write-Host "Usage: .\brevity.ps1 doctor [--json]"
                 Write-Host "Usage: .\brevity.ps1 doctor execution-policy"
                 exit 1
             }
@@ -7798,16 +7921,34 @@ switch ($Command.ToLowerInvariant()) {
                 if ($doctorArg -eq "--repair") {
                     $repair = $true
                 }
+                elseif ($doctorArg -eq "--json") {
+                    $json = $true
+                }
                 elseif ($doctorArg -eq "execution-policy") {
                     $showExecutionPolicy = $true
                 }
                 else {
+                    if ($json) {
+                        Write-CommandErrorResult -Command "doctor" -Code "unknown-argument" -Message "Unknown brevity doctor argument: $doctorArg" -Details ([pscustomobject]@{ usage = ".\brevity.ps1 doctor [--repair] [--json]" })
+                        exit 1
+                    }
                     Write-Host "Unknown brevity doctor argument: $doctorArg" -ForegroundColor Red
                     Write-Host "Usage: .\brevity.ps1 doctor [--repair]"
+                    Write-Host "Usage: .\brevity.ps1 doctor [--json]"
                     Write-Host "Usage: .\brevity.ps1 doctor execution-policy"
                     exit 1
                 }
             }
+        }
+
+        if ($json -and $showExecutionPolicy) {
+            Write-CommandErrorResult -Command "doctor" -Code "unsupported-json-mode" -Message "doctor execution-policy does not support --json." -Details ([pscustomobject]@{ usage = ".\brevity.ps1 doctor --json" })
+            exit 1
+        }
+
+        if ($json -and $repair) {
+            Write-CommandErrorResult -Command "doctor" -Code "unsupported-json-mode" -Message "doctor --repair does not support --json yet." -Details ([pscustomobject]@{ usage = ".\brevity.ps1 doctor --json" })
+            exit 1
         }
 
         if ($showExecutionPolicy) {
@@ -7815,7 +7956,17 @@ switch ($Command.ToLowerInvariant()) {
             exit 0
         }
 
-        Show-DoctorReport -Repair $repair
+        try {
+            Show-DoctorReport -Repair $repair -Json $json
+        }
+        catch {
+            if ($json) {
+                Write-CommandErrorResult -Command "doctor" -Code "runtime-read-failed" -Message "Unable to read doctor runtime diagnostics." -Details ([pscustomobject]@{ error = $_.Exception.Message })
+                exit 1
+            }
+
+            throw
+        }
     }
     "memory" {
         if ([string]::IsNullOrWhiteSpace($Subcommand)) {
