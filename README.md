@@ -172,6 +172,7 @@ Brevity v0 supports:
 .\brevity.ps1 task runs <slug> [--json]
 .\brevity.ps1 task runs reconcile --dry-run
 .\brevity.ps1 task runs retention --dry-run
+.\brevity.ps1 task runs compact --dry-run [--json]
 .\brevity.ps1 task run <slug> [--execute] [--profile <name>] [--smoke] [--force-provider]
 .\brevity.ps1 task context refresh <slug>
 .\brevity.ps1 task context status <slug>
@@ -248,6 +249,13 @@ The default retention policy for future run-index compaction is conservative:
 For now, `.\brevity.ps1 task runs retention --dry-run` is report-only. Any
 future compaction must be explicit, dry-run-first, and guarded by locking before
 it mutates `.brevity\runs.jsonl`.
+
+`.\brevity.ps1 task runs compact --dry-run` prints a read-only compaction plan
+for `.brevity\runs.jsonl`. The plan preserves at least the latest 20 indexed
+runs per task, stale or incomplete records, and failed records; older successful
+completed runs are reported as archive/summary candidates. It never rewrites,
+truncates, archives, or deletes run-index records or worker logs. Use `--json`
+for the `brevity.command-result.v1` contract with compact candidate summaries.
 
 The init command prepares the current Git repository for Brevity. It creates
 repo-local Brevity state when missing:

@@ -120,6 +120,13 @@ oldest and newest timestamps, top tasks by record count, and stale/incomplete
 record counts. It refuses without `--dry-run` and does not mutate
 `.brevity\runs.jsonl`. Use `--json` for structured output.
 
+`Brevity task runs compact --dry-run` reports a read-only compaction plan for
+`.brevity\runs.jsonl`. It applies the retention policy conceptually, preserves
+the latest 20 indexed runs per task, preserves stale or incomplete records,
+preserves failed records, and reports older successful completed runs as
+archive/summary candidates. It refuses without `--dry-run`, never mutates the
+run index, and never touches worker logs. Use `--json` for structured output.
+
 ### Run Index Retention
 
 `.brevity\runs.jsonl` remains an append-only worker run index for now. It is the
@@ -137,8 +144,9 @@ The default retention policy for future run-index compaction is:
 - Treat retention warnings in a future TUI as advisory until an operator chooses
   an explicit action.
 
-No compaction command exists yet. Future compaction must be explicit,
-dry-run-first, and protected by locking before it mutates `.brevity\runs.jsonl`.
+Only dry-run compaction planning exists. Future mutating compaction must be
+explicit, dry-run-first, and protected by locking before it mutates
+`.brevity\runs.jsonl`.
 
 ### Runtime State JSON
 
