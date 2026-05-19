@@ -7,16 +7,31 @@ import (
 )
 
 type fakeRuntimeClient struct {
-	output []byte
-	err    error
+	output        []byte
+	err           error
+	providerSet   []byte
+	providerReset []byte
+	actionErr     error
+	calls         []string
 }
 
-func (client fakeRuntimeClient) RuntimeStateJSON() ([]byte, error) {
+func (client *fakeRuntimeClient) RuntimeStateJSON() ([]byte, error) {
+	client.calls = append(client.calls, "runtime-state")
 	return client.output, client.err
 }
 
+func (client *fakeRuntimeClient) ProviderSetJSON(provider string, status string) ([]byte, error) {
+	client.calls = append(client.calls, "provider-set:"+provider+":"+status)
+	return client.providerSet, client.actionErr
+}
+
+func (client *fakeRuntimeClient) ProviderResetJSON(provider string) ([]byte, error) {
+	client.calls = append(client.calls, "provider-reset:"+provider)
+	return client.providerReset, client.actionErr
+}
+
 func TestRunWithClientRendersRuntimeState(t *testing.T) {
-	client := fakeRuntimeClient{
+	client := &fakeRuntimeClient{
 		output: []byte(`{"schema":"brevity.runtime-state.v1","repoRoot":"C:\\dev\\repos\\active\\brevity","taskCounts":{"tracked":7}}`),
 	}
 
@@ -40,8 +55,8 @@ func TestParseOptionsDefaultsToPowerShellSource(t *testing.T) {
 		t.Fatalf("parseOptions returned error: %v", err)
 	}
 
-	if options.jsonSource != "powershell" {
-		t.Fatalf("jsonSource = %q, want powershell", options.jsonSource)
+	if options.kind != commandDashboard {
+		t.Fatalf("kind = %q, want dashboard", options.kind)
 	}
 	if options.once {
 		t.Fatal("once = true, want false")
@@ -59,14 +74,34 @@ func TestParseOptionsAcceptsOnce(t *testing.T) {
 	}
 }
 
-func TestParseOptionsAcceptsPowerShellSource(t *testing.T) {
-	options, err := parseOptions([]string{"--json-source", "powershell"})
+func TestParseOptionsAcceptsProviderSet(t *testing.T) {
+	options, err := parseOptions([]string{"provider", "set", "gemini", "capacity-degraded"})
 	if err != nil {
 		t.Fatalf("parseOptions returned error: %v", err)
 	}
 
-	if options.jsonSource != "powershell" {
-		t.Fatalf("jsonSource = %q, want powershell", options.jsonSource)
+	if options.kind != commandProviderSet {
+		t.Fatalf("kind = %q, want provider-set", options.kind)
+	}
+	if options.provider != "gemini" {
+		t.Fatalf("provider = %q, want gemini", options.provider)
+	}
+	if options.status != "capacity-degraded" {
+		t.Fatalf("status = %q, want capacity-degraded", options.status)
+	}
+}
+
+func TestParseOptionsAcceptsProviderReset(t *testing.T) {
+	options, err := parseOptions([]string{"provider", "reset", "gemini"})
+	if err != nil {
+		t.Fatalf("parseOptions returned error: %v", err)
+	}
+
+	if options.kind != commandProviderReset {
+		t.Fatalf("kind = %q, want provider-reset", options.kind)
+	}
+	if options.provider != "gemini" {
+		t.Fatalf("provider = %q, want gemini", options.provider)
 	}
 }
 
@@ -92,11 +127,10 @@ func TestRunWritesHelp(t *testing.T) {
 
 	output := stdout.String()
 	for _, want := range []string{
-		"read-only dashboard spike",
-		`.\brevity.ps1 runtime state --json`,
-		"PowerShell remains the",
+		"dashboard remains read-only",
+		`.\brevity.ps1 provider ... --json`,
 		"--once",
-		"--json-source powershell",
+		"provider set <provider> <status>",
 	} {
 		if !strings.Contains(output, want) {
 			t.Fatalf("help output missing %q:\n%s", want, output)
@@ -114,12 +148,60 @@ func TestParseOptionsRejectsUnknownFlag(t *testing.T) {
 	}
 }
 
-func TestParseOptionsRejectsInvalidJSONSource(t *testing.T) {
-	_, err := parseOptions([]string{"--json-source", "native"})
+func TestParseOptionsRejectsUnsupportedProviderCommand(t *testing.T) {
+	_, err := parseOptions([]string{"provider", "status"})
 	if err == nil {
 		t.Fatal("parseOptions returned nil error")
 	}
-	if !strings.Contains(err.Error(), `unsupported --json-source "native"`) {
+	if !strings.Contains(err.Error(), `unsupported provider command "status"`) {
 		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestRunProviderSetUsesClientAndRendersResult(t *testing.T) {
+	client := &fakeRuntimeClient{
+		providerSet: []byte(`{"schema":"brevity.command-result.v1","command":"provider set","success":true,"severity":"info","suggestedNextActions":["refresh-runtime-state"],"payload":{"provider":"gemini","previousStatus":"unknown","newStatus":"capacity-degraded","note":"busy"}}`),
+	}
+
+	var stdout bytes.Buffer
+	err := runWithOptions(&stdout, client, cliOptions{kind: commandProviderSet, provider: "gemini", status: "capacity-degraded"})
+	if err != nil {
+		t.Fatalf("runWithOptions returned error: %v", err)
+	}
+
+	if len(client.calls) != 1 || client.calls[0] != "provider-set:gemini:capacity-degraded" {
+		t.Fatalf("calls = %#v, want provider set only", client.calls)
+	}
+
+	output := stdout.String()
+	for _, want := range []string{
+		"Provider action: success",
+		"provider: gemini",
+		"previousStatus: unknown",
+		"newStatus: capacity-degraded",
+		"note: busy",
+		"- refresh-runtime-state",
+	} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("output missing %q:\n%s", want, output)
+		}
+	}
+}
+
+func TestRunProviderResetReturnsErrorWhenResultFails(t *testing.T) {
+	client := &fakeRuntimeClient{
+		providerReset: []byte(`{"schema":"brevity.command-result.v1","command":"provider reset","success":false,"severity":"error","errors":[{"code":"invalid-provider","message":"Invalid provider: nope"}],"payload":{"provider":"nope","previousStatus":"unknown","newStatus":"unknown"}}`),
+	}
+
+	var stdout bytes.Buffer
+	err := runWithOptions(&stdout, client, cliOptions{kind: commandProviderReset, provider: "nope"})
+	if err == nil {
+		t.Fatal("runWithOptions returned nil error")
+	}
+	if !strings.Contains(err.Error(), "provider reset reported success=false") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(stdout.String(), "error: invalid-provider: Invalid provider: nope") {
+		t.Fatalf("output missing structured error:\n%s", stdout.String())
 	}
 }

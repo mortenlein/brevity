@@ -10,6 +10,8 @@ import (
 
 type Client interface {
 	RuntimeStateJSON() ([]byte, error)
+	ProviderSetJSON(provider string, status string) ([]byte, error)
+	ProviderResetJSON(provider string) ([]byte, error)
 }
 
 type PowerShellClient struct {
@@ -21,22 +23,33 @@ func NewPowerShellClient() PowerShellClient {
 }
 
 func (client PowerShellClient) RuntimeStateJSON() ([]byte, error) {
+	return client.runJSON("runtime state --json", "runtime", "state", "--json")
+}
+
+func (client PowerShellClient) ProviderSetJSON(provider string, status string) ([]byte, error) {
+	return client.runJSON("provider set "+provider+" "+status+" --json", "provider", "set", provider, status, "--json")
+}
+
+func (client PowerShellClient) ProviderResetJSON(provider string) ([]byte, error) {
+	return client.runJSON("provider reset "+provider+" --json", "provider", "reset", provider, "--json")
+}
+
+func (client PowerShellClient) runJSON(description string, args ...string) ([]byte, error) {
 	scriptPath := client.ScriptPath
 	if scriptPath == "" {
 		scriptPath = `.\\brevity.ps1`
 	}
 
-	cmd := exec.Command(
-		"powershell.exe",
+	commandArgs := []string{
 		"-NoProfile",
 		"-ExecutionPolicy",
 		"Bypass",
 		"-File",
 		scriptPath,
-		"runtime",
-		"state",
-		"--json",
-	)
+	}
+	commandArgs = append(commandArgs, args...)
+
+	cmd := exec.Command("powershell.exe", commandArgs...)
 
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
@@ -51,11 +64,14 @@ func (client PowerShellClient) RuntimeStateJSON() ([]byte, error) {
 		if message == "" {
 			message = err.Error()
 		}
-		return nil, fmt.Errorf("brevity.ps1 runtime state --json failed: %s", message)
+		if len(bytes.TrimSpace(output)) > 0 {
+			return output, fmt.Errorf("brevity.ps1 %s failed: %s", description, message)
+		}
+		return nil, fmt.Errorf("brevity.ps1 %s failed: %s", description, message)
 	}
 
 	if len(bytes.TrimSpace(output)) == 0 {
-		return nil, errors.New("PowerShell runtime state command returned empty output")
+		return nil, fmt.Errorf("PowerShell %s command returned empty output", description)
 	}
 
 	return output, nil
