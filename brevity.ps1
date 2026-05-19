@@ -4024,10 +4024,17 @@ function Show-TaskRuntimeInfoCommand {
 function Get-RequiredTaskForContextCommand {
     param(
         [string]$Slug,
-        [string]$Usage
+        [string]$Usage,
+        [string]$CommandName = "task context",
+        [bool]$Json = $false
     )
 
     if ([string]::IsNullOrWhiteSpace($Slug)) {
+        if ($Json) {
+            Write-CommandErrorResult -Command $CommandName -Code "missing-slug" -Message "Missing task slug."
+            exit 1
+        }
+
         Write-Host "Missing task slug." -ForegroundColor Red
         Write-Host $Usage
         exit 1
@@ -4035,6 +4042,11 @@ function Get-RequiredTaskForContextCommand {
 
     $task = Find-BrevityTaskBySlug -Slug $Slug
     if ($null -eq $task) {
+        if ($Json) {
+            Write-CommandErrorResult -Command $CommandName -Code "task-not-found" -Message "Task not found." -Details ([pscustomobject]@{ slug = $Slug })
+            exit 1
+        }
+
         Write-Host "Task not found: $Slug" -ForegroundColor Red
         Write-Host "Use .\brevity.ps1 task status to list known tasks."
         exit 1
@@ -4042,11 +4054,21 @@ function Get-RequiredTaskForContextCommand {
 
     $worktreePath = Get-TaskField -Task $task -Name "worktreePath"
     if ([string]::IsNullOrWhiteSpace($worktreePath)) {
+        if ($Json) {
+            Write-CommandErrorResult -Command $CommandName -Code "missing-worktree-path" -Message "Task metadata is missing worktreePath." -Details ([pscustomobject]@{ slug = $Slug })
+            exit 1
+        }
+
         Write-Host "Task metadata is missing worktreePath for: $Slug" -ForegroundColor Red
         exit 1
     }
 
     if (-not (Test-Path -LiteralPath $worktreePath -PathType Container)) {
+        if ($Json) {
+            Write-CommandErrorResult -Command $CommandName -Code "worktree-missing" -Message "Task worktree path does not exist." -Details ([pscustomobject]@{ slug = $Slug; worktreePath = $worktreePath })
+            exit 1
+        }
+
         Write-Host "Task worktree path does not exist for: $Slug" -ForegroundColor Red
         Write-Host "Expected path: $worktreePath"
         exit 1
@@ -4055,11 +4077,53 @@ function Get-RequiredTaskForContextCommand {
     return $task
 }
 
-function Show-TaskContextStatus {
-    param([string]$Slug)
+function New-TaskContextStatusPayload {
+    param(
+        [string]$Slug,
+        [object]$Task,
+        [object]$Context
+    )
 
-    $task = Get-RequiredTaskForContextCommand -Slug $Slug -Usage "Usage: .\brevity.ps1 task context status <slug>"
+    $runtimeInfo = Get-TaskRuntimeInfo -Task $Task
+    $runHistory = Get-TaskWorkerRunHistorySummary -Slug $Slug
+    $contextAgeMinutes = $null
+    if ($null -ne $Context.newestMaterializedFileWriteTimeUtc) {
+        try {
+            $contextWriteTime = [datetime]::Parse($Context.newestMaterializedFileWriteTimeUtc).ToUniversalTime()
+            $contextAgeMinutes = [math]::Round(((Get-Date).ToUniversalTime() - $contextWriteTime).TotalMinutes, 2)
+        }
+        catch {
+            $contextAgeMinutes = $null
+        }
+    }
+
+    return [pscustomobject]([ordered]@{
+        slug = $Slug
+        contextExists = [bool]$Context.exists
+        contextPath = $Context.path
+        contextAgeMinutes = $contextAgeMinutes
+        normalizedState = $runtimeInfo.normalizedState
+        worktreePath = $runtimeInfo.worktree.path
+        latestRunId = $runHistory.latestRunId
+        materializedFileCount = $Context.materializedFileCount
+        missingManagedFileCount = @($Context.missingFiles).Count
+    })
+}
+
+function Show-TaskContextStatus {
+    param(
+        [string]$Slug,
+        [bool]$Json = $false
+    )
+
+    $task = Get-RequiredTaskForContextCommand -Slug $Slug -Usage "Usage: .\brevity.ps1 task context status <slug> [--json]" -CommandName "task context status" -Json $Json
     $context = Get-TaskRuntimeContextInfo -Task $task
+
+    if ($Json) {
+        $payload = New-TaskContextStatusPayload -Slug $Slug -Task $task -Context $context
+        Write-CommandResult -Command "task context status" -Success $true -Severity "info" -Payload $payload
+        return
+    }
 
     Write-Host "Task: $Slug"
     Write-Host "Context: $($context.path)"
@@ -4069,11 +4133,28 @@ function Show-TaskContextStatus {
 }
 
 function Refresh-TaskContext {
-    param([string]$Slug)
+    param(
+        [string]$Slug,
+        [bool]$Json = $false
+    )
 
-    $task = Get-RequiredTaskForContextCommand -Slug $Slug -Usage "Usage: .\brevity.ps1 task context refresh <slug>"
+    $task = Get-RequiredTaskForContextCommand -Slug $Slug -Usage "Usage: .\brevity.ps1 task context refresh <slug> [--json]" -CommandName "task context refresh" -Json $Json
     Copy-TaskWorkspaceContext -WorktreePath (Get-TaskField -Task $task -Name "worktreePath") | Out-Null
     $context = Get-TaskRuntimeContextInfo -Task $task
+
+    if ($Json) {
+        $statusPayload = New-TaskContextStatusPayload -Slug $Slug -Task $task -Context $context
+        $payload = [pscustomobject]([ordered]@{
+            slug = $Slug
+            refreshed = $true
+            contextPath = $context.path
+            generatedAt = (Get-Date).ToUniversalTime().ToString("o")
+            latestRunId = $statusPayload.latestRunId
+            normalizedState = $statusPayload.normalizedState
+        })
+        Write-CommandResult -Command "task context refresh" -Success $true -Severity "info" -Payload $payload
+        return
+    }
 
     Write-Host "Refreshed task context"
     Write-Host "Task: $Slug"
@@ -8227,35 +8308,65 @@ switch ($Command.ToLowerInvariant()) {
             "context" {
                 $contextCommand = $null
                 $taskSlug = $null
+                $jsonOutput = $false
                 if ($null -ne $RemainingArgs) {
-                    if ($RemainingArgs.Length -ge 1) {
-                        $contextCommand = [string]$RemainingArgs[0]
+                    foreach ($arg in $RemainingArgs) {
+                        if ($arg -eq "--json") {
+                            $jsonOutput = $true
+                        }
                     }
-                    if ($RemainingArgs.Length -ge 2) {
-                        $taskSlug = [string]$RemainingArgs[1]
-                    }
-                    if ($RemainingArgs.Length -gt 2) {
-                        Write-Host "Unknown argument for brevity task context: $($RemainingArgs[2])" -ForegroundColor Red
-                        Write-Host "Usage: .\brevity.ps1 task context refresh <slug>"
-                        Write-Host "Usage: .\brevity.ps1 task context status <slug>"
+
+                    foreach ($arg in $RemainingArgs) {
+                        if ($arg -eq "--json") {
+                            continue
+                        }
+
+                        if ([string]::IsNullOrWhiteSpace($contextCommand)) {
+                            $contextCommand = [string]$arg
+                            continue
+                        }
+
+                        if ([string]::IsNullOrWhiteSpace($taskSlug)) {
+                            $taskSlug = [string]$arg
+                            continue
+                        }
+
+                        if ($jsonOutput) {
+                            Write-CommandErrorResult -Command "task context" -Code "unknown-argument" -Message "Unknown argument for brevity task context: $arg"
+                        }
+                        else {
+                            Write-Host "Unknown argument for brevity task context: $arg" -ForegroundColor Red
+                            Write-Host "Usage: .\brevity.ps1 task context refresh <slug> [--json]"
+                            Write-Host "Usage: .\brevity.ps1 task context status <slug> [--json]"
+                        }
                         exit 1
                     }
                 }
 
                 if ([string]::IsNullOrWhiteSpace($contextCommand)) {
+                    if ($jsonOutput) {
+                        Write-CommandErrorResult -Command "task context" -Code "missing-command" -Message "Missing task context command."
+                        exit 1
+                    }
+
                     Write-Host "Missing task context command." -ForegroundColor Red
-                    Write-Host "Usage: .\brevity.ps1 task context refresh <slug>"
-                    Write-Host "Usage: .\brevity.ps1 task context status <slug>"
+                    Write-Host "Usage: .\brevity.ps1 task context refresh <slug> [--json]"
+                    Write-Host "Usage: .\brevity.ps1 task context status <slug> [--json]"
                     exit 1
                 }
 
                 switch ($contextCommand.ToLowerInvariant()) {
-                    "refresh" { Refresh-TaskContext -Slug $taskSlug }
-                    "status" { Show-TaskContextStatus -Slug $taskSlug }
+                    "refresh" { Refresh-TaskContext -Slug $taskSlug -Json $jsonOutput }
+                    "status" { Show-TaskContextStatus -Slug $taskSlug -Json $jsonOutput }
                     default {
+                        if ($jsonOutput) {
+                            Write-CommandErrorResult -Command "task context" -Code "unknown-command" -Message "Unknown brevity task context command: $contextCommand"
+                            exit 1
+                        }
+
                         Write-Host "Unknown brevity task context command: $contextCommand" -ForegroundColor Red
-                        Write-Host "Usage: .\brevity.ps1 task context refresh <slug>"
-                        Write-Host "Usage: .\brevity.ps1 task context status <slug>"
+                        Write-Host "Usage: .\brevity.ps1 task context refresh <slug> [--json]"
+                        Write-Host "Usage: .\brevity.ps1 task context status <slug> [--json]"
                         exit 1
                     }
                 }
