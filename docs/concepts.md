@@ -114,6 +114,12 @@ does not mutate the run index. Without `--dry-run`, the command refuses safely.
 Future reconciliation may mark stale/incomplete runs after operator review, but
 v1 is report-only.
 
+`Brevity task runs retention --dry-run` reports read-only run index retention
+signals before any compaction exists: path, size, record counts, parse failures,
+oldest and newest timestamps, top tasks by record count, and stale/incomplete
+record counts. It refuses without `--dry-run` and does not mutate
+`.brevity\runs.jsonl`. Use `--json` for structured output.
+
 ### Runtime State JSON
 
 `Brevity runtime state --json` emits the read-only runtime inspection contract

@@ -1226,6 +1226,30 @@ function Get-WorkerRunRecordProperty {
     return $property.Value
 }
 
+function Convert-WorkerRunTimestampToUtc {
+    param([AllowNull()][object]$Timestamp)
+
+    if ($null -eq $Timestamp -or [string]::IsNullOrWhiteSpace([string]$Timestamp)) {
+        return $null
+    }
+
+    try {
+        if ($Timestamp -is [datetime]) {
+            $timestampDate = [datetime]$Timestamp
+            if ($timestampDate.Kind -eq [System.DateTimeKind]::Unspecified) {
+                return ([datetime]::SpecifyKind($timestampDate, [System.DateTimeKind]::Utc))
+            }
+
+            return $timestampDate.ToUniversalTime()
+        }
+
+        return ([System.DateTimeOffset]::Parse([string]$Timestamp, [System.Globalization.CultureInfo]::InvariantCulture)).UtcDateTime
+    }
+    catch {
+        return $null
+    }
+}
+
 function Resolve-WorkerRunIndexStatus {
     param(
         [object]$Record,
@@ -1733,6 +1757,204 @@ function Get-WorkerRunReconciliationCandidates {
     }
 
     return @($candidates | Sort-Object @{ Expression = { [string]$_.startedAt }; Descending = $true })
+}
+
+function Get-WorkerRunIndexRetentionReport {
+    param(
+        [string]$RunsPath = "",
+        [int]$TopTaskCount = 8
+    )
+
+    $runsPath = $RunsPath
+    if ([string]::IsNullOrWhiteSpace($runsPath)) {
+        $runsPath = Get-BrevityRunsIndexPath
+    }
+
+    $exists = Test-Path -LiteralPath $runsPath
+    $sizeBytes = 0
+    if ($exists) {
+        $runIndexFile = Get-Item -LiteralPath $runsPath -ErrorAction SilentlyContinue
+        if ($null -ne $runIndexFile) {
+            $sizeBytes = [int64]$runIndexFile.Length
+        }
+    }
+
+    $totalRecords = 0
+    $validRecords = 0
+    $invalidRecords = 0
+    $incompleteRecords = 0
+    $staleRecords = 0
+    $timestamps = @()
+    $recordsByTask = @{}
+
+    if ($exists) {
+        $lines = @(Get-Content -LiteralPath $runsPath -ErrorAction SilentlyContinue)
+        foreach ($line in $lines) {
+            if ([string]::IsNullOrWhiteSpace($line)) {
+                continue
+            }
+
+            $totalRecords++
+            try {
+                $record = $line | ConvertFrom-Json
+            }
+            catch {
+                $invalidRecords++
+                continue
+            }
+
+            if ($null -eq $record) {
+                $invalidRecords++
+                continue
+            }
+
+            $validRecords++
+            $slug = [string](Get-WorkerRunRecordProperty -Record $record -Name "slug")
+            if ([string]::IsNullOrWhiteSpace($slug)) {
+                $slug = "(missing slug)"
+            }
+
+            if ($recordsByTask.ContainsKey($slug)) {
+                $recordsByTask[$slug] = [int]$recordsByTask[$slug] + 1
+            }
+            else {
+                $recordsByTask[$slug] = 1
+            }
+
+            $runState = Resolve-WorkerRunIndexStatus -Record $record
+            if ($runState.incomplete) {
+                $incompleteRecords++
+            }
+            if ($runState.stale) {
+                $staleRecords++
+            }
+
+            foreach ($timestampProperty in @("startedAt", "finishedAt")) {
+                $timestampValue = Get-WorkerRunRecordProperty -Record $record -Name $timestampProperty
+                if ([string]::IsNullOrWhiteSpace([string]$timestampValue)) {
+                    continue
+                }
+
+                $timestampUtc = Convert-WorkerRunTimestampToUtc -Timestamp $timestampValue
+                if ($null -ne $timestampUtc) {
+                    $timestamps += $timestampUtc
+                }
+            }
+        }
+    }
+
+    $oldestRunTimestamp = $null
+    $newestRunTimestamp = $null
+    if ($timestamps.Count -gt 0) {
+        $sortedTimestamps = @($timestamps | Sort-Object)
+        $oldestRunTimestamp = $sortedTimestamps[0].ToString("o")
+        $newestRunTimestamp = $sortedTimestamps[$sortedTimestamps.Count - 1].ToString("o")
+    }
+
+    $taskDistribution = @($recordsByTask.GetEnumerator() |
+        Sort-Object @{ Expression = { [int]$_.Value }; Descending = $true }, @{ Expression = { [string]$_.Key }; Ascending = $true } |
+        Select-Object -First $TopTaskCount |
+        ForEach-Object {
+            [pscustomobject]([ordered]@{
+                slug = [string]$_.Key
+                records = [int]$_.Value
+            })
+        })
+
+    $compactionGuidance = "No compaction action suggested yet; keep observing run index growth."
+    if ($totalRecords -ge 10000) {
+        $compactionGuidance = "Future compaction should preserve recent records, keep latest records per task, and archive or summarize older completed runs after operator review."
+    }
+    elseif ($totalRecords -ge 1000) {
+        $compactionGuidance = "Run index is growing; future compaction may keep recent history plus per-task latest summaries, but this command is report-only."
+    }
+
+    return [pscustomobject]([ordered]@{
+        runsPath = $runsPath
+        exists = $exists
+        sizeBytes = $sizeBytes
+        totalRecords = $totalRecords
+        validRecords = $validRecords
+        invalidRecords = $invalidRecords
+        oldestRunTimestamp = $oldestRunTimestamp
+        newestRunTimestamp = $newestRunTimestamp
+        incompleteRecords = $incompleteRecords
+        staleRecords = $staleRecords
+        staleThresholdMinutes = $script:BrevityWorkerRunStaleThresholdMinutes
+        topTasks = $taskDistribution
+        compactionGuidance = $compactionGuidance
+    })
+}
+
+function Show-TaskRunsRetention {
+    param(
+        [bool]$DryRun = $false,
+        [bool]$Json = $false
+    )
+
+    if (-not $DryRun) {
+        if ($Json) {
+            Write-CommandErrorResult `
+                -Command "task runs retention" `
+                -Code "dry-run-required" `
+                -Message "Refusing to inspect worker run retention without --dry-run." `
+                -Details ([pscustomobject]([ordered]@{
+                    usage = ".\brevity.ps1 task runs retention --dry-run --json"
+                    mutatesRunsIndex = $false
+                }))
+            exit 1
+        }
+
+        Write-Host "Refusing to inspect worker run retention without --dry-run." -ForegroundColor Red
+        Write-Host "Usage: .\brevity.ps1 task runs retention --dry-run"
+        Write-Host "This command is report-only and does not mutate .brevity\runs.jsonl."
+        exit 1
+    }
+
+    $report = Get-WorkerRunIndexRetentionReport
+
+    if ($Json) {
+        Write-CommandResult `
+            -Command "task runs retention" `
+            -Success $true `
+            -Severity "info" `
+            -SuggestedNextActions @("Review run index growth before implementing compaction.", "Do not edit .brevity\runs.jsonl manually.") `
+            -Payload $report
+        return
+    }
+
+    Write-Host "Worker run retention report"
+    Write-Host "Mode: dry-run"
+    Write-Host "Run index: $($report.runsPath)"
+    Write-Host "Exists: $($report.exists)"
+    Write-Host "Size: $($report.sizeBytes) byte(s)"
+
+    if (-not $report.exists) {
+        Write-Host "Run index does not exist yet."
+        Write-Host "Suggested future compaction: $($report.compactionGuidance)"
+        return
+    }
+
+    Write-Host "Total records: $($report.totalRecords)"
+    Write-Host "Valid records: $($report.validRecords)"
+    Write-Host "Invalid/unparseable lines: $($report.invalidRecords)"
+    Write-Host "Oldest run timestamp: $(if ($null -eq $report.oldestRunTimestamp) { "(unknown)" } else { $report.oldestRunTimestamp })"
+    Write-Host "Newest run timestamp: $(if ($null -eq $report.newestRunTimestamp) { "(unknown)" } else { $report.newestRunTimestamp })"
+    Write-Host "Incomplete records: $($report.incompleteRecords)"
+    Write-Host "Stale records: $($report.staleRecords)"
+    Write-Host "Stale threshold: $($report.staleThresholdMinutes) minute(s)"
+
+    if ($report.topTasks.Count -eq 0) {
+        Write-Host "Records by task: none"
+    }
+    else {
+        Write-Host "Top tasks by run records:"
+        foreach ($taskRecord in $report.topTasks) {
+            Write-Host "  $($taskRecord.slug): $($taskRecord.records)"
+        }
+    }
+
+    Write-Host "Suggested future compaction: $($report.compactionGuidance)"
 }
 
 function Show-TaskRunsReconcile {
@@ -7357,19 +7579,23 @@ switch ($Command.ToLowerInvariant()) {
                 $taskSlug = $null
                 $jsonOutput = $false
                 $reconcile = $false
+                $retention = $false
                 $dryRun = $false
                 if ($null -ne $RemainingArgs) {
                     foreach ($taskArg in $RemainingArgs) {
                         if ($taskArg -eq "reconcile" -and [string]::IsNullOrWhiteSpace($taskSlug) -and -not $reconcile) {
                             $reconcile = $true
                         }
-                        elseif ($taskArg -eq "--dry-run" -and $reconcile) {
+                        elseif ($taskArg -eq "retention" -and [string]::IsNullOrWhiteSpace($taskSlug) -and -not $retention) {
+                            $retention = $true
+                        }
+                        elseif ($taskArg -eq "--dry-run" -and ($reconcile -or $retention)) {
                             $dryRun = $true
                         }
                         elseif ($taskArg -eq "--json") {
                             $jsonOutput = $true
                         }
-                        elseif ([string]::IsNullOrWhiteSpace($taskSlug) -and -not $reconcile) {
+                        elseif ([string]::IsNullOrWhiteSpace($taskSlug) -and -not $reconcile -and -not $retention) {
                             $taskSlug = [string]$taskArg
                         }
                         else {
@@ -7380,6 +7606,7 @@ switch ($Command.ToLowerInvariant()) {
                                 Write-Host "Unknown argument for brevity task runs: $taskArg" -ForegroundColor Red
                                 Write-Host "Usage: .\brevity.ps1 task runs <slug> [--json]"
                                 Write-Host "Usage: .\brevity.ps1 task runs reconcile --dry-run [--json]"
+                                Write-Host "Usage: .\brevity.ps1 task runs retention --dry-run [--json]"
                             }
                             exit 1
                         }
@@ -7388,6 +7615,9 @@ switch ($Command.ToLowerInvariant()) {
 
                 if ($reconcile) {
                     Show-TaskRunsReconcile -DryRun $dryRun -Json $jsonOutput
+                }
+                elseif ($retention) {
+                    Show-TaskRunsRetention -DryRun $dryRun -Json $jsonOutput
                 }
                 else {
                     Show-TaskRuns -Slug $taskSlug -Json $jsonOutput
