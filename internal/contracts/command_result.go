@@ -88,6 +88,14 @@ type TaskCleanupPayload struct {
 	CleanupWarnings []string `json:"cleanupWarnings"`
 }
 
+type TaskNewPayload struct {
+	Slug         string `json:"slug"`
+	Branch       string `json:"branch"`
+	WorktreePath string `json:"worktreePath"`
+	PromptPath   string `json:"promptPath"`
+	MetadataPath string `json:"metadataPath"`
+}
+
 func ParseCommandResult(input []byte) (CommandResult, error) {
 	var result CommandResult
 	if err := json.Unmarshal(input, &result); err != nil {
@@ -138,6 +146,19 @@ func ParseTaskCleanupPayload(result CommandResult) (TaskCleanupPayload, error) {
 	var payload TaskCleanupPayload
 	if err := json.Unmarshal(result.Payload, &payload); err != nil {
 		return TaskCleanupPayload{}, fmt.Errorf("invalid task cleanup payload: %w", err)
+	}
+
+	return payload, nil
+}
+
+func ParseTaskNewPayload(result CommandResult) (TaskNewPayload, error) {
+	if len(result.Payload) == 0 {
+		return TaskNewPayload{}, errors.New("task new result missing payload")
+	}
+
+	var payload TaskNewPayload
+	if err := json.Unmarshal(result.Payload, &payload); err != nil {
+		return TaskNewPayload{}, fmt.Errorf("invalid task new payload: %w", err)
 	}
 
 	return payload, nil

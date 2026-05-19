@@ -8353,7 +8353,14 @@ function New-TaskWorktree {
     }
 
     if ($Json) {
-        $gitOutput = @(git worktree add $targetPath -b $branchName 2>&1)
+        $previousErrorActionPreference = $ErrorActionPreference
+        $ErrorActionPreference = "Continue"
+        try {
+            $gitOutput = @(git worktree add $targetPath -b $branchName 2>&1)
+        }
+        finally {
+            $ErrorActionPreference = $previousErrorActionPreference
+        }
     }
     else {
         git worktree add $targetPath -b $branchName

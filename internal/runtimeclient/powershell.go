@@ -14,6 +14,7 @@ type Client interface {
 	ProviderResetJSON(provider string) ([]byte, error)
 	TaskContextRefreshJSON(slug string) ([]byte, error)
 	TaskCleanupJSON(slug string) ([]byte, error)
+	TaskNewJSON(slug string) ([]byte, error)
 }
 
 type PowerShellClient struct {
@@ -42,6 +43,10 @@ func (client PowerShellClient) TaskContextRefreshJSON(slug string) ([]byte, erro
 
 func (client PowerShellClient) TaskCleanupJSON(slug string) ([]byte, error) {
 	return client.runJSON("task cleanup "+slug+" --force --json", "task", "cleanup", slug, "--force", "--json")
+}
+
+func (client PowerShellClient) TaskNewJSON(slug string) ([]byte, error) {
+	return client.runJSON("task new "+slug+" --json", "task", "new", slug, "--json")
 }
 
 func (client PowerShellClient) runJSON(description string, args ...string) ([]byte, error) {

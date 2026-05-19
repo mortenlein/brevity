@@ -13,6 +13,7 @@ type fakeRuntimeClient struct {
 	providerReset  []byte
 	contextRefresh []byte
 	taskCleanup    []byte
+	taskNew        []byte
 	actionErr      error
 	calls          []string
 }
@@ -40,6 +41,11 @@ func (client *fakeRuntimeClient) TaskContextRefreshJSON(slug string) ([]byte, er
 func (client *fakeRuntimeClient) TaskCleanupJSON(slug string) ([]byte, error) {
 	client.calls = append(client.calls, "task-cleanup:"+slug)
 	return client.taskCleanup, client.actionErr
+}
+
+func (client *fakeRuntimeClient) TaskNewJSON(slug string) ([]byte, error) {
+	client.calls = append(client.calls, "task-new:"+slug)
+	return client.taskNew, client.actionErr
 }
 
 func TestRunWithClientRendersRuntimeState(t *testing.T) {
@@ -148,6 +154,20 @@ func TestParseOptionsAcceptsTaskCleanupWithForce(t *testing.T) {
 	}
 }
 
+func TestParseOptionsAcceptsTaskNew(t *testing.T) {
+	options, err := parseOptions([]string{"task", "new", "my-task"})
+	if err != nil {
+		t.Fatalf("parseOptions returned error: %v", err)
+	}
+
+	if options.kind != commandTaskNew {
+		t.Fatalf("kind = %q, want task-new", options.kind)
+	}
+	if options.slug != "my-task" {
+		t.Fatalf("slug = %q, want my-task", options.slug)
+	}
+}
+
 func TestParseOptionsAcceptsHelp(t *testing.T) {
 	for _, arg := range []string{"--help", "-h"} {
 		t.Run(arg, func(t *testing.T) {
@@ -175,6 +195,7 @@ func TestRunWritesHelp(t *testing.T) {
 		"--once",
 		"provider set <provider> <status>",
 		"task context refresh <slug>",
+		"task new <slug>",
 		"task cleanup <slug> --force",
 	} {
 		if !strings.Contains(output, want) {
@@ -218,6 +239,16 @@ func TestParseOptionsRejectsTaskCleanupWithoutForce(t *testing.T) {
 		t.Fatal("parseOptions returned nil error")
 	}
 	if !strings.Contains(err.Error(), "requires --force") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestParseOptionsRejectsTaskNewMissingSlug(t *testing.T) {
+	_, err := parseOptions([]string{"task", "new"})
+	if err == nil {
+		t.Fatal("parseOptions returned nil error")
+	}
+	if !strings.Contains(err.Error(), "usage: brevity task new <slug>") {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
@@ -343,6 +374,58 @@ func TestRunTaskCleanupReturnsErrorWhenResultFails(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if !strings.Contains(stdout.String(), "error: task-not-found: Task not found: nope") {
+		t.Fatalf("output missing structured error:\n%s", stdout.String())
+	}
+}
+
+func TestRunTaskNewUsesClientAndRendersResult(t *testing.T) {
+	client := &fakeRuntimeClient{
+		taskNew: []byte(`{"schema":"brevity.command-result.v1","command":"task new","success":true,"severity":"info","suggestedNextActions":["refresh-runtime-state"],"payload":{"slug":"my-task","branch":"task/my-task","worktreePath":"C:\\repo\\worktrees\\active\\brevity-my-task","promptPath":"C:\\repo\\worktrees\\active\\brevity-my-task\\prompt.md","metadataPath":"C:\\repo\\.brevity\\tasks.json"}}`),
+	}
+
+	var stdout bytes.Buffer
+	err := runWithOptions(&stdout, client, cliOptions{kind: commandTaskNew, slug: "my-task"})
+	if err != nil {
+		t.Fatalf("runWithOptions returned error: %v", err)
+	}
+
+	if len(client.calls) != 1 || client.calls[0] != "task-new:my-task" {
+		t.Fatalf("calls = %#v, want task new only", client.calls)
+	}
+
+	output := stdout.String()
+	for _, want := range []string{
+		"Task new: success",
+		"slug: my-task",
+		"branch: task/my-task",
+		"worktreePath: C:\\repo\\worktrees\\active\\brevity-my-task",
+		"promptPath: C:\\repo\\worktrees\\active\\brevity-my-task\\prompt.md",
+		"metadataPath: C:\\repo\\.brevity\\tasks.json",
+		"- refresh-runtime-state",
+	} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("output missing %q:\n%s", want, output)
+		}
+	}
+}
+
+func TestRunTaskNewReturnsErrorWhenResultFails(t *testing.T) {
+	client := &fakeRuntimeClient{
+		taskNew: []byte(`{"schema":"brevity.command-result.v1","command":"task new","success":false,"severity":"error","errors":[{"code":"task-already-exists","message":"Task metadata already exists: my-task","details":{"slug":"my-task","metadataPath":"C:\\repo\\.brevity\\tasks.json"}}],"payload":{}}`),
+	}
+
+	var stdout bytes.Buffer
+	err := runWithOptions(&stdout, client, cliOptions{kind: commandTaskNew, slug: "my-task"})
+	if err == nil {
+		t.Fatal("runWithOptions returned nil error")
+	}
+	if !strings.Contains(err.Error(), "task new reported success=false") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(stdout.String(), "slug: my-task") {
+		t.Fatalf("output missing slug fallback:\n%s", stdout.String())
+	}
+	if !strings.Contains(stdout.String(), "error: task-already-exists: Task metadata already exists: my-task") {
 		t.Fatalf("output missing structured error:\n%s", stdout.String())
 	}
 }
