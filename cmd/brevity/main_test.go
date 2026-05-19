@@ -70,6 +70,40 @@ func TestParseOptionsAcceptsPowerShellSource(t *testing.T) {
 	}
 }
 
+func TestParseOptionsAcceptsHelp(t *testing.T) {
+	for _, arg := range []string{"--help", "-h"} {
+		t.Run(arg, func(t *testing.T) {
+			options, err := parseOptions([]string{arg})
+			if err != nil {
+				t.Fatalf("parseOptions returned error: %v", err)
+			}
+			if !options.help {
+				t.Fatal("help = false, want true")
+			}
+		})
+	}
+}
+
+func TestRunWritesHelp(t *testing.T) {
+	var stdout bytes.Buffer
+	if err := run(&stdout, []string{"--help"}); err != nil {
+		t.Fatalf("run returned error: %v", err)
+	}
+
+	output := stdout.String()
+	for _, want := range []string{
+		"read-only dashboard spike",
+		`.\brevity.ps1 runtime state --json`,
+		"PowerShell remains the",
+		"--once",
+		"--json-source powershell",
+	} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("help output missing %q:\n%s", want, output)
+		}
+	}
+}
+
 func TestParseOptionsRejectsUnknownFlag(t *testing.T) {
 	_, err := parseOptions([]string{"--unknown"})
 	if err == nil {
