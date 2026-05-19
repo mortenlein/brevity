@@ -14,12 +14,7 @@ func RenderTaskRunResult(stdout io.Writer, result contracts.CommandResult) error
 	}
 	applyTaskRunErrorDetails(&payload, result)
 
-	status := "failure"
-	if result.Success {
-		status = "success"
-	}
-
-	fmt.Fprintf(stdout, "Task run: %s\n", status)
+	renderStatusLine(stdout, "Task run", result.Success)
 	fmt.Fprintf(stdout, "slug: %s\n", payload.Slug)
 	fmt.Fprintf(stdout, "provider: %s\n", emptyAsUnknown(payload.Provider))
 	fmt.Fprintf(stdout, "profile: %s\n", emptyAsUnknown(payload.Profile))

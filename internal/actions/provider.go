@@ -13,12 +13,7 @@ func RenderProviderResult(stdout io.Writer, result contracts.CommandResult) erro
 		return err
 	}
 
-	status := "failure"
-	if result.Success {
-		status = "success"
-	}
-
-	fmt.Fprintf(stdout, "Provider action: %s\n", status)
+	renderStatusLine(stdout, "Provider action", result.Success)
 	fmt.Fprintf(stdout, "provider: %s\n", payload.Provider)
 	fmt.Fprintf(stdout, "previousStatus: %s\n", emptyAsUnknown(payload.PreviousStatus))
 	fmt.Fprintf(stdout, "newStatus: %s\n", emptyAsUnknown(payload.NewStatus))
@@ -26,19 +21,7 @@ func RenderProviderResult(stdout io.Writer, result contracts.CommandResult) erro
 		fmt.Fprintf(stdout, "note: %s\n", payload.Note)
 	}
 
-	for _, warning := range result.Warnings {
-		fmt.Fprintf(stdout, "warning: %s\n", warning.DisplayText())
-	}
-	for _, commandError := range result.Errors {
-		fmt.Fprintf(stdout, "error: %s\n", commandError.DisplayText())
-	}
-	if len(result.SuggestedNextActions) > 0 {
-		fmt.Fprintln(stdout, "suggested next actions:")
-		for _, action := range result.SuggestedNextActions {
-			fmt.Fprintf(stdout, "- %s\n", action)
-		}
-	}
-
+	renderMessages(stdout, result)
 	return nil
 }
 

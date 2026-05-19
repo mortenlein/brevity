@@ -84,21 +84,6 @@ func RenderDoctorResult(stdout io.Writer, result contracts.CommandResult) error 
 	return nil
 }
 
-func renderMessages(stdout io.Writer, result contracts.CommandResult) {
-	for _, warning := range result.Warnings {
-		fmt.Fprintf(stdout, "warning: %s\n", warning.DisplayText())
-	}
-	for _, commandError := range result.Errors {
-		fmt.Fprintf(stdout, "error: %s\n", commandError.DisplayText())
-	}
-	if len(result.SuggestedNextActions) > 0 {
-		fmt.Fprintln(stdout, "suggested next actions:")
-		for _, action := range result.SuggestedNextActions {
-			fmt.Fprintf(stdout, "- %s\n", action)
-		}
-	}
-}
-
 func applyTaskRuntimeInfoErrorDetails(payload *contracts.TaskRuntimeInfoPayload, result contracts.CommandResult) {
 	for _, commandError := range result.Errors {
 		if commandError.Details == nil || payload.Slug != "" {
