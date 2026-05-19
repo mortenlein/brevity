@@ -16,6 +16,7 @@ type Client interface {
 	TaskContextRefreshJSON(slug string) ([]byte, error)
 	TaskCleanupJSON(slug string) ([]byte, error)
 	TaskNewJSON(slug string) ([]byte, error)
+	TaskRunJSON(slug string, profile string, smoke bool) ([]byte, error)
 	TaskRuntimeInfoJSON(slug string) ([]byte, error)
 	TaskRunsJSON(slug string) ([]byte, error)
 	TaskRunsReconcileJSON() ([]byte, error)
@@ -57,6 +58,20 @@ func (client PowerShellClient) TaskCleanupJSON(slug string) ([]byte, error) {
 
 func (client PowerShellClient) TaskNewJSON(slug string) ([]byte, error) {
 	return client.runJSON("task new "+slug+" --json", "task", "new", slug, "--json")
+}
+
+func (client PowerShellClient) TaskRunJSON(slug string, profile string, smoke bool) ([]byte, error) {
+	description := "task run " + slug + " --execute --json"
+	args := []string{"task", "run", slug, "--execute", "--json"}
+	if profile != "" {
+		description += " --profile " + profile
+		args = append(args, "--profile", profile)
+	}
+	if smoke {
+		description += " --smoke"
+		args = append(args, "--smoke")
+	}
+	return client.runJSON(description, args...)
 }
 
 func (client PowerShellClient) TaskRuntimeInfoJSON(slug string) ([]byte, error) {

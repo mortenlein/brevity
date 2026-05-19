@@ -97,6 +97,22 @@ type TaskNewPayload struct {
 	MetadataPath string `json:"metadataPath"`
 }
 
+type TaskRunExecutionPayload struct {
+	Slug          string `json:"slug"`
+	RunID         string `json:"runId"`
+	Provider      string `json:"provider"`
+	Profile       string `json:"profile"`
+	WorktreePath  string `json:"worktreePath"`
+	PromptPath    string `json:"promptPath"`
+	ExecutionMode string `json:"executionMode"`
+	StartedAt     string `json:"startedAt"`
+	FinishedAt    string `json:"finishedAt"`
+	ExitCode      any    `json:"exitCode"`
+	WorkerStatus  string `json:"workerStatus"`
+	FailureType   string `json:"failureType"`
+	LogPath       string `json:"logPath"`
+}
+
 type TaskRuntimeInfoPayload struct {
 	Slug            string                      `json:"slug"`
 	Status          string                      `json:"status"`
@@ -265,6 +281,19 @@ func ParseTaskNewPayload(result CommandResult) (TaskNewPayload, error) {
 	var payload TaskNewPayload
 	if err := json.Unmarshal(result.Payload, &payload); err != nil {
 		return TaskNewPayload{}, fmt.Errorf("invalid task new payload: %w", err)
+	}
+
+	return payload, nil
+}
+
+func ParseTaskRunExecutionPayload(result CommandResult) (TaskRunExecutionPayload, error) {
+	if len(result.Payload) == 0 {
+		return TaskRunExecutionPayload{}, errors.New("task run result missing payload")
+	}
+
+	var payload TaskRunExecutionPayload
+	if err := json.Unmarshal(result.Payload, &payload); err != nil {
+		return TaskRunExecutionPayload{}, fmt.Errorf("invalid task run payload: %w", err)
 	}
 
 	return payload, nil

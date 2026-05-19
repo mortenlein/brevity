@@ -15,6 +15,7 @@ type fakeRuntimeClient struct {
 	contextRefresh []byte
 	taskCleanup    []byte
 	taskNew        []byte
+	taskRun        []byte
 	runtimeInfo    []byte
 	taskRuns       []byte
 	runsReconcile  []byte
@@ -59,9 +60,21 @@ func (client *fakeRuntimeClient) TaskNewJSON(slug string) ([]byte, error) {
 	return client.taskNew, client.actionErr
 }
 
+func (client *fakeRuntimeClient) TaskRunJSON(slug string, profile string, smoke bool) ([]byte, error) {
+	client.calls = append(client.calls, "task-run:"+slug+":"+profile+":"+boolString(smoke))
+	return client.taskRun, client.actionErr
+}
+
 func (client *fakeRuntimeClient) TaskRuntimeInfoJSON(slug string) ([]byte, error) {
 	client.calls = append(client.calls, "runtime-info:"+slug)
 	return client.runtimeInfo, client.actionErr
+}
+
+func boolString(value bool) string {
+	if value {
+		return "true"
+	}
+	return "false"
 }
 
 func (client *fakeRuntimeClient) TaskRunsJSON(slug string) ([]byte, error) {
@@ -204,6 +217,29 @@ func TestParseOptionsAcceptsTaskNew(t *testing.T) {
 	}
 }
 
+func TestParseOptionsAcceptsTaskRunExecute(t *testing.T) {
+	options, err := parseOptions([]string{"task", "run", "my-task", "--execute", "--profile", "smoke", "--smoke"})
+	if err != nil {
+		t.Fatalf("parseOptions returned error: %v", err)
+	}
+
+	if options.kind != commandTaskRun {
+		t.Fatalf("kind = %q, want task-run", options.kind)
+	}
+	if options.slug != "my-task" {
+		t.Fatalf("slug = %q, want my-task", options.slug)
+	}
+	if !options.execute {
+		t.Fatal("execute = false, want true")
+	}
+	if options.profile != "smoke" {
+		t.Fatalf("profile = %q, want smoke", options.profile)
+	}
+	if !options.smoke {
+		t.Fatal("smoke = false, want true")
+	}
+}
+
 func TestParseOptionsAcceptsDoctor(t *testing.T) {
 	options, err := parseOptions([]string{"doctor"})
 	if err != nil {
@@ -298,6 +334,7 @@ func TestRunWritesHelp(t *testing.T) {
 		"provider set <provider> <status>",
 		"task context refresh <slug>",
 		"task new <slug>",
+		"task run <slug> --execute",
 		"task runtime-info <slug>",
 		"task runs <slug>",
 		"task runs reconcile --dry-run",
@@ -375,6 +412,32 @@ func TestParseOptionsRejectsTaskNewMissingSlug(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "usage: brevity task new <slug>") {
 		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestParseOptionsRejectsTaskRunWithoutExecute(t *testing.T) {
+	_, err := parseOptions([]string{"task", "run", "my-task", "--smoke"})
+	if err == nil {
+		t.Fatal("parseOptions returned nil error")
+	}
+	if !strings.Contains(err.Error(), "requires --execute") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestRunTaskRunFailsBeforeClientWithoutExecute(t *testing.T) {
+	client := &fakeRuntimeClient{}
+
+	var stdout bytes.Buffer
+	err := runWithOptions(&stdout, client, cliOptions{kind: commandTaskRun, slug: "my-task"})
+	if err == nil {
+		t.Fatal("runWithOptions returned nil error")
+	}
+	if !strings.Contains(err.Error(), "requires --execute") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(client.calls) != 0 {
+		t.Fatalf("calls = %#v, want no PowerShell calls", client.calls)
 	}
 }
 
@@ -746,6 +809,68 @@ func TestRunTaskNewReturnsErrorWhenResultFails(t *testing.T) {
 	}
 	if !strings.Contains(stdout.String(), "error: task-already-exists: Task metadata already exists: my-task") {
 		t.Fatalf("output missing structured error:\n%s", stdout.String())
+	}
+}
+
+func TestRunTaskRunUsesClientAndRendersResult(t *testing.T) {
+	client := &fakeRuntimeClient{
+		taskRun: []byte(`{"schema":"brevity.command-result.v1","command":"task run","success":true,"severity":"info","suggestedNextActions":["Refresh runtime state."],"payload":{"slug":"my-task","runId":"20260519T170000Z-my-task","provider":"smoke","profile":"smoke","worktreePath":"C:\\repo\\worktrees\\active\\brevity-my-task","promptPath":"C:\\repo\\worktrees\\active\\brevity-my-task\\prompt.md","executionMode":"sync","startedAt":"2026-05-19T17:00:00Z","finishedAt":"2026-05-19T17:00:01Z","exitCode":0,"workerStatus":"succeeded","failureType":null,"logPath":"C:\\repo\\.brevity\\logs\\my-task\\20260519T170000Z-my-task.log"}}`),
+	}
+
+	var stdout bytes.Buffer
+	err := runWithOptions(&stdout, client, cliOptions{kind: commandTaskRun, slug: "my-task", execute: true, profile: "smoke", smoke: true})
+	if err != nil {
+		t.Fatalf("runWithOptions returned error: %v", err)
+	}
+
+	if len(client.calls) != 1 || client.calls[0] != "task-run:my-task:smoke:true" {
+		t.Fatalf("calls = %#v, want task run only", client.calls)
+	}
+
+	output := stdout.String()
+	for _, want := range []string{
+		"Task run: success",
+		"slug: my-task",
+		"provider: smoke",
+		"profile: smoke",
+		"workerStatus: succeeded",
+		"runId: 20260519T170000Z-my-task",
+		"startedAt: 2026-05-19T17:00:00Z",
+		"finishedAt: 2026-05-19T17:00:01Z",
+		"exitCode: 0",
+		"logPath: C:\\repo\\.brevity\\logs\\my-task\\20260519T170000Z-my-task.log",
+		"- Refresh runtime state.",
+	} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("output missing %q:\n%s", want, output)
+		}
+	}
+}
+
+func TestRunTaskRunReturnsErrorWhenWorkerFails(t *testing.T) {
+	client := &fakeRuntimeClient{
+		taskRun: []byte(`{"schema":"brevity.command-result.v1","command":"task run","success":false,"severity":"error","errors":[{"code":"worker-exit-failed","message":"Worker failed."}],"suggestedNextActions":["Review the worker log."],"payload":{"slug":"my-task","runId":"run-failed","provider":"codex","profile":"default","startedAt":"2026-05-19T17:00:00Z","finishedAt":"2026-05-19T17:00:01Z","exitCode":1,"workerStatus":"failed","failureType":"worker-exit-failed","logPath":"C:\\repo\\.brevity\\logs\\my-task\\run-failed.log"}}`),
+	}
+
+	var stdout bytes.Buffer
+	err := runWithOptions(&stdout, client, cliOptions{kind: commandTaskRun, slug: "my-task", execute: true})
+	if err == nil {
+		t.Fatal("runWithOptions returned nil error")
+	}
+	if !strings.Contains(err.Error(), "task run reported success=false") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	output := stdout.String()
+	for _, want := range []string{
+		"Task run: failure",
+		"workerStatus: failed",
+		"exitCode: 1",
+		"failureType: worker-exit-failed",
+		"error: worker-exit-failed: Worker failed.",
+	} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("output missing %q:\n%s", want, output)
+		}
 	}
 }
 
