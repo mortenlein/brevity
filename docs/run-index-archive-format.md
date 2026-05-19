@@ -102,3 +102,62 @@ Future mutating compaction must:
 
 Until mutation exists, `Brevity task runs compact --dry-run` remains plan-only
 and should only report archive/summary candidates.
+
+## Planned Mutation Command
+
+Mutating run-index compaction is not implemented yet. The planned explicit
+command shape is:
+
+```powershell
+.\brevity.ps1 task runs compact --execute
+.\brevity.ps1 task runs compact --execute --archive
+```
+
+The `--execute` flag is the future mutation boundary. Without it, compaction
+must remain read-only. The optional `--archive` flag would allow the command to
+write additive archive records using this format while compacting old raw run
+records from `.brevity\runs.jsonl`.
+
+Compaction must never run automatically. A TUI or automation consumer must show
+the exact action, target path, retention effect, archive behavior, and backup
+path before invoking an executing command.
+
+## Planned Mutation Sequence
+
+A future implementation must perform mutation in this order:
+
+1. Acquire `.brevity\runs.lock`.
+2. Reread `.brevity\runs.jsonl` while holding the lock.
+3. Recompute the compaction plan from the locked read, ignoring any stale
+   pre-lock dry-run plan.
+4. Create a timestamped backup of the current `.brevity\runs.jsonl`.
+5. Write the compacted run index to a temporary file in the same directory.
+6. Validate that the compacted temporary file parses as JSON Lines.
+7. If archive records are produced, validate every archive record against
+   `brevity.run-index-archive.v1`.
+8. Atomically replace `.brevity\runs.jsonl` with the temporary file when
+   possible on Windows.
+9. Preserve the backup path in the command result.
+10. Release `.brevity\runs.lock` in a `finally` block.
+
+The locked reread and recomputed plan are required because `.brevity\runs.jsonl`
+is append-only worker runtime state. A dry-run report is advisory; it is not a
+write plan that can safely be replayed later.
+
+## Rollback And Failure Behavior
+
+Future mutating compaction must fail closed:
+
+- Never delete backups automatically.
+- If validation fails, abort before replacing `.brevity\runs.jsonl`.
+- If replacement fails, the original `.brevity\runs.jsonl` should remain in
+  place.
+- If archive validation fails, abort before replacing `.brevity\runs.jsonl`.
+- Preserve the backup path and failure details in the command result whenever a
+  backup was created.
+- Leave worker logs untouched; logs are never deleted by v1 compaction.
+
+Stale and incomplete records must be preserved in the live run index unless a
+future reconciliation flow has explicitly resolved them. Failed runs are
+retained longer than successful runs, and v1 compaction should only compact old
+successful completed runs that the retention plan can safely summarize.

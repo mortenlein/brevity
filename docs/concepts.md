@@ -148,6 +148,24 @@ Only dry-run compaction planning exists. Future mutating compaction must be
 explicit, dry-run-first, and protected by locking before it mutates
 `.brevity\runs.jsonl`.
 
+The planned future mutation command shape is:
+
+```powershell
+.\brevity.ps1 task runs compact --execute
+.\brevity.ps1 task runs compact --execute --archive
+```
+
+These commands are not implemented yet. Before any future implementation writes
+the run index, it must acquire `.brevity\runs.lock`, reread
+`.brevity\runs.jsonl` under that lock, recompute the compaction plan, create a
+backup, write and validate a compacted temporary file, validate archive records
+when produced, replace `.brevity\runs.jsonl` atomically when possible on
+Windows, report the backup path, and release the lock in a `finally` block.
+Failed validation must abort before replacement, failed replacement must leave
+the original run index in place, and backups must never be deleted
+automatically. Compaction remains explicit rather than automatic, and a future
+TUI must show the exact action before executing it.
+
 ### Run Index Archive Format
 
 Future run-index compaction should write additive archive records instead of

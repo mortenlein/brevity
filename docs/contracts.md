@@ -37,6 +37,12 @@ Run index archive records are planned summaries for old worker run records. They
 do not imply that mutating compaction exists, and they are not a channel for
 automatic worker-log deletion.
 
+The same archive format document also defines the planned future mutation
+sequence for `.\brevity.ps1 task runs compact --execute`: lock, locked reread,
+plan recomputation, backup, temporary compacted output, validation, optional
+archive validation, Windows-safe replacement, backup reporting, and lock release
+in `finally`. This sequence is a pre-implementation contract only.
+
 ## TUI Guidance
 
 - [`docs/tui-consumer-guide.md`](tui-consumer-guide.md) - guidance for reading
