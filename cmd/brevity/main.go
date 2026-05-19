@@ -1,10 +1,13 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"io"
 	"os"
+	"os/signal"
+	"time"
 
 	"github.com/mortenlein/brevity/internal/actions"
 	"github.com/mortenlein/brevity/internal/commands"
@@ -42,6 +45,8 @@ type cliOptions struct {
 	help     bool
 	kind     commandKind
 	once     bool
+	watch    bool
+	refresh  time.Duration
 	provider string
 	status   string
 	slug     string
@@ -67,7 +72,7 @@ func usageError(command commands.Command) error {
 }
 
 func parseOptions(args []string) (cliOptions, error) {
-	options := cliOptions{kind: commandDashboard}
+	options := cliOptions{kind: commandDashboard, refresh: 5 * time.Second}
 	for _, arg := range args {
 		if arg == "--help" || arg == "-h" {
 			options.help = true
@@ -88,13 +93,26 @@ func parseOptions(args []string) (cliOptions, error) {
 	flags := flag.NewFlagSet("brevity", flag.ContinueOnError)
 	flags.SetOutput(io.Discard)
 	flags.BoolVar(&options.once, "once", false, "render the dashboard once")
+	flags.BoolVar(&options.watch, "watch", false, "refresh the dashboard until interrupted")
+	refresh := flags.String("refresh", options.refresh.String(), "dashboard refresh interval")
 	jsonSource := flags.String("json-source", "powershell", "runtime JSON source")
 
 	if err := flags.Parse(args); err != nil {
 		return cliOptions{}, err
 	}
+	parsedRefresh, err := time.ParseDuration(*refresh)
+	if err != nil {
+		return cliOptions{}, fmt.Errorf("invalid --refresh value %q: %w", *refresh, err)
+	}
+	if parsedRefresh <= 0 {
+		return cliOptions{}, fmt.Errorf("invalid --refresh value %q: duration must be greater than zero", *refresh)
+	}
+	options.refresh = parsedRefresh
 	if *jsonSource != "powershell" {
 		return cliOptions{}, fmt.Errorf("unsupported json source: %s", *jsonSource)
+	}
+	if options.once && options.watch {
+		return cliOptions{}, fmt.Errorf("--once and --watch cannot be used together")
 	}
 	if flags.NArg() > 0 {
 		return cliOptions{}, fmt.Errorf("unexpected argument: %s", flags.Arg(0))
@@ -297,14 +315,21 @@ func run(stdout io.Writer, args []string) error {
 		return nil
 	}
 
-	return runWithOptions(stdout, runtimeclient.NewPowerShellClient(), options)
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	defer stop()
+
+	return runWithContextOptions(ctx, stdout, runtimeclient.NewPowerShellClient(), options)
 }
 
 func runWithClient(stdout io.Writer, client runtimeclient.Client) error {
-	return runWithOptions(stdout, client, cliOptions{kind: commandDashboard})
+	return runWithOptions(stdout, client, cliOptions{kind: commandDashboard, refresh: 5 * time.Second})
 }
 
 func runWithOptions(stdout io.Writer, client runtimeclient.Client, options cliOptions) error {
+	return runWithContextOptions(context.Background(), stdout, client, options)
+}
+
+func runWithContextOptions(ctx context.Context, stdout io.Writer, client runtimeclient.Client, options cliOptions) error {
 	switch options.kind {
 	case commandProviderSet, commandProviderReset:
 		return routeProviderCommand(stdout, client, options)
@@ -317,23 +342,87 @@ func runWithOptions(stdout io.Writer, client runtimeclient.Client, options cliOp
 	case commandTaskRuns, commandRunsReconcile, commandRunsRetention, commandRunsCompact:
 		return routeTaskRunsCommand(stdout, client, options)
 	default:
+		if options.watch {
+			if options.refresh <= 0 {
+				options.refresh = 5 * time.Second
+			}
+			return watchDashboard(ctx, stdout, client, options.refresh)
+		}
 		return routeDashboardCommand(stdout, client)
 	}
 }
 
 func routeDashboardCommand(stdout io.Writer, client runtimeclient.Client) error {
+	return renderDashboardRefresh(stdout, client, time.Now, false, "", false)
+}
+
+func watchDashboard(ctx context.Context, stdout io.Writer, client runtimeclient.Client, refresh time.Duration) error {
+	lastSuccess := ""
+	if err := renderDashboardRefresh(stdout, client, time.Now, true, lastSuccess, true); err == nil {
+		lastSuccess = time.Now().Format(time.RFC3339)
+	}
+
+	ticker := time.NewTicker(refresh)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			fmt.Fprintln(stdout, "\nStopped.")
+			return nil
+		case <-ticker.C:
+			if err := renderDashboardRefresh(stdout, client, time.Now, true, lastSuccess, true); err == nil {
+				lastSuccess = time.Now().Format(time.RFC3339)
+			}
+		}
+	}
+}
+
+func renderDashboardRefresh(stdout io.Writer, client runtimeclient.Client, now func() time.Time, clear bool, lastSuccess string, showErrors bool) error {
+	if clear {
+		clearScreen(stdout)
+	}
+
 	output, err := client.RuntimeStateJSON()
 	if err != nil {
+		if showErrors {
+			renderDashboardError(stdout, now, lastSuccess, err)
+		}
 		return err
 	}
 
 	state, err := contracts.ParseRuntimeState(output)
 	if err != nil {
+		if showErrors {
+			renderDashboardError(stdout, now, lastSuccess, err)
+		}
 		return err
 	}
 
 	dashboard.Render(stdout, state)
+	if showErrors {
+		fmt.Fprintf(stdout, "\nLast successful refresh: %s\n", now().Format(time.RFC3339))
+	}
 	return nil
+}
+
+func renderDashboardError(stdout io.Writer, now func() time.Time, lastSuccess string, err error) {
+	fmt.Fprintln(stdout, "Brevity Runtime Dashboard")
+	fmt.Fprintln(stdout, "=========================")
+	fmt.Fprintf(stdout, "Last successful refresh: %s\n", fallbackRefresh(lastSuccess))
+	fmt.Fprintf(stdout, "Refresh attempted: %s\n", now().Format(time.RFC3339))
+	fmt.Fprintf(stdout, "Polling error: %v\n", err)
+}
+
+func clearScreen(stdout io.Writer) {
+	fmt.Fprint(stdout, "\x1b[H\x1b[2J")
+}
+
+func fallbackRefresh(value string) string {
+	if value == "" {
+		return "(none)"
+	}
+	return value
 }
 
 func routeProviderCommand(stdout io.Writer, client runtimeclient.Client, options cliOptions) error {

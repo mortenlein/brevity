@@ -2,33 +2,39 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/mortenlein/brevity/internal/commands"
 )
 
 type fakeRuntimeClient struct {
-	output         []byte
-	err            error
-	providerSet    []byte
-	providerReset  []byte
-	doctor         []byte
-	contextRefresh []byte
-	taskCleanup    []byte
-	taskNew        []byte
-	taskRun        []byte
-	runtimeInfo    []byte
-	taskRuns       []byte
-	runsReconcile  []byte
-	runsRetention  []byte
-	runsCompact    []byte
-	actionErr      error
-	calls          []string
+	output            []byte
+	err               error
+	providerSet       []byte
+	providerReset     []byte
+	doctor            []byte
+	contextRefresh    []byte
+	taskCleanup       []byte
+	taskNew           []byte
+	taskRun           []byte
+	runtimeInfo       []byte
+	taskRuns          []byte
+	runsReconcile     []byte
+	runsRetention     []byte
+	runsCompact       []byte
+	actionErr         error
+	calls             []string
+	afterRuntimeState func(int)
 }
 
 func (client *fakeRuntimeClient) RuntimeStateJSON() ([]byte, error) {
 	client.calls = append(client.calls, "runtime-state")
+	if client.afterRuntimeState != nil {
+		client.afterRuntimeState(len(client.calls))
+	}
 	return client.output, client.err
 }
 
@@ -141,6 +147,95 @@ func TestParseOptionsAcceptsOnce(t *testing.T) {
 	if !options.once {
 		t.Fatal("once = false, want true")
 	}
+}
+
+func TestParseOptionsAcceptsWatchRefresh(t *testing.T) {
+	options, err := parseOptions([]string{"--watch", "--refresh", "2s"})
+	if err != nil {
+		t.Fatalf("parseOptions returned error: %v", err)
+	}
+
+	if !options.watch {
+		t.Fatal("watch = false, want true")
+	}
+	if options.refresh != 2*time.Second {
+		t.Fatalf("refresh = %s, want 2s", options.refresh)
+	}
+}
+
+func TestParseOptionsRejectsInvalidRefresh(t *testing.T) {
+	_, err := parseOptions([]string{"--watch", "--refresh", "not-a-duration"})
+	if err == nil {
+		t.Fatal("parseOptions returned nil error")
+	}
+	if !strings.Contains(err.Error(), "invalid --refresh value") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestParseOptionsRejectsOnceWithWatch(t *testing.T) {
+	_, err := parseOptions([]string{"--once", "--watch"})
+	if err == nil {
+		t.Fatal("parseOptions returned nil error")
+	}
+	if !strings.Contains(err.Error(), "--once and --watch cannot be used together") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestWatchDashboardRefreshesUntilContextCancel(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	client := &fakeRuntimeClient{
+		output: []byte(`{"schema":"brevity.runtime-state.v1","repoRoot":"C:\\repo","taskCounts":{"tracked":3}}`),
+		afterRuntimeState: func(callCount int) {
+			if callCount >= 2 {
+				cancel()
+			}
+		},
+	}
+
+	var stdout bytes.Buffer
+	err := runWithContextOptions(ctx, &stdout, client, cliOptions{kind: commandDashboard, watch: true, refresh: time.Millisecond})
+	if err != nil {
+		t.Fatalf("runWithContextOptions returned error: %v", err)
+	}
+	if len(client.calls) < 2 {
+		t.Fatalf("calls = %#v, want at least two runtime state refreshes", client.calls)
+	}
+	output := stdout.String()
+	for _, want := range []string{"Brevity Runtime Dashboard", "Last successful refresh:", "Stopped."} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("output missing %q:\n%s", want, output)
+		}
+	}
+}
+
+func TestWatchDashboardShowsPollingErrorWithoutFailing(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	client := &fakeRuntimeClient{
+		err: assertErr("runtime unavailable"),
+		afterRuntimeState: func(callCount int) {
+			cancel()
+		},
+	}
+
+	var stdout bytes.Buffer
+	err := runWithContextOptions(ctx, &stdout, client, cliOptions{kind: commandDashboard, watch: true, refresh: time.Millisecond})
+	if err != nil {
+		t.Fatalf("runWithContextOptions returned error: %v", err)
+	}
+	output := stdout.String()
+	for _, want := range []string{"Polling error: runtime unavailable", "Last successful refresh: (none)", "Stopped."} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("output missing %q:\n%s", want, output)
+		}
+	}
+}
+
+type assertErr string
+
+func (err assertErr) Error() string {
+	return string(err)
 }
 
 func TestParseOptionsAcceptsProviderSet(t *testing.T) {
