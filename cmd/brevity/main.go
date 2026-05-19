@@ -106,11 +106,15 @@ func loadRuntimeStateJSON() ([]byte, error) {
 
 	output, err := cmd.Output()
 	if err != nil {
+		if errors.Is(err, exec.ErrNotFound) {
+			return nil, errors.New("PowerShell command not found: install PowerShell or ensure powershell.exe is on PATH")
+		}
+
 		message := strings.TrimSpace(stderr.String())
 		if message == "" {
 			message = err.Error()
 		}
-		return nil, fmt.Errorf("PowerShell runtime state command failed: %s", message)
+		return nil, fmt.Errorf("brevity.ps1 runtime state --json failed: %s", message)
 	}
 
 	if len(bytes.TrimSpace(output)) == 0 {

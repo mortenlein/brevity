@@ -197,6 +197,27 @@ embed Git operations. Future mutation support should go through explicit
 command-result contracts rather than duplicating orchestration logic in the
 view layer.
 
+## Go Runtime Dashboard Spike
+
+The experimental Go dashboard requires Go to be installed and available on
+`PATH`. Run it from the repository root:
+
+```powershell
+go run ./cmd/brevity
+```
+
+The Go command is read-only. It shells out to the PowerShell reference runtime:
+
+```powershell
+.\brevity.ps1 runtime state --json
+```
+
+The PowerShell command remains the source of truth for runtime state,
+orchestration behavior, mutations, worker lifecycle, cleanup, and branch
+integration. The Go spike consumes the `brevity.runtime-state.v1` contract,
+tolerates unknown fields, validates the schema before rendering, and does not
+write `.brevity` metadata.
+
 ## Runtime State Contract
 
 `.\brevity.ps1 runtime state --json` prints the machine-readable runtime state

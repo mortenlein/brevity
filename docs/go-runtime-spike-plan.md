@@ -41,6 +41,25 @@ Reading PowerShell-produced runtime state first keeps the spike anchored to the
 reference implementation while the Go data model and rendering path mature.
 Native `.brevity` file reading can follow once the JSON contract path is stable.
 
+## Current Spike Usage
+
+The first Go dashboard spike requires Go on `PATH` and runs from the repository
+root:
+
+```powershell
+go run ./cmd/brevity
+```
+
+The command is a read-only consumer. It invokes
+`.\brevity.ps1 runtime state --json`, validates the
+`brevity.runtime-state.v1` schema, and renders a plain dashboard from that
+PowerShell-produced snapshot. It must not write `.brevity` metadata, start
+workers, merge branches, run cleanup, or replace `brevity.ps1`.
+
+PowerShell remains the reference runtime for state interpretation,
+orchestration behavior, mutations, worker lifecycle, cleanup, and branch
+integration.
+
 ## Non-Goals
 
 - No mutating commands initially.
