@@ -108,6 +108,12 @@ first. It prefers the append-only `.brevity\runs.jsonl` index when available and
 falls back to scanning `.brevity\logs\<slug>\*.log`. Worker logs remain the
 source of detailed output. Use `--json` for structured output.
 
+`Brevity task runs reconcile --dry-run` scans `.brevity\runs.jsonl` for stale
+or incomplete worker run records and prints a conservative operator report. It
+does not mutate the run index. Without `--dry-run`, the command refuses safely.
+Future reconciliation may mark stale/incomplete runs after operator review, but
+v1 is report-only.
+
 ### Runtime State JSON
 
 `Brevity runtime state --json` emits the read-only runtime inspection contract

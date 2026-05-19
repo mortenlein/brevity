@@ -1680,6 +1680,119 @@ function Get-TaskWorkerRunHistorySummary {
     }
 }
 
+function Get-WorkerRunReconciliationCandidates {
+    param(
+        [string]$RunsPath = ""
+    )
+
+    $runsPath = $RunsPath
+    if ([string]::IsNullOrWhiteSpace($runsPath)) {
+        $runsPath = Get-BrevityRunsIndexPath
+    }
+    if (-not (Test-Path -LiteralPath $runsPath)) {
+        return @()
+    }
+
+    $candidates = @()
+    $lines = @(Get-Content -LiteralPath $runsPath -ErrorAction SilentlyContinue)
+    foreach ($line in $lines) {
+        if ([string]::IsNullOrWhiteSpace($line)) {
+            continue
+        }
+
+        try {
+            $record = $line | ConvertFrom-Json
+        }
+        catch {
+            continue
+        }
+
+        if ($null -eq $record) {
+            continue
+        }
+
+        $runState = Resolve-WorkerRunIndexStatus -Record $record
+        if (-not $runState.incomplete -and -not $runState.stale) {
+            continue
+        }
+
+        $startedAt = Get-WorkerRunRecordProperty -Record $record -Name "startedAt"
+        $candidates += [pscustomobject]([ordered]@{
+            runId = Get-WorkerRunRecordProperty -Record $record -Name "runId"
+            slug = Get-WorkerRunRecordProperty -Record $record -Name "slug"
+            provider = Get-WorkerRunRecordProperty -Record $record -Name "provider"
+            profile = Get-WorkerRunRecordProperty -Record $record -Name "profile"
+            startedAt = $startedAt
+            ageMinutes = $runState.ageMinutes
+            staleThresholdMinutes = $runState.staleThresholdMinutes
+            logPath = Get-WorkerRunRecordProperty -Record $record -Name "logPath"
+            workerStatus = $runState.workerStatus
+            incomplete = $runState.incomplete
+            stale = $runState.stale
+        })
+    }
+
+    return @($candidates | Sort-Object @{ Expression = { [string]$_.startedAt }; Descending = $true })
+}
+
+function Show-TaskRunsReconcile {
+    param(
+        [bool]$DryRun = $false
+    )
+
+    if (-not $DryRun) {
+        Write-Host "Refusing to reconcile worker runs without --dry-run." -ForegroundColor Red
+        Write-Host "Usage: .\brevity.ps1 task runs reconcile --dry-run"
+        Write-Host "This command is currently report-only and does not mutate .brevity\runs.jsonl."
+        exit 1
+    }
+
+    $runsPath = Get-BrevityRunsIndexPath
+    $candidates = @(Get-WorkerRunReconciliationCandidates -RunsPath $runsPath)
+
+    Write-Host "Worker run reconciliation report"
+    Write-Host "Mode: dry-run"
+    Write-Host "Run index: $runsPath"
+    Write-Host "Stale threshold: $script:BrevityWorkerRunStaleThresholdMinutes minute(s)"
+
+    if ($candidates.Count -eq 0) {
+        Write-Host "No stale or incomplete worker run candidates found."
+        return
+    }
+
+    Write-Host "Candidates: $($candidates.Count)"
+    foreach ($candidate in $candidates) {
+        $age = if ($null -eq $candidate.ageMinutes) { "unknown" } else { "$($candidate.ageMinutes) minute(s)" }
+        $runId = if ([string]::IsNullOrWhiteSpace([string]$candidate.runId)) { "(unknown runId)" } else { [string]$candidate.runId }
+        $slug = if ([string]::IsNullOrWhiteSpace([string]$candidate.slug)) { "(unknown slug)" } else { [string]$candidate.slug }
+        $provider = if ([string]::IsNullOrWhiteSpace([string]$candidate.provider)) { "(unknown provider)" } else { [string]$candidate.provider }
+        $profile = if ([string]::IsNullOrWhiteSpace([string]$candidate.profile)) { "(unknown profile)" } else { [string]$candidate.profile }
+        $startedAt = "(unknown startedAt)"
+        if ($null -ne $candidate.startedAt -and -not [string]::IsNullOrWhiteSpace([string]$candidate.startedAt)) {
+            if ($candidate.startedAt -is [datetime]) {
+                $startedAt = ([datetime]$candidate.startedAt).ToUniversalTime().ToString("o")
+            }
+            else {
+                $startedAt = [string]$candidate.startedAt
+            }
+        }
+        $logPath = if ([string]::IsNullOrWhiteSpace([string]$candidate.logPath)) { "(no logPath recorded)" } else { [string]$candidate.logPath }
+        $classification = if ($candidate.stale) { "stale/incomplete" } else { "incomplete" }
+
+        Write-Host ""
+        Write-Host "$classification candidate" -ForegroundColor Yellow
+        Write-Host "  runId: $runId"
+        Write-Host "  slug: $slug"
+        Write-Host "  provider: $provider"
+        Write-Host "  profile: $profile"
+        Write-Host "  startedAt: $startedAt"
+        Write-Host "  age: $age"
+        Write-Host "  stale threshold: $($candidate.staleThresholdMinutes) minute(s)"
+        Write-Host "  logPath: $logPath"
+        Write-Host "  suggested future action: mark stale/incomplete; inspect log; rerun task if needed"
+    }
+}
+
 function Show-TaskRuns {
     param(
         [string]$Slug,
@@ -7197,12 +7310,20 @@ switch ($Command.ToLowerInvariant()) {
             "runs" {
                 $taskSlug = $null
                 $jsonOutput = $false
+                $reconcile = $false
+                $dryRun = $false
                 if ($null -ne $RemainingArgs) {
                     foreach ($taskArg in $RemainingArgs) {
-                        if ($taskArg -eq "--json") {
+                        if ($taskArg -eq "reconcile" -and [string]::IsNullOrWhiteSpace($taskSlug) -and -not $reconcile) {
+                            $reconcile = $true
+                        }
+                        elseif ($taskArg -eq "--dry-run" -and $reconcile) {
+                            $dryRun = $true
+                        }
+                        elseif ($taskArg -eq "--json" -and -not $reconcile) {
                             $jsonOutput = $true
                         }
-                        elseif ([string]::IsNullOrWhiteSpace($taskSlug)) {
+                        elseif ([string]::IsNullOrWhiteSpace($taskSlug) -and -not $reconcile) {
                             $taskSlug = [string]$taskArg
                         }
                         else {
@@ -7212,13 +7333,19 @@ switch ($Command.ToLowerInvariant()) {
                             else {
                                 Write-Host "Unknown argument for brevity task runs: $taskArg" -ForegroundColor Red
                                 Write-Host "Usage: .\brevity.ps1 task runs <slug> [--json]"
+                                Write-Host "Usage: .\brevity.ps1 task runs reconcile --dry-run"
                             }
                             exit 1
                         }
                     }
                 }
 
-                Show-TaskRuns -Slug $taskSlug -Json $jsonOutput
+                if ($reconcile) {
+                    Show-TaskRunsReconcile -DryRun $dryRun
+                }
+                else {
+                    Show-TaskRuns -Slug $taskSlug -Json $jsonOutput
+                }
             }
             "context" {
                 $contextCommand = $null
