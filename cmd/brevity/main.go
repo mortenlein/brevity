@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"sort"
@@ -73,7 +74,7 @@ func main() {
 	}
 }
 
-func run(stdout *os.File) error {
+func run(stdout io.Writer) error {
 	output, err := loadRuntimeStateJSON()
 	if err != nil {
 		return err
@@ -140,7 +141,7 @@ func parseRuntimeState(input []byte) (runtimeState, error) {
 	return state, nil
 }
 
-func renderDashboard(stdout *os.File, state runtimeState) {
+func renderDashboard(stdout io.Writer, state runtimeState) {
 	fmt.Fprintln(stdout, "Brevity Runtime Dashboard")
 	fmt.Fprintln(stdout, "=========================")
 	fmt.Fprintf(stdout, "Repo: %s\n", fallback(state.RepoRoot, "(unknown)"))
@@ -191,7 +192,7 @@ func renderDashboard(stdout *os.File, state runtimeState) {
 	}
 }
 
-func renderCleanup(stdout *os.File, summary cleanupSummary) {
+func renderCleanup(stdout io.Writer, summary cleanupSummary) {
 	fmt.Fprintln(stdout, "\nCleanup")
 	fmt.Fprintf(stdout, "  total candidates: %d\n", summary.TotalCandidates)
 	fmt.Fprintf(stdout, "  requires inspection: %d\n", summary.RequiresInspectionCount)
@@ -202,7 +203,7 @@ func renderCleanup(stdout *os.File, summary cleanupSummary) {
 	renderIntMap(stdout, "  by category", summary.ByCategory)
 }
 
-func renderIntMap(stdout *os.File, label string, values map[string]int) {
+func renderIntMap(stdout io.Writer, label string, values map[string]int) {
 	if len(values) == 0 {
 		return
 	}
