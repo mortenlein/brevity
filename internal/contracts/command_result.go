@@ -138,6 +138,43 @@ type TaskRunPayload struct {
 	LogPath      string `json:"logPath"`
 }
 
+type TaskRunsReconcilePayload struct {
+	StaleThresholdMinutes int                          `json:"staleThresholdMinutes"`
+	CandidateCount        int                          `json:"candidateCount"`
+	Candidates            []TaskRunsReconcileCandidate `json:"candidates"`
+}
+
+type TaskRunsReconcileCandidate struct {
+	RunID        string `json:"runId"`
+	Slug         string `json:"slug"`
+	Stale        bool   `json:"stale"`
+	Incomplete   bool   `json:"incomplete"`
+	WorkerStatus string `json:"workerStatus"`
+}
+
+type TaskRunsRetentionPayload struct {
+	TotalRecords          int                    `json:"totalRecords"`
+	ValidRecords          int                    `json:"validRecords"`
+	InvalidRecords        int                    `json:"invalidRecords"`
+	IncompleteRecords     int                    `json:"incompleteRecords"`
+	StaleRecords          int                    `json:"staleRecords"`
+	StaleThresholdMinutes int                    `json:"staleThresholdMinutes"`
+	TopTasks              []TaskRunsTopTaskEntry `json:"topTasks"`
+}
+
+type TaskRunsTopTaskEntry struct {
+	Slug    string `json:"slug"`
+	Records int    `json:"records"`
+}
+
+type TaskRunsCompactPayload struct {
+	RetainedRecordCount           int `json:"retainedRecordCount"`
+	CandidateArchiveSummaryCount  int `json:"candidateArchiveSummaryCount"`
+	CandidateDiscardCount         int `json:"candidateDiscardCount"`
+	PreservedStaleIncompleteCount int `json:"preservedStaleIncompleteCount"`
+	PreservedFailedCount          int `json:"preservedFailedCount"`
+}
+
 type DoctorPayload struct {
 	WarningCount         int                  `json:"warningCount"`
 	ErrorCount           int                  `json:"errorCount"`
@@ -254,6 +291,45 @@ func ParseTaskRunsPayload(result CommandResult) (TaskRunsPayload, error) {
 	var payload TaskRunsPayload
 	if err := json.Unmarshal(result.Payload, &payload); err != nil {
 		return TaskRunsPayload{}, fmt.Errorf("invalid task runs payload: %w", err)
+	}
+
+	return payload, nil
+}
+
+func ParseTaskRunsReconcilePayload(result CommandResult) (TaskRunsReconcilePayload, error) {
+	if len(result.Payload) == 0 {
+		return TaskRunsReconcilePayload{}, errors.New("task runs reconcile result missing payload")
+	}
+
+	var payload TaskRunsReconcilePayload
+	if err := json.Unmarshal(result.Payload, &payload); err != nil {
+		return TaskRunsReconcilePayload{}, fmt.Errorf("invalid task runs reconcile payload: %w", err)
+	}
+
+	return payload, nil
+}
+
+func ParseTaskRunsRetentionPayload(result CommandResult) (TaskRunsRetentionPayload, error) {
+	if len(result.Payload) == 0 {
+		return TaskRunsRetentionPayload{}, errors.New("task runs retention result missing payload")
+	}
+
+	var payload TaskRunsRetentionPayload
+	if err := json.Unmarshal(result.Payload, &payload); err != nil {
+		return TaskRunsRetentionPayload{}, fmt.Errorf("invalid task runs retention payload: %w", err)
+	}
+
+	return payload, nil
+}
+
+func ParseTaskRunsCompactPayload(result CommandResult) (TaskRunsCompactPayload, error) {
+	if len(result.Payload) == 0 {
+		return TaskRunsCompactPayload{}, errors.New("task runs compact result missing payload")
+	}
+
+	var payload TaskRunsCompactPayload
+	if err := json.Unmarshal(result.Payload, &payload); err != nil {
+		return TaskRunsCompactPayload{}, fmt.Errorf("invalid task runs compact payload: %w", err)
 	}
 
 	return payload, nil

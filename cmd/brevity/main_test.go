@@ -17,6 +17,9 @@ type fakeRuntimeClient struct {
 	taskNew        []byte
 	runtimeInfo    []byte
 	taskRuns       []byte
+	runsReconcile  []byte
+	runsRetention  []byte
+	runsCompact    []byte
 	actionErr      error
 	calls          []string
 }
@@ -64,6 +67,21 @@ func (client *fakeRuntimeClient) TaskRuntimeInfoJSON(slug string) ([]byte, error
 func (client *fakeRuntimeClient) TaskRunsJSON(slug string) ([]byte, error) {
 	client.calls = append(client.calls, "task-runs:"+slug)
 	return client.taskRuns, client.actionErr
+}
+
+func (client *fakeRuntimeClient) TaskRunsReconcileJSON() ([]byte, error) {
+	client.calls = append(client.calls, "task-runs-reconcile")
+	return client.runsReconcile, client.actionErr
+}
+
+func (client *fakeRuntimeClient) TaskRunsRetentionJSON() ([]byte, error) {
+	client.calls = append(client.calls, "task-runs-retention")
+	return client.runsRetention, client.actionErr
+}
+
+func (client *fakeRuntimeClient) TaskRunsCompactJSON() ([]byte, error) {
+	client.calls = append(client.calls, "task-runs-compact")
+	return client.runsCompact, client.actionErr
 }
 
 func TestRunWithClientRendersRuntimeState(t *testing.T) {
@@ -225,6 +243,33 @@ func TestParseOptionsAcceptsTaskRuns(t *testing.T) {
 	}
 }
 
+func TestParseOptionsAcceptsTaskRunsMaintenanceDryRun(t *testing.T) {
+	cases := []struct {
+		name string
+		args []string
+		kind commandKind
+	}{
+		{"reconcile", []string{"task", "runs", "reconcile", "--dry-run"}, commandRunsReconcile},
+		{"retention", []string{"task", "runs", "retention", "--dry-run"}, commandRunsRetention},
+		{"compact", []string{"task", "runs", "compact", "--dry-run"}, commandRunsCompact},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			options, err := parseOptions(tc.args)
+			if err != nil {
+				t.Fatalf("parseOptions returned error: %v", err)
+			}
+			if options.kind != tc.kind {
+				t.Fatalf("kind = %q, want %q", options.kind, tc.kind)
+			}
+			if !options.dryRun {
+				t.Fatal("dryRun = false, want true")
+			}
+		})
+	}
+}
+
 func TestParseOptionsAcceptsHelp(t *testing.T) {
 	for _, arg := range []string{"--help", "-h"} {
 		t.Run(arg, func(t *testing.T) {
@@ -255,6 +300,9 @@ func TestRunWritesHelp(t *testing.T) {
 		"task new <slug>",
 		"task runtime-info <slug>",
 		"task runs <slug>",
+		"task runs reconcile --dry-run",
+		"task runs retention --dry-run",
+		"task runs compact --dry-run",
 		"task cleanup <slug> --force",
 	} {
 		if !strings.Contains(output, want) {
@@ -299,6 +347,24 @@ func TestParseOptionsRejectsTaskCleanupWithoutForce(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "requires --force") {
 		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestParseOptionsRejectsTaskRunsMaintenanceWithoutDryRun(t *testing.T) {
+	for _, args := range [][]string{
+		{"task", "runs", "reconcile"},
+		{"task", "runs", "retention"},
+		{"task", "runs", "compact"},
+	} {
+		t.Run(strings.Join(args, " "), func(t *testing.T) {
+			_, err := parseOptions(args)
+			if err == nil {
+				t.Fatal("parseOptions returned nil error")
+			}
+			if !strings.Contains(err.Error(), "requires --dry-run") {
+				t.Fatalf("unexpected error: %v", err)
+			}
+		})
 	}
 }
 
@@ -436,6 +502,83 @@ func TestRunTaskRunsUsesClientAndRendersResult(t *testing.T) {
 		if !strings.Contains(output, want) {
 			t.Fatalf("output missing %q:\n%s", want, output)
 		}
+	}
+}
+
+func TestRunTaskRunsMaintenanceUsesClientAndRendersResults(t *testing.T) {
+	cases := []struct {
+		name       string
+		kind       commandKind
+		json       []byte
+		call       string
+		wantOutput []string
+	}{
+		{
+			name:       "reconcile",
+			kind:       commandRunsReconcile,
+			json:       []byte(`{"schema":"brevity.command-result.v1","command":"task runs reconcile","success":true,"severity":"info","payload":{"staleThresholdMinutes":30,"candidateCount":1,"candidates":[{"runId":"run-abc","slug":"my-task","stale":true,"incomplete":true,"workerStatus":"running"}]}}`),
+			call:       "task-runs-reconcile",
+			wantOutput: []string{"Task runs reconcile", "candidateCount: 1", "staleThresholdMinutes: 30", "- run-abc slug=my-task stale=true incomplete=true status=running"},
+		},
+		{
+			name:       "retention",
+			kind:       commandRunsRetention,
+			json:       []byte(`{"schema":"brevity.command-result.v1","command":"task runs retention","success":true,"severity":"info","payload":{"totalRecords":5,"validRecords":4,"invalidRecords":1,"incompleteRecords":2,"staleRecords":1,"staleThresholdMinutes":30,"topTasks":[{"slug":"my-task","records":3}]}}`),
+			call:       "task-runs-retention",
+			wantOutput: []string{"Task runs retention", "totalRecords: 5", "validRecords: 4", "invalidRecords: 1", "staleRecords: 1", "incompleteRecords: 2", "- my-task: 3"},
+		},
+		{
+			name:       "compact",
+			kind:       commandRunsCompact,
+			json:       []byte(`{"schema":"brevity.command-result.v1","command":"task runs compact","success":true,"severity":"info","payload":{"retainedRecordCount":4,"candidateArchiveSummaryCount":2,"candidateDiscardCount":1,"preservedStaleIncompleteCount":1,"preservedFailedCount":1}}`),
+			call:       "task-runs-compact",
+			wantOutput: []string{"Task runs compact", "retainedRecords: 4", "archiveSummaryCandidates: 2", "discardCandidates: 1", "preservedFailedRecords: 1", "preservedStaleIncompleteRecords: 1"},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			client := &fakeRuntimeClient{}
+			switch tc.kind {
+			case commandRunsReconcile:
+				client.runsReconcile = tc.json
+			case commandRunsRetention:
+				client.runsRetention = tc.json
+			case commandRunsCompact:
+				client.runsCompact = tc.json
+			}
+
+			var stdout bytes.Buffer
+			err := runWithOptions(&stdout, client, cliOptions{kind: tc.kind, dryRun: true})
+			if err != nil {
+				t.Fatalf("runWithOptions returned error: %v", err)
+			}
+			if len(client.calls) != 1 || client.calls[0] != tc.call {
+				t.Fatalf("calls = %#v, want %s only", client.calls, tc.call)
+			}
+			output := stdout.String()
+			for _, want := range tc.wantOutput {
+				if !strings.Contains(output, want) {
+					t.Fatalf("output missing %q:\n%s", want, output)
+				}
+			}
+		})
+	}
+}
+
+func TestRunTaskRunsMaintenanceFailsBeforeClientWithoutDryRun(t *testing.T) {
+	client := &fakeRuntimeClient{}
+
+	var stdout bytes.Buffer
+	err := runWithOptions(&stdout, client, cliOptions{kind: commandRunsReconcile})
+	if err == nil {
+		t.Fatal("runWithOptions returned nil error")
+	}
+	if !strings.Contains(err.Error(), "requires --dry-run") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(client.calls) != 0 {
+		t.Fatalf("calls = %#v, want no PowerShell calls", client.calls)
 	}
 }
 

@@ -18,6 +18,9 @@ type Client interface {
 	TaskNewJSON(slug string) ([]byte, error)
 	TaskRuntimeInfoJSON(slug string) ([]byte, error)
 	TaskRunsJSON(slug string) ([]byte, error)
+	TaskRunsReconcileJSON() ([]byte, error)
+	TaskRunsRetentionJSON() ([]byte, error)
+	TaskRunsCompactJSON() ([]byte, error)
 }
 
 type PowerShellClient struct {
@@ -62,6 +65,18 @@ func (client PowerShellClient) TaskRuntimeInfoJSON(slug string) ([]byte, error) 
 
 func (client PowerShellClient) TaskRunsJSON(slug string) ([]byte, error) {
 	return client.runJSON("task runs "+slug+" --json", "task", "runs", slug, "--json")
+}
+
+func (client PowerShellClient) TaskRunsReconcileJSON() ([]byte, error) {
+	return client.runJSON("task runs reconcile --dry-run --json", "task", "runs", "reconcile", "--dry-run", "--json")
+}
+
+func (client PowerShellClient) TaskRunsRetentionJSON() ([]byte, error) {
+	return client.runJSON("task runs retention --dry-run --json", "task", "runs", "retention", "--dry-run", "--json")
+}
+
+func (client PowerShellClient) TaskRunsCompactJSON() ([]byte, error) {
+	return client.runJSON("task runs compact --dry-run --json", "task", "runs", "compact", "--dry-run", "--json")
 }
 
 func (client PowerShellClient) runJSON(description string, args ...string) ([]byte, error) {

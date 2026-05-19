@@ -31,6 +31,9 @@ const (
 	commandTaskNew         commandKind = "task-new"
 	commandTaskRuntimeInfo commandKind = "task-runtime-info"
 	commandTaskRuns        commandKind = "task-runs"
+	commandRunsReconcile   commandKind = "task-runs-reconcile"
+	commandRunsRetention   commandKind = "task-runs-retention"
+	commandRunsCompact     commandKind = "task-runs-compact"
 )
 
 type cliOptions struct {
@@ -41,6 +44,7 @@ type cliOptions struct {
 	status   string
 	slug     string
 	force    bool
+	dryRun   bool
 }
 
 func parseOptions(args []string) (cliOptions, error) {
@@ -182,11 +186,45 @@ func parseTaskRuntimeInfoOptions(args []string) (cliOptions, error) {
 }
 
 func parseTaskRunsOptions(args []string) (cliOptions, error) {
+	if len(args) >= 3 && (args[2] == "reconcile" || args[2] == "retention" || args[2] == "compact") {
+		return parseTaskRunsMaintenanceOptions(args)
+	}
 	if len(args) != 3 || args[2] == "" {
 		return cliOptions{}, fmt.Errorf("usage: brevity task runs <slug>")
 	}
 
 	return cliOptions{kind: commandTaskRuns, slug: args[2]}, nil
+}
+
+func parseTaskRunsMaintenanceOptions(args []string) (cliOptions, error) {
+	if len(args) < 4 {
+		return cliOptions{}, fmt.Errorf("brevity task runs %s requires --dry-run", args[2])
+	}
+
+	options := cliOptions{dryRun: false}
+	switch args[2] {
+	case "reconcile":
+		options.kind = commandRunsReconcile
+	case "retention":
+		options.kind = commandRunsRetention
+	case "compact":
+		options.kind = commandRunsCompact
+	default:
+		return cliOptions{}, fmt.Errorf("unsupported task runs command %q", args[2])
+	}
+
+	for _, arg := range args[3:] {
+		if arg == "--dry-run" {
+			options.dryRun = true
+			continue
+		}
+		return cliOptions{}, fmt.Errorf("unknown argument for brevity task runs %s: %s", args[2], arg)
+	}
+	if !options.dryRun {
+		return cliOptions{}, fmt.Errorf("brevity task runs %s requires --dry-run", args[2])
+	}
+
+	return options, nil
 }
 
 func run(stdout io.Writer, args []string) error {
@@ -228,6 +266,9 @@ func runWithOptions(stdout io.Writer, client runtimeclient.Client, options cliOp
 	if options.kind == commandTaskRuns {
 		return runTaskRuns(stdout, client, options)
 	}
+	if options.kind == commandRunsReconcile || options.kind == commandRunsRetention || options.kind == commandRunsCompact {
+		return runTaskRunsMaintenance(stdout, client, options)
+	}
 
 	output, err := client.RuntimeStateJSON()
 	if err != nil {
@@ -241,6 +282,69 @@ func runWithOptions(stdout io.Writer, client runtimeclient.Client, options cliOp
 
 	dashboard.Render(stdout, state)
 	return nil
+}
+
+func runTaskRunsMaintenance(stdout io.Writer, client runtimeclient.Client, options cliOptions) error {
+	if !options.dryRun {
+		return fmt.Errorf("brevity %s requires --dry-run", maintenanceCommandName(options.kind))
+	}
+
+	var (
+		output []byte
+		err    error
+	)
+	switch options.kind {
+	case commandRunsReconcile:
+		output, err = client.TaskRunsReconcileJSON()
+	case commandRunsRetention:
+		output, err = client.TaskRunsRetentionJSON()
+	case commandRunsCompact:
+		output, err = client.TaskRunsCompactJSON()
+	default:
+		return fmt.Errorf("unsupported task runs maintenance command: %s", options.kind)
+	}
+
+	result, parseErr := contracts.ParseCommandResult(output)
+	if parseErr != nil {
+		if err != nil {
+			return fmt.Errorf("%v; additionally failed to parse command result: %w", err, parseErr)
+		}
+		return parseErr
+	}
+
+	var renderErr error
+	switch options.kind {
+	case commandRunsReconcile:
+		renderErr = actions.RenderTaskRunsReconcileResult(stdout, result)
+	case commandRunsRetention:
+		renderErr = actions.RenderTaskRunsRetentionResult(stdout, result)
+	case commandRunsCompact:
+		renderErr = actions.RenderTaskRunsCompactResult(stdout, result)
+	}
+	if renderErr != nil {
+		return renderErr
+	}
+	if err != nil {
+		return err
+	}
+	if !result.Success {
+		return fmt.Errorf("%s reported success=false", result.Command)
+	}
+
+	return nil
+}
+
+func maintenanceCommandName(kind commandKind) string {
+	switch kind {
+	case commandRunsReconcile:
+		return "task runs reconcile"
+	case commandRunsRetention:
+		return "task runs retention"
+	case commandRunsCompact:
+		return "task runs compact"
+	default:
+		return string(kind)
+	}
 }
 
 func runDoctor(stdout io.Writer, client runtimeclient.Client) error {
@@ -433,6 +537,9 @@ func writeUsage(stdout io.Writer) {
 	fmt.Fprintln(stdout, "  brevity task new <slug>")
 	fmt.Fprintln(stdout, "  brevity task runtime-info <slug>")
 	fmt.Fprintln(stdout, "  brevity task runs <slug>")
+	fmt.Fprintln(stdout, "  brevity task runs reconcile --dry-run")
+	fmt.Fprintln(stdout, "  brevity task runs retention --dry-run")
+	fmt.Fprintln(stdout, "  brevity task runs compact --dry-run")
 	fmt.Fprintln(stdout, "  brevity task cleanup <slug> --force")
 	fmt.Fprintln(stdout)
 	fmt.Fprintln(stdout, "The dashboard remains read-only. Mutating actions are dispatched")
