@@ -7,6 +7,7 @@ import (
 	"os"
 
 	"github.com/mortenlein/brevity/internal/actions"
+	"github.com/mortenlein/brevity/internal/commands"
 	"github.com/mortenlein/brevity/internal/contracts"
 	"github.com/mortenlein/brevity/internal/dashboard"
 	"github.com/mortenlein/brevity/internal/runtimeclient"
@@ -22,19 +23,19 @@ func main() {
 type commandKind string
 
 const (
-	commandDashboard       commandKind = "dashboard"
-	commandProviderSet     commandKind = "provider-set"
-	commandProviderReset   commandKind = "provider-reset"
-	commandContextRefresh  commandKind = "context-refresh"
-	commandDoctor          commandKind = "doctor"
-	commandTaskCleanup     commandKind = "task-cleanup"
-	commandTaskNew         commandKind = "task-new"
-	commandTaskRun         commandKind = "task-run"
-	commandTaskRuntimeInfo commandKind = "task-runtime-info"
-	commandTaskRuns        commandKind = "task-runs"
-	commandRunsReconcile   commandKind = "task-runs-reconcile"
-	commandRunsRetention   commandKind = "task-runs-retention"
-	commandRunsCompact     commandKind = "task-runs-compact"
+	commandDashboard       commandKind = commandKind(commands.DashboardID)
+	commandProviderSet     commandKind = commandKind(commands.ProviderSetID)
+	commandProviderReset   commandKind = commandKind(commands.ProviderResetID)
+	commandContextRefresh  commandKind = commandKind(commands.TaskContextRefreshID)
+	commandDoctor          commandKind = commandKind(commands.DoctorID)
+	commandTaskCleanup     commandKind = commandKind(commands.TaskCleanupID)
+	commandTaskNew         commandKind = commandKind(commands.TaskNewID)
+	commandTaskRun         commandKind = commandKind(commands.TaskRunID)
+	commandTaskRuntimeInfo commandKind = commandKind(commands.TaskRuntimeInfoID)
+	commandTaskRuns        commandKind = commandKind(commands.TaskRunsID)
+	commandRunsReconcile   commandKind = commandKind(commands.TaskRunsReconcileID)
+	commandRunsRetention   commandKind = commandKind(commands.TaskRunsRetentionID)
+	commandRunsCompact     commandKind = commandKind(commands.TaskRunsCompactID)
 )
 
 type cliOptions struct {
@@ -59,6 +60,10 @@ type actionSpec struct {
 	call   actionCall
 	render actionRenderer
 	check  actionCheck
+}
+
+func usageError(command commands.Command) error {
+	return fmt.Errorf("usage: %s", command.Usage)
 }
 
 func parseOptions(args []string) (cliOptions, error) {
@@ -100,7 +105,7 @@ func parseOptions(args []string) (cliOptions, error) {
 
 func parseDoctorOptions(args []string) (cliOptions, error) {
 	if len(args) != 1 {
-		return cliOptions{}, fmt.Errorf("usage: brevity doctor")
+		return cliOptions{}, usageError(commands.Doctor)
 	}
 
 	return cliOptions{kind: commandDoctor}, nil
@@ -115,14 +120,14 @@ func parseProviderOptions(args []string) (cliOptions, error) {
 	switch args[1] {
 	case "set":
 		if len(args) != 4 {
-			return cliOptions{}, fmt.Errorf("usage: brevity provider set <provider> <status>")
+			return cliOptions{}, usageError(commands.ProviderSet)
 		}
 		options.kind = commandProviderSet
 		options.provider = args[2]
 		options.status = args[3]
 	case "reset":
 		if len(args) != 3 {
-			return cliOptions{}, fmt.Errorf("usage: brevity provider reset <provider>")
+			return cliOptions{}, usageError(commands.ProviderReset)
 		}
 		options.kind = commandProviderReset
 		options.provider = args[2]
@@ -139,10 +144,10 @@ func parseTaskOptions(args []string) (cliOptions, error) {
 	}
 	if args[1] == "context" {
 		if len(args) != 4 || args[2] != "refresh" {
-			return cliOptions{}, fmt.Errorf("usage: brevity task context refresh <slug>")
+			return cliOptions{}, usageError(commands.TaskContextRefresh)
 		}
 		if args[3] == "" {
-			return cliOptions{}, fmt.Errorf("usage: brevity task context refresh <slug>")
+			return cliOptions{}, usageError(commands.TaskContextRefresh)
 		}
 
 		return cliOptions{kind: commandContextRefresh, slug: args[3]}, nil
@@ -168,7 +173,7 @@ func parseTaskOptions(args []string) (cliOptions, error) {
 
 func parseTaskNewOptions(args []string) (cliOptions, error) {
 	if len(args) != 3 || args[2] == "" {
-		return cliOptions{}, fmt.Errorf("usage: brevity task new <slug>")
+		return cliOptions{}, usageError(commands.TaskNew)
 	}
 
 	return cliOptions{kind: commandTaskNew, slug: args[2]}, nil
@@ -176,12 +181,12 @@ func parseTaskNewOptions(args []string) (cliOptions, error) {
 
 func parseTaskCleanupOptions(args []string) (cliOptions, error) {
 	if len(args) < 3 {
-		return cliOptions{}, fmt.Errorf("usage: brevity task cleanup <slug> --force")
+		return cliOptions{}, usageError(commands.TaskCleanup)
 	}
 
 	options := cliOptions{kind: commandTaskCleanup, slug: args[2]}
 	if options.slug == "" || options.slug == "--force" {
-		return cliOptions{}, fmt.Errorf("usage: brevity task cleanup <slug> --force")
+		return cliOptions{}, usageError(commands.TaskCleanup)
 	}
 
 	for _, arg := range args[3:] {
@@ -200,12 +205,12 @@ func parseTaskCleanupOptions(args []string) (cliOptions, error) {
 
 func parseTaskRunOptions(args []string) (cliOptions, error) {
 	if len(args) < 3 {
-		return cliOptions{}, fmt.Errorf("usage: brevity task run <slug> --execute [--profile <profile>] [--smoke]")
+		return cliOptions{}, usageError(commands.TaskRun)
 	}
 
 	options := cliOptions{kind: commandTaskRun, slug: args[2]}
 	if options.slug == "" || options.slug == "--execute" {
-		return cliOptions{}, fmt.Errorf("usage: brevity task run <slug> --execute [--profile <profile>] [--smoke]")
+		return cliOptions{}, usageError(commands.TaskRun)
 	}
 
 	for index := 3; index < len(args); index++ {
@@ -234,7 +239,7 @@ func parseTaskRunOptions(args []string) (cliOptions, error) {
 
 func parseTaskRuntimeInfoOptions(args []string) (cliOptions, error) {
 	if len(args) != 3 || args[2] == "" {
-		return cliOptions{}, fmt.Errorf("usage: brevity task runtime-info <slug>")
+		return cliOptions{}, usageError(commands.TaskRuntimeInfo)
 	}
 
 	return cliOptions{kind: commandTaskRuntimeInfo, slug: args[2]}, nil
@@ -245,7 +250,7 @@ func parseTaskRunsOptions(args []string) (cliOptions, error) {
 		return parseTaskRunsMaintenanceOptions(args)
 	}
 	if len(args) != 3 || args[2] == "" {
-		return cliOptions{}, fmt.Errorf("usage: brevity task runs <slug>")
+		return cliOptions{}, usageError(commands.TaskRuns)
 	}
 
 	return cliOptions{kind: commandTaskRuns, slug: args[2]}, nil
@@ -427,11 +432,11 @@ func runPowerShellAction(stdout io.Writer, spec actionSpec) error {
 func maintenanceCommandName(kind commandKind) string {
 	switch kind {
 	case commandRunsReconcile:
-		return "task runs reconcile"
+		return commands.TaskRunsReconcile.Name()
 	case commandRunsRetention:
-		return "task runs retention"
+		return commands.TaskRunsRetention.Name()
 	case commandRunsCompact:
-		return "task runs compact"
+		return commands.TaskRunsCompact.Name()
 	default:
 		return string(kind)
 	}
@@ -555,19 +560,9 @@ func writeUsage(stdout io.Writer) {
 	fmt.Fprintln(stdout, "Brevity Go Dashboard")
 	fmt.Fprintln(stdout)
 	fmt.Fprintln(stdout, "Usage:")
-	fmt.Fprintln(stdout, "  brevity [--once]")
-	fmt.Fprintln(stdout, "  brevity doctor")
-	fmt.Fprintln(stdout, "  brevity provider set <provider> <status>")
-	fmt.Fprintln(stdout, "  brevity provider reset <provider>")
-	fmt.Fprintln(stdout, "  brevity task context refresh <slug>")
-	fmt.Fprintln(stdout, "  brevity task new <slug>")
-	fmt.Fprintln(stdout, "  brevity task run <slug> --execute [--profile <profile>] [--smoke]")
-	fmt.Fprintln(stdout, "  brevity task runtime-info <slug>")
-	fmt.Fprintln(stdout, "  brevity task runs <slug>")
-	fmt.Fprintln(stdout, "  brevity task runs reconcile --dry-run")
-	fmt.Fprintln(stdout, "  brevity task runs retention --dry-run")
-	fmt.Fprintln(stdout, "  brevity task runs compact --dry-run")
-	fmt.Fprintln(stdout, "  brevity task cleanup <slug> --force")
+	for _, command := range commands.UsageCommands {
+		fmt.Fprintf(stdout, "  %s\n", command.Usage)
+	}
 	fmt.Fprintln(stdout)
 	fmt.Fprintln(stdout, "The dashboard remains read-only. Mutating actions are dispatched")
 	fmt.Fprintln(stdout, `through .\brevity.ps1 ... --json command-result contracts.`)

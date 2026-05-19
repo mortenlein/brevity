@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"os/exec"
 	"strings"
+
+	"github.com/mortenlein/brevity/internal/commands"
 )
 
 type Client interface {
@@ -37,32 +39,32 @@ func (client PowerShellClient) RuntimeStateJSON() ([]byte, error) {
 }
 
 func (client PowerShellClient) DoctorJSON() ([]byte, error) {
-	return client.runJSON("doctor --json", "doctor", "--json")
+	return client.runJSON(jsonDescription(commands.Doctor), commands.Doctor.JSONArgs()...)
 }
 
 func (client PowerShellClient) ProviderSetJSON(provider string, status string) ([]byte, error) {
-	return client.runJSON("provider set "+provider+" "+status+" --json", "provider", "set", provider, status, "--json")
+	return client.runJSON(jsonDescription(commands.ProviderSet, provider, status), commands.ProviderSet.JSONArgs(provider, status)...)
 }
 
 func (client PowerShellClient) ProviderResetJSON(provider string) ([]byte, error) {
-	return client.runJSON("provider reset "+provider+" --json", "provider", "reset", provider, "--json")
+	return client.runJSON(jsonDescription(commands.ProviderReset, provider), commands.ProviderReset.JSONArgs(provider)...)
 }
 
 func (client PowerShellClient) TaskContextRefreshJSON(slug string) ([]byte, error) {
-	return client.runJSON("task context refresh "+slug+" --json", "task", "context", "refresh", slug, "--json")
+	return client.runJSON(jsonDescription(commands.TaskContextRefresh, slug), commands.TaskContextRefresh.JSONArgs(slug)...)
 }
 
 func (client PowerShellClient) TaskCleanupJSON(slug string) ([]byte, error) {
-	return client.runJSON("task cleanup "+slug+" --force --json", "task", "cleanup", slug, "--force", "--json")
+	return client.runJSON(jsonDescription(commands.TaskCleanup, slug, "--force"), commands.TaskCleanup.JSONArgs(slug, "--force")...)
 }
 
 func (client PowerShellClient) TaskNewJSON(slug string) ([]byte, error) {
-	return client.runJSON("task new "+slug+" --json", "task", "new", slug, "--json")
+	return client.runJSON(jsonDescription(commands.TaskNew, slug), commands.TaskNew.JSONArgs(slug)...)
 }
 
 func (client PowerShellClient) TaskRunJSON(slug string, profile string, smoke bool) ([]byte, error) {
-	description := "task run " + slug + " --execute --json"
-	args := []string{"task", "run", slug, "--execute", "--json"}
+	description := jsonDescription(commands.TaskRun, slug, "--execute")
+	args := commands.TaskRun.JSONArgs(slug, "--execute")
 	if profile != "" {
 		description += " --profile " + profile
 		args = append(args, "--profile", profile)
@@ -75,23 +77,29 @@ func (client PowerShellClient) TaskRunJSON(slug string, profile string, smoke bo
 }
 
 func (client PowerShellClient) TaskRuntimeInfoJSON(slug string) ([]byte, error) {
-	return client.runJSON("task runtime-info "+slug+" --json", "task", "runtime-info", slug, "--json")
+	return client.runJSON(jsonDescription(commands.TaskRuntimeInfo, slug), commands.TaskRuntimeInfo.JSONArgs(slug)...)
 }
 
 func (client PowerShellClient) TaskRunsJSON(slug string) ([]byte, error) {
-	return client.runJSON("task runs "+slug+" --json", "task", "runs", slug, "--json")
+	return client.runJSON(jsonDescription(commands.TaskRuns, slug), commands.TaskRuns.JSONArgs(slug)...)
 }
 
 func (client PowerShellClient) TaskRunsReconcileJSON() ([]byte, error) {
-	return client.runJSON("task runs reconcile --dry-run --json", "task", "runs", "reconcile", "--dry-run", "--json")
+	return client.runJSON(jsonDescription(commands.TaskRunsReconcile, "--dry-run"), commands.TaskRunsReconcile.JSONArgs("--dry-run")...)
 }
 
 func (client PowerShellClient) TaskRunsRetentionJSON() ([]byte, error) {
-	return client.runJSON("task runs retention --dry-run --json", "task", "runs", "retention", "--dry-run", "--json")
+	return client.runJSON(jsonDescription(commands.TaskRunsRetention, "--dry-run"), commands.TaskRunsRetention.JSONArgs("--dry-run")...)
 }
 
 func (client PowerShellClient) TaskRunsCompactJSON() ([]byte, error) {
-	return client.runJSON("task runs compact --dry-run --json", "task", "runs", "compact", "--dry-run", "--json")
+	return client.runJSON(jsonDescription(commands.TaskRunsCompact, "--dry-run"), commands.TaskRunsCompact.JSONArgs("--dry-run")...)
+}
+
+func jsonDescription(command commands.Command, extra ...string) string {
+	parts := append([]string{command.Name()}, extra...)
+	parts = append(parts, "--json")
+	return strings.Join(parts, " ")
 }
 
 func (client PowerShellClient) runJSON(description string, args ...string) ([]byte, error) {

@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"strings"
 	"testing"
+
+	"github.com/mortenlein/brevity/internal/commands"
 )
 
 type fakeRuntimeClient struct {
@@ -327,21 +329,15 @@ func TestRunWritesHelp(t *testing.T) {
 	}
 
 	output := stdout.String()
-	for _, want := range []string{
+	wants := []string{
 		"dashboard remains read-only",
 		`.\brevity.ps1 ... --json`,
 		"--once",
-		"provider set <provider> <status>",
-		"task context refresh <slug>",
-		"task new <slug>",
-		"task run <slug> --execute",
-		"task runtime-info <slug>",
-		"task runs <slug>",
-		"task runs reconcile --dry-run",
-		"task runs retention --dry-run",
-		"task runs compact --dry-run",
-		"task cleanup <slug> --force",
-	} {
+	}
+	for _, command := range commands.UsageCommands {
+		wants = append(wants, command.Usage)
+	}
+	for _, want := range wants {
 		if !strings.Contains(output, want) {
 			t.Fatalf("help output missing %q:\n%s", want, output)
 		}
@@ -410,7 +406,7 @@ func TestParseOptionsRejectsTaskNewMissingSlug(t *testing.T) {
 	if err == nil {
 		t.Fatal("parseOptions returned nil error")
 	}
-	if !strings.Contains(err.Error(), "usage: brevity task new <slug>") {
+	if !strings.Contains(err.Error(), "usage: "+commands.TaskNew.Usage) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
