@@ -55,11 +55,18 @@ dashboard commands are:
 ```powershell
 go run ./cmd/brevity
 go run ./cmd/brevity --once
+go run ./cmd/brevity --watch
+go run ./cmd/brevity --watch --refresh 5s
 ```
 
 The dashboard invokes `.\brevity.ps1 runtime state --json`, validates the
 `brevity.runtime-state.v1` schema, and renders a plain dashboard from that
 PowerShell-produced snapshot.
+
+Watch mode keeps that same dashboard path read-only. It periodically polls the
+PowerShell runtime-state JSON contract, redraws the dashboard from the latest
+snapshot, and exits cleanly when interrupted with Ctrl+C. `--refresh` sets the
+polling interval using a Go duration such as `5s`.
 
 Current Go action commands route to PowerShell JSON contracts. They may cause
 PowerShell to perform the requested mutation or execution, but the Go client

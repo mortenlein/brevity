@@ -206,6 +206,8 @@ the PowerShell backend, not a replacement runtime:
 ```powershell
 go run ./cmd/brevity
 go run ./cmd/brevity --once
+go run ./cmd/brevity --watch
+go run ./cmd/brevity --watch --refresh 5s
 ```
 
 The dashboard reads the PowerShell-produced runtime-state contract:
@@ -213,6 +215,11 @@ The dashboard reads the PowerShell-produced runtime-state contract:
 ```powershell
 .\brevity.ps1 runtime state --json
 ```
+
+`--watch` keeps the read-only dashboard open and periodically polls
+`.\brevity.ps1 runtime state --json`; `--refresh` accepts a Go duration such as
+`5s` and controls the polling interval. Press Ctrl+C to stop watch mode; the Go
+client exits cleanly without mutating `.brevity` state.
 
 PowerShell remains the authoritative runtime backend and the source of truth for
 runtime state, command-result JSON contracts, worker lifecycle, cleanup, branch
