@@ -1737,10 +1737,23 @@ function Get-WorkerRunReconciliationCandidates {
 
 function Show-TaskRunsReconcile {
     param(
-        [bool]$DryRun = $false
+        [bool]$DryRun = $false,
+        [bool]$Json = $false
     )
 
     if (-not $DryRun) {
+        if ($Json) {
+            Write-CommandErrorResult `
+                -Command "task runs reconcile" `
+                -Code "dry-run-required" `
+                -Message "Refusing to reconcile worker runs without --dry-run." `
+                -Details ([pscustomobject]([ordered]@{
+                    usage = ".\brevity.ps1 task runs reconcile --dry-run --json"
+                    mutatesRunsIndex = $false
+                }))
+            exit 1
+        }
+
         Write-Host "Refusing to reconcile worker runs without --dry-run." -ForegroundColor Red
         Write-Host "Usage: .\brevity.ps1 task runs reconcile --dry-run"
         Write-Host "This command is currently report-only and does not mutate .brevity\runs.jsonl."
@@ -1749,6 +1762,39 @@ function Show-TaskRunsReconcile {
 
     $runsPath = Get-BrevityRunsIndexPath
     $candidates = @(Get-WorkerRunReconciliationCandidates -RunsPath $runsPath)
+
+    if ($Json) {
+        $jsonCandidates = @($candidates | ForEach-Object {
+            $candidate = $_
+            [pscustomobject]([ordered]@{
+                runId = $candidate.runId
+                slug = $candidate.slug
+                provider = $candidate.provider
+                profile = $candidate.profile
+                startedAt = $candidate.startedAt
+                runAgeMinutes = $candidate.ageMinutes
+                stale = $candidate.stale
+                incomplete = $candidate.incomplete
+                workerStatus = $candidate.workerStatus
+                logPath = $candidate.logPath
+                suggestedCommands = @(
+                    ".\brevity.ps1 task runs $($candidate.slug) --json",
+                    ".\brevity.ps1 runtime state --json"
+                )
+            })
+        })
+        $payload = [pscustomobject]([ordered]@{
+            staleThresholdMinutes = $script:BrevityWorkerRunStaleThresholdMinutes
+            candidateCount = $jsonCandidates.Count
+            candidates = $jsonCandidates
+        })
+        $suggestedNextActions = @("Inspect candidate logs.", "Rerun affected tasks if needed.", "Wait for a future reconcile mutation command before changing .brevity\runs.jsonl.")
+        if ($jsonCandidates.Count -eq 0) {
+            $suggestedNextActions = @("No stale or incomplete worker run reconciliation action is currently needed.")
+        }
+        Write-CommandResult -Command "task runs reconcile" -Success $true -Severity "info" -SuggestedNextActions $suggestedNextActions -Payload $payload
+        return
+    }
 
     Write-Host "Worker run reconciliation report"
     Write-Host "Mode: dry-run"
@@ -7320,7 +7366,7 @@ switch ($Command.ToLowerInvariant()) {
                         elseif ($taskArg -eq "--dry-run" -and $reconcile) {
                             $dryRun = $true
                         }
-                        elseif ($taskArg -eq "--json" -and -not $reconcile) {
+                        elseif ($taskArg -eq "--json") {
                             $jsonOutput = $true
                         }
                         elseif ([string]::IsNullOrWhiteSpace($taskSlug) -and -not $reconcile) {
@@ -7333,7 +7379,7 @@ switch ($Command.ToLowerInvariant()) {
                             else {
                                 Write-Host "Unknown argument for brevity task runs: $taskArg" -ForegroundColor Red
                                 Write-Host "Usage: .\brevity.ps1 task runs <slug> [--json]"
-                                Write-Host "Usage: .\brevity.ps1 task runs reconcile --dry-run"
+                                Write-Host "Usage: .\brevity.ps1 task runs reconcile --dry-run [--json]"
                             }
                             exit 1
                         }
@@ -7341,7 +7387,7 @@ switch ($Command.ToLowerInvariant()) {
                 }
 
                 if ($reconcile) {
-                    Show-TaskRunsReconcile -DryRun $dryRun
+                    Show-TaskRunsReconcile -DryRun $dryRun -Json $jsonOutput
                 }
                 else {
                     Show-TaskRuns -Slug $taskSlug -Json $jsonOutput
