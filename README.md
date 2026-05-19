@@ -214,6 +214,8 @@ Major sections include:
   Each task summary includes compact worker lifecycle fields such as
   `workerStatus`, `lastRunStartedAt`, `lastRunFinishedAt`, `lastExitCode`,
   `lastFailureType`, `lastLogPath`, `lastProvider`, and `lastProfile`.
+  Latest run summary is read from `.brevity\runs.jsonl` when available, with
+  worker log scanning retained as a fallback.
 - `groups` - task slug lists grouped by runtime classification.
 - `orphanedTaskWorktrees` - task-like active worktrees not tracked in runtime
   task metadata.

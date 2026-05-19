@@ -103,11 +103,10 @@ small tail of that log. Use `--tail <n>` to control the number of worker-log
 lines shown. If no worker log exists for the task, it reports the expected log
 folder cleanly. The command is read-only.
 
-`Brevity task runs <slug>` lists recent worker log files for one task, most
-recent first. It infers run id, exit code, provider, and profile from the log
-filename and header when available. Use `--json` for structured output. This is
-read-only visibility over `.brevity\logs\<slug>\*.log`; it does not create a
-durable run index.
+`Brevity task runs <slug>` lists recent worker runs for one task, most recent
+first. It prefers the append-only `.brevity\runs.jsonl` index when available and
+falls back to scanning `.brevity\logs\<slug>\*.log`. Worker logs remain the
+source of detailed output. Use `--json` for structured output.
 
 ### Runtime State JSON
 
@@ -141,6 +140,8 @@ The v1 snapshot includes these major sections:
   Each task summary includes compact worker lifecycle fields such as
   `workerStatus`, `lastRunStartedAt`, `lastRunFinishedAt`, `lastExitCode`,
   `lastFailureType`, `lastLogPath`, `lastProvider`, and `lastProfile`.
+  Latest run summary is read from `.brevity\runs.jsonl` when available, with
+  worker log scanning retained as a fallback.
 - `groups` - runtime task slug groups such as runnable, blocked, stale,
   provider-gated, and review.
 - `orphanedTaskWorktrees` - active task-like worktrees missing from

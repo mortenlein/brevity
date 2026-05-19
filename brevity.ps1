@@ -1118,6 +1118,95 @@ function New-WorkerRunId {
     return "run-$((Get-Date).ToUniversalTime().ToString("yyyyMMddTHHmmssfffZ"))-$([Guid]::NewGuid().ToString("N").Substring(0, 12))"
 }
 
+function Get-BrevityRunsIndexPath {
+    $repoRoot = Get-RepositoryRoot
+    return (Join-Path $repoRoot ".brevity\runs.jsonl")
+}
+
+function Invoke-RunsIndexLock {
+    param(
+        [scriptblock]$ScriptBlock,
+        [string]$RunsPath = ""
+    )
+
+    $runsPath = $RunsPath
+    if ([string]::IsNullOrWhiteSpace($runsPath)) {
+        $runsPath = Get-BrevityRunsIndexPath
+    }
+    $brevityRoot = Split-Path -Parent $runsPath
+    if (-not (Test-Path -LiteralPath $brevityRoot)) {
+        New-Item -ItemType Directory -Path $brevityRoot | Out-Null
+    }
+
+    $lockPath = Join-Path $brevityRoot "runs.lock"
+    $lockStream = $null
+
+    for ($attempt = 0; $attempt -lt 50; $attempt++) {
+        try {
+            $lockStream = [System.IO.File]::Open($lockPath, [System.IO.FileMode]::CreateNew, [System.IO.FileAccess]::Write, [System.IO.FileShare]::None)
+            $lockBytes = [System.Text.Encoding]::ASCII.GetBytes("pid=$PID utc=$((Get-Date).ToUniversalTime().ToString("o"))")
+            $lockStream.Write($lockBytes, 0, $lockBytes.Length)
+            $lockStream.Flush()
+            break
+        }
+        catch [System.IO.IOException] {
+            Start-Sleep -Milliseconds 100
+        }
+    }
+
+    if ($null -eq $lockStream) {
+        Write-Host "Unable to acquire run index lock: $lockPath" -ForegroundColor Red
+        Write-Host "Another Brevity process may be updating .brevity\runs.jsonl. Retry shortly, or inspect/remove the lock file if no Brevity process is running." -ForegroundColor Yellow
+        exit 1
+    }
+
+    try {
+        & $ScriptBlock
+    }
+    finally {
+        $lockStream.Dispose()
+        Remove-Item -LiteralPath $lockPath -Force -ErrorAction SilentlyContinue
+    }
+}
+
+function Write-WorkerRunIndexRecord {
+    param(
+        [string]$RunId,
+        [string]$Slug,
+        [string]$Provider,
+        [string]$Profile,
+        [string]$StartedAt,
+        [string]$FinishedAt,
+        [int]$ExitCode,
+        [string]$WorkerStatus,
+        [AllowNull()][string]$FailureType,
+        [string]$LogPath,
+        [string]$RunsPath = ""
+    )
+
+    $record = [pscustomobject]([ordered]@{
+        runId = $RunId
+        slug = $Slug
+        provider = $Provider
+        profile = $Profile
+        startedAt = $StartedAt
+        finishedAt = $FinishedAt
+        exitCode = $ExitCode
+        workerStatus = $WorkerStatus
+        failureType = $(if ([string]::IsNullOrWhiteSpace($FailureType)) { $null } else { $FailureType })
+        logPath = $LogPath
+    })
+
+    Invoke-RunsIndexLock -RunsPath $RunsPath -ScriptBlock {
+        $runsPath = $RunsPath
+        if ([string]::IsNullOrWhiteSpace($runsPath)) {
+            $runsPath = Get-BrevityRunsIndexPath
+        }
+        $jsonLine = $record | ConvertTo-Json -Compress -Depth 4
+        Add-Content -LiteralPath $runsPath -Value $jsonLine -Encoding ASCII
+    }
+}
+
 function Invoke-TaskMetadataLock {
     param(
         [string]$TasksPath,
@@ -1311,6 +1400,94 @@ function Get-TaskWorkerRunHistory {
         [int]$Count = 10
     )
 
+    $indexedRuns = @(Get-TaskWorkerRunHistoryFromIndex -Slug $Slug -Count $Count)
+    if ($indexedRuns.Count -gt 0) {
+        return $indexedRuns
+    }
+
+    return @(Get-TaskWorkerRunHistoryFromLogs -Slug $Slug -Count $Count)
+}
+
+function Get-TaskWorkerRunHistoryFromIndex {
+    param(
+        [string]$Slug,
+        [int]$Count = 10,
+        [string]$RunsPath = ""
+    )
+
+    $runsPath = $RunsPath
+    if ([string]::IsNullOrWhiteSpace($runsPath)) {
+        $runsPath = Get-BrevityRunsIndexPath
+    }
+    if (-not (Test-Path -LiteralPath $runsPath)) {
+        return @()
+    }
+
+    $runs = @()
+    $lines = @(Get-Content -LiteralPath $runsPath -ErrorAction SilentlyContinue)
+    foreach ($line in $lines) {
+        if ([string]::IsNullOrWhiteSpace($line)) {
+            continue
+        }
+
+        try {
+            $record = $line | ConvertFrom-Json
+        }
+        catch {
+            continue
+        }
+
+        if ($null -eq $record -or [string]$record.slug -ne $Slug) {
+            continue
+        }
+
+        $finishedAt = $null
+        if (Get-Member -InputObject $record -Name "finishedAt" -MemberType NoteProperty -ErrorAction SilentlyContinue) {
+            $finishedAt = $record.finishedAt
+        }
+
+        $lastWriteTimeUtc = $finishedAt
+        if ([string]::IsNullOrWhiteSpace([string]$lastWriteTimeUtc)) {
+            $lastWriteTimeUtc = $record.startedAt
+        }
+
+        $lastWriteTime = $lastWriteTimeUtc
+        if (-not [string]::IsNullOrWhiteSpace([string]$lastWriteTimeUtc)) {
+            try {
+                $lastWriteTime = ([datetime]::Parse([string]$lastWriteTimeUtc)).ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss")
+            }
+            catch {
+                $lastWriteTime = [string]$lastWriteTimeUtc
+            }
+        }
+
+        $runs += [pscustomobject]([ordered]@{
+            runId = $record.runId
+            logPath = $record.logPath
+            lastWriteTime = $lastWriteTime
+            lastWriteTimeUtc = $lastWriteTimeUtc
+            exitCode = $(if ($null -ne $record.exitCode) { [string]$record.exitCode } else { $null })
+            provider = $(if ($null -ne $record.provider) { [string]$record.provider } else { "" })
+            profile = $(if ($null -ne $record.profile) { [string]$record.profile } else { "" })
+            startedAt = $record.startedAt
+            finishedAt = $record.finishedAt
+            workerStatus = $record.workerStatus
+            failureType = $record.failureType
+            source = "index"
+        })
+    }
+
+    return @($runs |
+        Sort-Object @{ Expression = { [string]$_.lastWriteTimeUtc }; Descending = $true } |
+        Select-Object -First $Count)
+}
+
+function Get-TaskWorkerRunHistoryFromLogs {
+    param(
+        [string]$Slug,
+        [int]$Count = 10
+    )
+
     $repoRoot = Get-RepositoryRoot
     $taskLogsRoot = Join-Path (Join-Path $repoRoot ".brevity\logs") $Slug
 
@@ -1352,6 +1529,7 @@ function Get-TaskWorkerRunHistory {
             exitCode = $(if ($header.ContainsKey("ExitCode")) { [string]$header["ExitCode"] } else { $null })
             provider = $(if ($header.ContainsKey("Provider")) { [string]$header["Provider"] } else { "" })
             profile = $(if ($header.ContainsKey("Profile")) { [string]$header["Profile"] } else { "" })
+            source = "logs"
         })
     })
 }
@@ -1361,12 +1539,24 @@ function Get-TaskWorkerRunHistorySummary {
 
     $repoRoot = Get-RepositoryRoot
     $taskLogsRoot = Join-Path (Join-Path $repoRoot ".brevity\logs") $Slug
-    $runCount = 0
-    if (Test-Path -LiteralPath $taskLogsRoot) {
-        $runCount = @(Get-ChildItem -LiteralPath $taskLogsRoot -Filter "*.log" -File -ErrorAction SilentlyContinue).Count
+    $runsPath = Join-Path $repoRoot ".brevity\runs.jsonl"
+    $indexedRuns = @(Get-TaskWorkerRunHistoryFromIndex -Slug $Slug -Count ([int]::MaxValue) -RunsPath $runsPath)
+    $runCount = $indexedRuns.Count
+    $source = "index"
+    if ($runCount -eq 0) {
+        $source = "logs"
+        if (Test-Path -LiteralPath $taskLogsRoot) {
+            $runCount = @(Get-ChildItem -LiteralPath $taskLogsRoot -Filter "*.log" -File -ErrorAction SilentlyContinue).Count
+        }
     }
 
-    $latestRun = @(Get-TaskWorkerRunHistory -Slug $Slug -Count $script:BrevityRuntimeStateRunHistoryLatestScanLimit | Select-Object -First 1)
+    $latestRun = @()
+    if ($indexedRuns.Count -gt 0) {
+        $latestRun = @($indexedRuns | Select-Object -First 1)
+    }
+    else {
+        $latestRun = @(Get-TaskWorkerRunHistoryFromLogs -Slug $Slug -Count $script:BrevityRuntimeStateRunHistoryLatestScanLimit | Select-Object -First 1)
+    }
     if ($latestRun.Count -eq 0) {
         return [pscustomobject]@{
             runCount = $runCount
@@ -1376,6 +1566,7 @@ function Get-TaskWorkerRunHistorySummary {
             latestRunExitCode = $null
             latestRunProvider = $null
             latestRunProfile = $null
+            source = $source
         }
     }
 
@@ -1387,6 +1578,7 @@ function Get-TaskWorkerRunHistorySummary {
         latestRunExitCode = $latestRun[0].exitCode
         latestRunProvider = $latestRun[0].provider
         latestRunProfile = $latestRun[0].profile
+        source = $latestRun[0].source
     }
 }
 
@@ -2530,7 +2722,18 @@ function Get-TaskRuntimeExecutionInfo {
         }
     }
 
-    if (Test-Path -LiteralPath $taskLogsRoot) {
+    $latestIndexedRun = @(Get-TaskWorkerRunHistoryFromIndex -Slug $Slug -Count 1 -RunsPath (Join-Path $repoRoot ".brevity\runs.jsonl") | Select-Object -First 1)
+    if ($latestIndexedRun.Count -gt 0) {
+        $latestLog = [pscustomobject]@{ FullName = [string]$latestIndexedRun[0].logPath }
+        $lastRunId = $latestIndexedRun[0].runId
+        $lastRunStartedAt = $latestIndexedRun[0].startedAt
+        $lastRunFinishedAt = $latestIndexedRun[0].finishedAt
+        $lastExitCode = $latestIndexedRun[0].exitCode
+        $lastFailureType = $latestIndexedRun[0].failureType
+        $lastProvider = $latestIndexedRun[0].provider
+        $lastProfile = $latestIndexedRun[0].profile
+    }
+    elseif (Test-Path -LiteralPath $taskLogsRoot) {
         $latestLogFromDisk = Get-ChildItem -LiteralPath $taskLogsRoot -Filter "*.log" -File -ErrorAction SilentlyContinue |
             Sort-Object LastWriteTime -Descending |
             Select-Object -First 1
@@ -5515,6 +5718,7 @@ function Show-TaskRun {
                 ) + ($workerOutput | ForEach-Object { [string]$_ })
                 $logLines | Set-Content -LiteralPath $logPath -Encoding UTF8
                 Update-TaskWorkerLifecycle -TasksPath $tasksPath -Slug $Slug -StartedAt $runStartedAt -FinishedAt $runFinishedAt -ExitCode $exitCode -FailureType $failureKind -LogPath $logPath -Provider $workerCommand.provider -Profile $effectiveProfileName -RunId $runId
+                Write-WorkerRunIndexRecord -RunId $runId -Slug $Slug -Provider $workerCommand.provider -Profile $effectiveProfileName -StartedAt $runStartedAt -FinishedAt $runFinishedAt -ExitCode $exitCode -WorkerStatus "failed" -FailureType $failureKind -LogPath $logPath -RunsPath (Join-Path $repoRoot ".brevity\runs.jsonl")
 
                 if ($Json) {
                     $payload = [pscustomobject]([ordered]@{
@@ -5565,6 +5769,7 @@ function Show-TaskRun {
                 exit $exitCode
             }
             Update-TaskWorkerLifecycle -TasksPath $tasksPath -Slug $Slug -StartedAt $runStartedAt -FinishedAt $runFinishedAt -ExitCode $exitCode -FailureType $null -LogPath $logPath -Provider $workerCommand.provider -Profile $effectiveProfileName -RunId $runId
+            Write-WorkerRunIndexRecord -RunId $runId -Slug $Slug -Provider $workerCommand.provider -Profile $effectiveProfileName -StartedAt $runStartedAt -FinishedAt $runFinishedAt -ExitCode $exitCode -WorkerStatus "succeeded" -FailureType $null -LogPath $logPath -RunsPath (Join-Path $repoRoot ".brevity\runs.jsonl")
             if ($exitCode -eq 0 -and $workerCommand.provider -ne "smoke") {
                 Set-ProviderStatus `
                     -ProviderName $workerCommand.provider `
