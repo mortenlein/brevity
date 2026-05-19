@@ -83,9 +83,13 @@ func parseOptions(args []string) (cliOptions, error) {
 	flags := flag.NewFlagSet("brevity", flag.ContinueOnError)
 	flags.SetOutput(io.Discard)
 	flags.BoolVar(&options.once, "once", false, "render the dashboard once")
+	jsonSource := flags.String("json-source", "powershell", "runtime JSON source")
 
 	if err := flags.Parse(args); err != nil {
 		return cliOptions{}, err
+	}
+	if *jsonSource != "powershell" {
+		return cliOptions{}, fmt.Errorf("unsupported json source: %s", *jsonSource)
 	}
 	if flags.NArg() > 0 {
 		return cliOptions{}, fmt.Errorf("unexpected argument: %s", flags.Arg(0))
@@ -296,34 +300,23 @@ func runWithClient(stdout io.Writer, client runtimeclient.Client) error {
 }
 
 func runWithOptions(stdout io.Writer, client runtimeclient.Client, options cliOptions) error {
-	if options.kind == commandProviderSet || options.kind == commandProviderReset {
-		return runProviderAction(stdout, client, options)
+	switch options.kind {
+	case commandProviderSet, commandProviderReset:
+		return routeProviderCommand(stdout, client, options)
+	case commandContextRefresh:
+		return routeTaskContextCommand(stdout, client, options)
+	case commandDoctor:
+		return routeDoctorCommand(stdout, client)
+	case commandTaskCleanup, commandTaskNew, commandTaskRun, commandTaskRuntimeInfo:
+		return routeTaskCommand(stdout, client, options)
+	case commandTaskRuns, commandRunsReconcile, commandRunsRetention, commandRunsCompact:
+		return routeTaskRunsCommand(stdout, client, options)
+	default:
+		return routeDashboardCommand(stdout, client)
 	}
-	if options.kind == commandContextRefresh {
-		return runTaskContextRefresh(stdout, client, options)
-	}
-	if options.kind == commandDoctor {
-		return runDoctor(stdout, client)
-	}
-	if options.kind == commandTaskCleanup {
-		return runTaskCleanup(stdout, client, options)
-	}
-	if options.kind == commandTaskNew {
-		return runTaskNew(stdout, client, options)
-	}
-	if options.kind == commandTaskRun {
-		return runTaskRun(stdout, client, options)
-	}
-	if options.kind == commandTaskRuntimeInfo {
-		return runTaskRuntimeInfo(stdout, client, options)
-	}
-	if options.kind == commandTaskRuns {
-		return runTaskRuns(stdout, client, options)
-	}
-	if options.kind == commandRunsReconcile || options.kind == commandRunsRetention || options.kind == commandRunsCompact {
-		return runTaskRunsMaintenance(stdout, client, options)
-	}
+}
 
+func routeDashboardCommand(stdout io.Writer, client runtimeclient.Client) error {
 	output, err := client.RuntimeStateJSON()
 	if err != nil {
 		return err
@@ -336,6 +329,44 @@ func runWithOptions(stdout io.Writer, client runtimeclient.Client, options cliOp
 
 	dashboard.Render(stdout, state)
 	return nil
+}
+
+func routeProviderCommand(stdout io.Writer, client runtimeclient.Client, options cliOptions) error {
+	return runProviderAction(stdout, client, options)
+}
+
+func routeTaskCommand(stdout io.Writer, client runtimeclient.Client, options cliOptions) error {
+	switch options.kind {
+	case commandTaskCleanup:
+		return runTaskCleanup(stdout, client, options)
+	case commandTaskNew:
+		return runTaskNew(stdout, client, options)
+	case commandTaskRun:
+		return runTaskRun(stdout, client, options)
+	case commandTaskRuntimeInfo:
+		return runTaskRuntimeInfo(stdout, client, options)
+	default:
+		return fmt.Errorf("unsupported task command: %s", options.kind)
+	}
+}
+
+func routeTaskContextCommand(stdout io.Writer, client runtimeclient.Client, options cliOptions) error {
+	return runTaskContextRefresh(stdout, client, options)
+}
+
+func routeTaskRunsCommand(stdout io.Writer, client runtimeclient.Client, options cliOptions) error {
+	switch options.kind {
+	case commandTaskRuns:
+		return runTaskRuns(stdout, client, options)
+	case commandRunsReconcile, commandRunsRetention, commandRunsCompact:
+		return runTaskRunsMaintenance(stdout, client, options)
+	default:
+		return fmt.Errorf("unsupported task runs command: %s", options.kind)
+	}
+}
+
+func routeDoctorCommand(stdout io.Writer, client runtimeclient.Client) error {
+	return runDoctor(stdout, client)
 }
 
 func runTaskRunsMaintenance(stdout io.Writer, client runtimeclient.Client, options cliOptions) error {
