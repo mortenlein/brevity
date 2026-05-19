@@ -116,6 +116,18 @@ func TestParseGitWorktreePorcelain(t *testing.T) {
 	}
 }
 
+func TestParseGitBranchOutput(t *testing.T) {
+	output := "main\n task/alpha \n* task/beta\n\nmain\n"
+
+	branches := parseGitBranchOutput(output)
+	if len(branches) != 3 {
+		t.Fatalf("branches = %#v, want three unique branches", branches)
+	}
+	if branches[0] != "main" || branches[1] != "task/alpha" || branches[2] != "task/beta" {
+		t.Fatalf("branches = %#v, want sorted parsed branch names", branches)
+	}
+}
+
 func TestOrphanedTaskWorktreesDetectsTaskBranchesWithoutMetadata(t *testing.T) {
 	worktrees := []contracts.WorktreeRecord{
 		{Path: "C:/repo", Branch: "main"},
@@ -163,6 +175,79 @@ func TestOrphanedTaskWorktreesIgnoresMatchingMetadata(t *testing.T) {
 	}
 	if orphaned[0].Branch != "task/other" {
 		t.Fatalf("orphaned branch = %q, want task/other", orphaned[0].Branch)
+	}
+}
+
+func TestOrphanedTaskBranchesExcludesCheckedOutBranches(t *testing.T) {
+	worktrees := []contracts.WorktreeRecord{
+		{Path: "C:/repo/worktrees/active/checked-out", Branch: "task/checked-out"},
+	}
+	branches := []string{"main", "task/checked-out", "task/lost"}
+
+	orphaned := orphanedTaskBranches(nil, worktrees, branches)
+	if len(orphaned) != 1 {
+		t.Fatalf("orphaned = %#v, want one branch", orphaned)
+	}
+	if orphaned[0].Branch != "task/lost" {
+		t.Fatalf("orphaned branch = %q, want task/lost", orphaned[0].Branch)
+	}
+}
+
+func TestOrphanedTaskBranchesExcludesMatchingTaskMetadata(t *testing.T) {
+	tasks := []contracts.TaskSummary{
+		{Slug: "known", Branch: "task/known"},
+		{Slug: "nested", Worktree: &contracts.TaskWorktree{Branch: "task/nested"}},
+	}
+	branches := []string{"task/known", "task/nested", "task/lost", "feature/other"}
+
+	orphaned := orphanedTaskBranches(tasks, nil, branches)
+	if len(orphaned) != 1 {
+		t.Fatalf("orphaned = %#v, want one branch", orphaned)
+	}
+	if orphaned[0].Branch != "task/lost" {
+		t.Fatalf("orphaned branch = %q, want task/lost", orphaned[0].Branch)
+	}
+}
+
+func TestCleanupCandidatesForOrphanedTaskBranches(t *testing.T) {
+	candidates := cleanupCandidatesForOrphanedTaskBranches([]contracts.WorktreeRecord{
+		{Branch: "task/lost"},
+	})
+	if len(candidates) != 1 {
+		t.Fatalf("candidates = %#v, want one candidate", candidates)
+	}
+	candidate := candidates[0]
+	if candidate.ID != "orphan-branch:task-lost" {
+		t.Fatalf("candidate ID = %q, want orphan-branch:task-lost", candidate.ID)
+	}
+	if candidate.Category != "destructive-if-removed" || candidate.Severity != "warning" {
+		t.Fatalf("candidate classification = %s/%s, want warning/destructive-if-removed", candidate.Severity, candidate.Category)
+	}
+	if candidate.DestructiveIfUnmerged == nil || !*candidate.DestructiveIfUnmerged {
+		t.Fatalf("DestructiveIfUnmerged = %#v, want true", candidate.DestructiveIfUnmerged)
+	}
+	if len(candidate.SuggestedCommands) != 1 || candidate.SuggestedCommands[0] != "git branch -D task/lost" {
+		t.Fatalf("SuggestedCommands = %#v, want branch deletion guidance", candidate.SuggestedCommands)
+	}
+}
+
+func TestCleanupSummaryIncludesOrphanedTaskBranches(t *testing.T) {
+	worktreeCandidates := cleanupCandidatesForOrphanedTaskWorktrees([]contracts.WorktreeRecord{
+		{Path: "C:/repo/worktrees/active/lost", Branch: "task/lost-worktree"},
+	})
+	branchCandidates := cleanupCandidatesForOrphanedTaskBranches([]contracts.WorktreeRecord{
+		{Branch: "task/lost-branch"},
+	})
+
+	summary := cleanupSummary(worktreeCandidates, branchCandidates)
+	if summary.TotalCandidates != 2 {
+		t.Fatalf("TotalCandidates = %d, want 2", summary.TotalCandidates)
+	}
+	if summary.OrphanedTaskWorktreeCount != 1 || summary.OrphanedTaskBranchCount != 1 {
+		t.Fatalf("orphan counts = worktrees %d branches %d, want 1/1", summary.OrphanedTaskWorktreeCount, summary.OrphanedTaskBranchCount)
+	}
+	if summary.ByCategory["destructive-if-removed"] != 1 {
+		t.Fatalf("ByCategory = %#v, want one destructive-if-removed", summary.ByCategory)
 	}
 }
 

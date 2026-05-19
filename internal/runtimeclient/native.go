@@ -101,14 +101,20 @@ func (client NativeClient) RuntimeState() (contracts.RuntimeState, error) {
 		state.ActiveWorktrees = worktrees
 		state.ActiveWorktreeCount = len(worktrees)
 		state.OrphanedTaskWorktrees = orphanedTaskWorktrees(tasks, worktrees)
-		if len(state.OrphanedTaskWorktrees) > 0 {
-			candidates := cleanupCandidatesForOrphanedTaskWorktrees(state.OrphanedTaskWorktrees)
+		branches, err := readGitBranches(repoRoot)
+		if err != nil {
+			state.SuggestedNextActions = append(state.SuggestedNextActions, fmt.Sprintf("Native branch scan skipped: %v.", err))
+		}
+		orphanedBranches := orphanedTaskBranches(tasks, worktrees, branches)
+		worktreeCandidates := cleanupCandidatesForOrphanedTaskWorktrees(state.OrphanedTaskWorktrees)
+		branchCandidates := cleanupCandidatesForOrphanedTaskBranches(orphanedBranches)
+		if len(worktreeCandidates)+len(branchCandidates) > 0 {
 			state.Cleanup = &contracts.Cleanup{
-				Summary:               cleanupSummary(candidates),
-				OrphanedTaskWorktrees: candidates,
-				OrphanedTaskBranches:  []contracts.CleanupCandidate{},
+				Summary:               cleanupSummary(worktreeCandidates, branchCandidates),
+				OrphanedTaskWorktrees: worktreeCandidates,
+				OrphanedTaskBranches:  branchCandidates,
 			}
-			state.SuggestedNextActions = append(state.SuggestedNextActions, "Review native orphaned task worktree findings with PowerShell before cleanup; native Go remains read-only.")
+			state.SuggestedNextActions = append(state.SuggestedNextActions, "Review native orphaned task cleanup findings with PowerShell before cleanup; native Go remains read-only.")
 		}
 	}
 
@@ -233,6 +239,34 @@ func readGitWorktrees(repoRoot string) ([]contracts.WorktreeRecord, error) {
 	return parseGitWorktreePorcelain(string(output)), nil
 }
 
+func readGitBranches(repoRoot string) ([]string, error) {
+	command := exec.Command("git", "branch", "--format", "%(refname:short)")
+	command.Dir = repoRoot
+	output, err := command.Output()
+	if err != nil {
+		return nil, fmt.Errorf("git branch --format %q failed: %w", "%(refname:short)", err)
+	}
+	return parseGitBranchOutput(string(output)), nil
+}
+
+func parseGitBranchOutput(output string) []string {
+	seen := map[string]bool{}
+	var branches []string
+	scanner := bufio.NewScanner(strings.NewReader(output))
+	for scanner.Scan() {
+		branch := strings.TrimSpace(scanner.Text())
+		branch = strings.TrimPrefix(branch, "*")
+		branch = strings.TrimSpace(branch)
+		if branch == "" || seen[branch] {
+			continue
+		}
+		seen[branch] = true
+		branches = append(branches, branch)
+	}
+	sort.Strings(branches)
+	return branches
+}
+
 func parseGitWorktreePorcelain(output string) []contracts.WorktreeRecord {
 	var records []contracts.WorktreeRecord
 	var current contracts.WorktreeRecord
@@ -308,6 +342,37 @@ func orphanedTaskWorktrees(tasks []contracts.TaskSummary, worktrees []contracts.
 	return orphaned
 }
 
+func orphanedTaskBranches(tasks []contracts.TaskSummary, worktrees []contracts.WorktreeRecord, branches []string) []contracts.WorktreeRecord {
+	metadataBranches := map[string]bool{}
+	for _, task := range tasks {
+		addMetadataValue(metadataBranches, task.Branch)
+		if task.Worktree != nil {
+			addMetadataValue(metadataBranches, task.Worktree.Branch)
+		}
+	}
+
+	checkedOutBranches := map[string]bool{}
+	for _, worktree := range worktrees {
+		addMetadataValue(checkedOutBranches, worktree.Branch)
+	}
+
+	var orphaned []contracts.WorktreeRecord
+	for _, branch := range branches {
+		branch = strings.TrimSpace(branch)
+		if !strings.HasPrefix(branch, "task/") {
+			continue
+		}
+		if checkedOutBranches[branch] || metadataBranches[branch] {
+			continue
+		}
+		orphaned = append(orphaned, contracts.WorktreeRecord{Branch: branch})
+	}
+	sort.Slice(orphaned, func(i, j int) bool {
+		return orphaned[i].Branch < orphaned[j].Branch
+	})
+	return orphaned
+}
+
 func addMetadataValue(values map[string]bool, value string) {
 	value = strings.TrimSpace(value)
 	if value != "" {
@@ -342,19 +407,43 @@ func cleanupCandidatesForOrphanedTaskWorktrees(worktrees []contracts.WorktreeRec
 	return candidates
 }
 
-func cleanupSummary(candidates []contracts.CleanupCandidate) *contracts.CleanupSummary {
+func cleanupCandidatesForOrphanedTaskBranches(branches []contracts.WorktreeRecord) []contracts.CleanupCandidate {
+	candidates := make([]contracts.CleanupCandidate, 0, len(branches))
+	destructiveIfUnmerged := true
+	for _, branch := range branches {
+		candidates = append(candidates, contracts.CleanupCandidate{
+			ID:                    "orphan-branch:" + cleanupSafeID(branch.Branch, ""),
+			Severity:              "warning",
+			Category:              "destructive-if-removed",
+			Branch:                branch.Branch,
+			SuggestedCommands:     []string{fmt.Sprintf("git branch -D %s", quoteCommandArg(branch.Branch))},
+			DestructiveIfUnmerged: &destructiveIfUnmerged,
+		})
+	}
+	return candidates
+}
+
+func cleanupSummary(worktreeCandidates []contracts.CleanupCandidate, branchCandidates []contracts.CleanupCandidate) *contracts.CleanupSummary {
 	bySeverity := map[string]int{}
 	byCategory := map[string]int{}
+	candidates := append([]contracts.CleanupCandidate{}, worktreeCandidates...)
+	candidates = append(candidates, branchCandidates...)
 	for _, candidate := range candidates {
 		bySeverity[candidate.Severity]++
 		byCategory[candidate.Category]++
 	}
+	removableByExecuteCount := 0
+	for _, candidate := range candidates {
+		if candidate.RemovableByExecute != nil && *candidate.RemovableByExecute {
+			removableByExecuteCount++
+		}
+	}
 	return &contracts.CleanupSummary{
-		TotalCandidates:           len(candidates),
+		TotalCandidates:           len(worktreeCandidates) + len(branchCandidates),
 		RequiresInspectionCount:   byCategory["requires-inspection"],
-		RemovableByExecuteCount:   0,
-		OrphanedTaskWorktreeCount: len(candidates),
-		OrphanedTaskBranchCount:   0,
+		RemovableByExecuteCount:   removableByExecuteCount,
+		OrphanedTaskWorktreeCount: len(worktreeCandidates),
+		OrphanedTaskBranchCount:   len(branchCandidates),
 		BySeverity:                bySeverity,
 		ByCategory:                byCategory,
 	}
