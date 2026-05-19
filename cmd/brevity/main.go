@@ -14,15 +14,15 @@ import (
 const runtimeStateSchema = "brevity.runtime-state.v1"
 
 type runtimeState struct {
-	Schema               string            `json:"schema"`
-	RepoRoot             string            `json:"repoRoot"`
-	GeneratedAt          string            `json:"generatedAt"`
-	Providers            providers         `json:"providers"`
-	TaskCounts           taskCounts        `json:"taskCounts"`
-	Cleanup              *cleanup          `json:"cleanup,omitempty"`
-	SuggestedNextActions []string          `json:"suggestedNextActions"`
-	Groups               map[string]any    `json:"groups"`
-	Extras               map[string]any    `json:"-"`
+	Schema               string         `json:"schema"`
+	RepoRoot             string         `json:"repoRoot"`
+	GeneratedAt          string         `json:"generatedAt"`
+	Providers            providers      `json:"providers"`
+	TaskCounts           taskCounts     `json:"taskCounts"`
+	Cleanup              *cleanup       `json:"cleanup,omitempty"`
+	SuggestedNextActions []string       `json:"suggestedNextActions"`
+	Groups               map[string]any `json:"groups"`
+	Extras               map[string]any `json:"-"`
 }
 
 type providers struct {
