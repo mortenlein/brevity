@@ -21,6 +21,7 @@ $script:BrevityRuntimeStateJsonMaxDepth = 8
 $script:BrevityRuntimeStateJsonMaxEntries = 200
 $script:BrevityRuntimeStateRunHistoryLatestScanLimit = 1
 $script:BrevityRuntimeStateLogHeaderLineLimit = 40
+$script:BrevityWorkerRunStaleThresholdMinutes = 30
 
 function Write-CommandResult {
     param(
@@ -1207,6 +1208,89 @@ function Write-WorkerRunIndexRecord {
     }
 }
 
+function Get-WorkerRunRecordProperty {
+    param(
+        [object]$Record,
+        [string]$Name
+    )
+
+    if ($null -eq $Record -or [string]::IsNullOrWhiteSpace($Name)) {
+        return $null
+    }
+
+    $property = $Record.PSObject.Properties[$Name]
+    if ($null -eq $property) {
+        return $null
+    }
+
+    return $property.Value
+}
+
+function Resolve-WorkerRunIndexStatus {
+    param(
+        [object]$Record,
+        [datetime]$NowUtc = (Get-Date).ToUniversalTime()
+    )
+
+    $startedAt = Get-WorkerRunRecordProperty -Record $Record -Name "startedAt"
+    $finishedAt = Get-WorkerRunRecordProperty -Record $Record -Name "finishedAt"
+    $workerStatus = [string](Get-WorkerRunRecordProperty -Record $Record -Name "workerStatus")
+    $normalizedStatus = $workerStatus
+    $incomplete = $false
+    $stale = $false
+    $ageMinutes = $null
+
+    if ([string]::IsNullOrWhiteSpace([string]$finishedAt)) {
+        $incomplete = $true
+        if ([string]::IsNullOrWhiteSpace($normalizedStatus)) {
+            $normalizedStatus = "running-unknown"
+        }
+        elseif ($normalizedStatus -notin @("running", "running-unknown", "incomplete", "stale")) {
+            $normalizedStatus = "incomplete"
+        }
+
+        if (-not [string]::IsNullOrWhiteSpace([string]$startedAt)) {
+            try {
+                $startedAtUtc = ([System.DateTimeOffset]::Parse([string]$startedAt, [System.Globalization.CultureInfo]::InvariantCulture)).UtcDateTime
+                $ageMinutes = [Math]::Round((New-TimeSpan -Start $startedAtUtc -End $NowUtc).TotalMinutes, 2)
+                if ($ageMinutes -ge $script:BrevityWorkerRunStaleThresholdMinutes) {
+                    $stale = $true
+                    $normalizedStatus = "stale"
+                }
+            }
+            catch {
+                if ($normalizedStatus -eq "running") {
+                    $normalizedStatus = "running-unknown"
+                }
+            }
+        }
+        elseif ($normalizedStatus -eq "running") {
+            $normalizedStatus = "running-unknown"
+        }
+    }
+    elseif ([string]::IsNullOrWhiteSpace($normalizedStatus)) {
+        $exitCode = Get-WorkerRunRecordProperty -Record $Record -Name "exitCode"
+        if ($null -ne $exitCode -and [string]$exitCode -eq "0") {
+            $normalizedStatus = "succeeded"
+        }
+        elseif ($null -ne $exitCode) {
+            $normalizedStatus = "failed"
+        }
+        else {
+            $normalizedStatus = "completed"
+        }
+    }
+
+    return [pscustomobject]([ordered]@{
+        workerStatus = $normalizedStatus
+        recordedWorkerStatus = $(if ([string]::IsNullOrWhiteSpace($workerStatus)) { $null } else { $workerStatus })
+        incomplete = $incomplete
+        stale = $stale
+        ageMinutes = $ageMinutes
+        staleThresholdMinutes = $script:BrevityWorkerRunStaleThresholdMinutes
+    })
+}
+
 function Invoke-TaskMetadataLock {
     param(
         [string]$TasksPath,
@@ -1437,18 +1521,17 @@ function Get-TaskWorkerRunHistoryFromIndex {
             continue
         }
 
-        if ($null -eq $record -or [string]$record.slug -ne $Slug) {
+        if ($null -eq $record -or [string](Get-WorkerRunRecordProperty -Record $record -Name "slug") -ne $Slug) {
             continue
         }
 
-        $finishedAt = $null
-        if (Get-Member -InputObject $record -Name "finishedAt" -MemberType NoteProperty -ErrorAction SilentlyContinue) {
-            $finishedAt = $record.finishedAt
-        }
+        $runState = Resolve-WorkerRunIndexStatus -Record $record
+        $finishedAt = Get-WorkerRunRecordProperty -Record $record -Name "finishedAt"
+        $startedAt = Get-WorkerRunRecordProperty -Record $record -Name "startedAt"
 
         $lastWriteTimeUtc = $finishedAt
         if ([string]::IsNullOrWhiteSpace([string]$lastWriteTimeUtc)) {
-            $lastWriteTimeUtc = $record.startedAt
+            $lastWriteTimeUtc = $startedAt
         }
 
         $lastWriteTime = $lastWriteTimeUtc
@@ -1462,17 +1545,22 @@ function Get-TaskWorkerRunHistoryFromIndex {
         }
 
         $runs += [pscustomobject]([ordered]@{
-            runId = $record.runId
-            logPath = $record.logPath
+            runId = Get-WorkerRunRecordProperty -Record $record -Name "runId"
+            logPath = Get-WorkerRunRecordProperty -Record $record -Name "logPath"
             lastWriteTime = $lastWriteTime
             lastWriteTimeUtc = $lastWriteTimeUtc
-            exitCode = $(if ($null -ne $record.exitCode) { [string]$record.exitCode } else { $null })
-            provider = $(if ($null -ne $record.provider) { [string]$record.provider } else { "" })
-            profile = $(if ($null -ne $record.profile) { [string]$record.profile } else { "" })
-            startedAt = $record.startedAt
-            finishedAt = $record.finishedAt
-            workerStatus = $record.workerStatus
-            failureType = $record.failureType
+            exitCode = $(if ($null -ne (Get-WorkerRunRecordProperty -Record $record -Name "exitCode")) { [string](Get-WorkerRunRecordProperty -Record $record -Name "exitCode") } else { $null })
+            provider = $(if ($null -ne (Get-WorkerRunRecordProperty -Record $record -Name "provider")) { [string](Get-WorkerRunRecordProperty -Record $record -Name "provider") } else { "" })
+            profile = $(if ($null -ne (Get-WorkerRunRecordProperty -Record $record -Name "profile")) { [string](Get-WorkerRunRecordProperty -Record $record -Name "profile") } else { "" })
+            startedAt = $startedAt
+            finishedAt = $finishedAt
+            workerStatus = $runState.workerStatus
+            recordedWorkerStatus = $runState.recordedWorkerStatus
+            incomplete = $runState.incomplete
+            stale = $runState.stale
+            runAgeMinutes = $runState.ageMinutes
+            staleThresholdMinutes = $runState.staleThresholdMinutes
+            failureType = Get-WorkerRunRecordProperty -Record $record -Name "failureType"
             source = "index"
         })
     }
@@ -1566,6 +1654,11 @@ function Get-TaskWorkerRunHistorySummary {
             latestRunExitCode = $null
             latestRunProvider = $null
             latestRunProfile = $null
+            latestRunWorkerStatus = $null
+            latestRunIncomplete = $false
+            latestRunStale = $false
+            latestRunAgeMinutes = $null
+            staleThresholdMinutes = $script:BrevityWorkerRunStaleThresholdMinutes
             source = $source
         }
     }
@@ -1578,6 +1671,11 @@ function Get-TaskWorkerRunHistorySummary {
         latestRunExitCode = $latestRun[0].exitCode
         latestRunProvider = $latestRun[0].provider
         latestRunProfile = $latestRun[0].profile
+        latestRunWorkerStatus = $(if ($null -ne $latestRun[0].PSObject.Properties["workerStatus"]) { $latestRun[0].workerStatus } else { $null })
+        latestRunIncomplete = $(if ($null -ne $latestRun[0].PSObject.Properties["incomplete"]) { $latestRun[0].incomplete } else { $false })
+        latestRunStale = $(if ($null -ne $latestRun[0].PSObject.Properties["stale"]) { $latestRun[0].stale } else { $false })
+        latestRunAgeMinutes = $(if ($null -ne $latestRun[0].PSObject.Properties["runAgeMinutes"]) { $latestRun[0].runAgeMinutes } else { $null })
+        staleThresholdMinutes = $script:BrevityWorkerRunStaleThresholdMinutes
         source = $latestRun[0].source
     }
 }
@@ -1627,6 +1725,7 @@ function Show-TaskRuns {
     foreach ($run in $runs) {
         $runId = if ([string]::IsNullOrWhiteSpace([string]$run.runId)) { "(unknown runId)" } else { [string]$run.runId }
         $exitCode = if ($null -eq $run.exitCode -or [string]::IsNullOrWhiteSpace([string]$run.exitCode)) { "exit ?" } else { "exit $($run.exitCode)" }
+        $workerStatus = if ($null -ne $run.PSObject.Properties["workerStatus"] -and -not [string]::IsNullOrWhiteSpace([string]$run.workerStatus)) { [string]$run.workerStatus } else { "status ?" }
         $providerProfile = if ([string]::IsNullOrWhiteSpace([string]$run.provider)) { "" } else { [string]$run.provider }
         if (-not [string]::IsNullOrWhiteSpace($providerProfile) -and -not [string]::IsNullOrWhiteSpace([string]$run.profile)) {
             $providerProfile = "$providerProfile/$($run.profile)"
@@ -1638,7 +1737,13 @@ function Show-TaskRuns {
             $providerProfile = "provider ?"
         }
 
-        Write-Host "$($run.lastWriteTime)  $runId  $exitCode  $providerProfile"
+        Write-Host "$($run.lastWriteTime)  $runId  $workerStatus  $exitCode  $providerProfile"
+        if ($null -ne $run.PSObject.Properties["stale"] -and $run.stale) {
+            Write-Host "  stale: unfinished for $($run.runAgeMinutes) minute(s); threshold $($run.staleThresholdMinutes) minute(s)" -ForegroundColor Yellow
+        }
+        elseif ($null -ne $run.PSObject.Properties["incomplete"] -and $run.incomplete) {
+            Write-Host "  incomplete: unfinished run record" -ForegroundColor Yellow
+        }
         Write-Host "  $($run.logPath)"
     }
 }
@@ -2695,6 +2800,7 @@ function Get-TaskRuntimeExecutionInfo {
     $lastProvider = $null
     $lastProfile = $null
     $lastRunId = $null
+    $indexedWorkerStatus = $null
 
     if ($null -ne $Task -and (Get-Member -InputObject $Task -Name "workerLifecycle" -MemberType NoteProperty -ErrorAction SilentlyContinue)) {
         $lifecycle = $Task.workerLifecycle
@@ -2732,6 +2838,7 @@ function Get-TaskRuntimeExecutionInfo {
         $lastFailureType = $latestIndexedRun[0].failureType
         $lastProvider = $latestIndexedRun[0].provider
         $lastProfile = $latestIndexedRun[0].profile
+        $indexedWorkerStatus = $latestIndexedRun[0].workerStatus
     }
     elseif (Test-Path -LiteralPath $taskLogsRoot) {
         $latestLogFromDisk = Get-ChildItem -LiteralPath $taskLogsRoot -Filter "*.log" -File -ErrorAction SilentlyContinue |
@@ -2780,7 +2887,10 @@ function Get-TaskRuntimeExecutionInfo {
     }
 
     $status = "never-run"
-    if ($null -ne $lastRunStartedAt -and $null -eq $lastRunFinishedAt) {
+    if (-not [string]::IsNullOrWhiteSpace([string]$indexedWorkerStatus)) {
+        $status = [string]$indexedWorkerStatus
+    }
+    elseif ($null -ne $lastRunStartedAt -and $null -eq $lastRunFinishedAt) {
         $status = "running-unknown"
     }
     elseif ($null -ne $lastExitCode) {
@@ -3299,6 +3409,11 @@ function ConvertTo-RuntimeStateTaskSummary {
         latestRunExitCode = $runHistory.latestRunExitCode
         latestRunProvider = $runHistory.latestRunProvider
         latestRunProfile = $runHistory.latestRunProfile
+        latestRunWorkerStatus = $runHistory.latestRunWorkerStatus
+        latestRunIncomplete = $runHistory.latestRunIncomplete
+        latestRunStale = $runHistory.latestRunStale
+        latestRunAgeMinutes = $runHistory.latestRunAgeMinutes
+        latestRunStaleThresholdMinutes = $runHistory.staleThresholdMinutes
     }
 }
 
