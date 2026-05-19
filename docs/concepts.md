@@ -148,6 +148,27 @@ Only dry-run compaction planning exists. Future mutating compaction must be
 explicit, dry-run-first, and protected by locking before it mutates
 `.brevity\runs.jsonl`.
 
+### Run Index Archive Format
+
+Future run-index compaction should write additive archive records instead of
+silently discarding old run records. The v1 archive contract is described in
+[`docs/run-index-archive-format.md`](run-index-archive-format.md), with a JSON
+schema at
+[`docs/run-index-archive.schema.json`](run-index-archive.schema.json).
+
+Archive records summarize a bounded set of old runs for one task slug. They
+must include a schema/version marker, the task slug, an archive timestamp, the
+number of preserved runs summarized, oldest and newest run boundaries, outcome
+counts, stale/incomplete counts, and either explicit archived run IDs or compact
+ranges. Future compaction should still preserve the latest N indexed runs per
+task in `.brevity\runs.jsonl`.
+
+Archive summaries are not deletion receipts for worker logs. Brevity v1 must not
+delete raw worker logs automatically, and stale or incomplete run records must
+not be compacted away silently. They should remain indexed until reconciliation
+has reviewed them or the archive record explicitly preserves their status for
+operator inspection.
+
 ### Runtime State JSON
 
 `Brevity runtime state --json` emits the read-only runtime inspection contract

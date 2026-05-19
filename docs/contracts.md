@@ -26,6 +26,17 @@ next actions without mutating Brevity state.
 Command results are the intended machine-readable boundary for command
 outcomes, warnings, errors, refresh hints, and command-specific payloads.
 
+## Run Index Archive
+
+- [`docs/run-index-archive-format.md`](run-index-archive-format.md) - describes
+  the planned additive archive/summary record for future run-index compaction.
+- [`docs/run-index-archive.schema.json`](run-index-archive.schema.json) - JSON
+  schema for `brevity.run-index-archive.v1`.
+
+Run index archive records are planned summaries for old worker run records. They
+do not imply that mutating compaction exists, and they are not a channel for
+automatic worker-log deletion.
+
 ## TUI Guidance
 
 - [`docs/tui-consumer-guide.md`](tui-consumer-guide.md) - guidance for reading

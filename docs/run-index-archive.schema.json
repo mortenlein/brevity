@@ -1,0 +1,133 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "brevity.run-index-archive.v1",
+  "title": "Brevity Run Index Archive Record v1",
+  "description": "Planned additive archive/summary record for future .brevity\\runs.jsonl compaction. This schema does not imply that mutating compaction exists.",
+  "type": "object",
+  "required": [
+    "schema",
+    "recordType",
+    "slug",
+    "archivedAt",
+    "preservedRunCount",
+    "oldestRun",
+    "newestRun",
+    "successCount",
+    "failureCount",
+    "staleCount",
+    "incompleteCount"
+  ],
+  "additionalProperties": true,
+  "properties": {
+    "schema": {
+      "description": "Archive contract identifier.",
+      "const": "brevity.run-index-archive.v1"
+    },
+    "recordType": {
+      "description": "Discriminator for mixed JSON Lines streams.",
+      "const": "run-index-archive"
+    },
+    "slug": {
+      "description": "Task slug whose older run records are summarized.",
+      "type": "string",
+      "minLength": 1
+    },
+    "archivedAt": {
+      "description": "UTC timestamp when the archive summary was created.",
+      "type": "string"
+    },
+    "preservedRunCount": {
+      "description": "Number of raw run records represented by this archive summary.",
+      "type": "integer",
+      "minimum": 1
+    },
+    "oldestRun": {
+      "$ref": "#/$defs/runBoundary"
+    },
+    "newestRun": {
+      "$ref": "#/$defs/runBoundary"
+    },
+    "successCount": {
+      "description": "Number of summarized runs with successful worker status.",
+      "type": "integer",
+      "minimum": 0
+    },
+    "failureCount": {
+      "description": "Number of summarized runs with failed worker status or non-zero exit code.",
+      "type": "integer",
+      "minimum": 0
+    },
+    "staleCount": {
+      "description": "Number of summarized runs marked stale.",
+      "type": "integer",
+      "minimum": 0
+    },
+    "incompleteCount": {
+      "description": "Number of summarized runs marked incomplete.",
+      "type": "integer",
+      "minimum": 0
+    },
+    "archivedRunIds": {
+      "description": "Explicit run IDs represented by this archive summary.",
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      },
+      "uniqueItems": true
+    },
+    "archivedRunRanges": {
+      "description": "Compact run ID ranges represented by this archive summary when ordering is stable and unambiguous.",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [ "fromRunId", "toRunId", "count" ],
+        "additionalProperties": true,
+        "properties": {
+          "fromRunId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "toRunId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "count": {
+            "type": "integer",
+            "minimum": 1
+          }
+        }
+      }
+    }
+  },
+  "anyOf": [
+    { "required": [ "archivedRunIds" ] },
+    { "required": [ "archivedRunRanges" ] }
+  ],
+  "$defs": {
+    "runBoundary": {
+      "description": "Small summary of an archived run boundary.",
+      "type": "object",
+      "required": [ "runId", "startedAt", "workerStatus" ],
+      "additionalProperties": true,
+      "properties": {
+        "runId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "startedAt": {
+          "type": "string"
+        },
+        "finishedAt": {
+          "type": [ "string", "null" ]
+        },
+        "workerStatus": {
+          "type": "string"
+        },
+        "exitCode": {
+          "type": [ "integer", "null" ]
+        }
+      }
+    }
+  }
+}
