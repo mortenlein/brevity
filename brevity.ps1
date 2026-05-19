@@ -6050,6 +6050,35 @@ function Get-TaskMetadataLockInfo {
     }
 }
 
+function Get-ProviderHealthLockInfo {
+    $lockPath = Join-Path (Get-RepositoryRoot) ".brevity\provider-health.lock"
+    $exists = Test-Path -LiteralPath $lockPath
+    $ageMinutes = $null
+    $appearsStale = $false
+    $guidance = "No provider health lock is present."
+
+    if ($exists) {
+        $lockItem = Get-Item -LiteralPath $lockPath -ErrorAction SilentlyContinue
+        if ($null -ne $lockItem) {
+            $ageMinutes = ((Get-Date) - $lockItem.LastWriteTime).TotalMinutes
+        }
+
+        $guidance = "If no provider mutation command is active, an old provider health lock may be stale. Do not remove it unless you have confirmed no Brevity provider command is running."
+        if ($null -ne $ageMinutes -and $ageMinutes -ge 10) {
+            $appearsStale = $true
+            $guidance = "This provider health lock appears stale. Confirm no Brevity provider command is running before any future manual cleanup."
+        }
+    }
+
+    return [pscustomobject]@{
+        exists = $exists
+        path = $lockPath
+        ageMinutes = $ageMinutes
+        appearsStale = $appearsStale
+        guidance = $guidance
+    }
+}
+
 function Get-DoctorReportData {
     $repoRoot = Get-RepositoryRoot
     $config = Read-BrevityConfig
@@ -6080,6 +6109,7 @@ function Get-DoctorReportData {
     $missingWorktreeTasks = @($runtimeTasks | Where-Object { $_.runtime.missingWorktree })
     $missingPromptTasks = @($runtimeTasks | Where-Object { $_.runtime.missingPrompt })
     $lockInfo = Get-TaskMetadataLockInfo -TasksPath $tasksPath
+    $providerHealthLockInfo = Get-ProviderHealthLockInfo
     $runSummaries = @($runtimeTasks | Sort-Object slug | ForEach-Object {
         $summary = Get-TaskWorkerRunHistorySummary -Slug $_.slug
         [pscustomobject]@{
@@ -6105,12 +6135,16 @@ function Get-DoctorReportData {
     if ($orphanedWorktrees.Count -gt 0) { $warnings += [pscustomobject]@{ code = "orphaned-task-worktrees"; message = "Orphaned task worktrees are present."; count = $orphanedWorktrees.Count } }
     if ($metadataOrphanedBranchRecords.Count -gt 0) { $warnings += [pscustomobject]@{ code = "orphaned-task-branches"; message = "Orphaned task branches are present."; count = $metadataOrphanedBranchRecords.Count } }
     if ($lockInfo.exists) { $warnings += [pscustomobject]@{ code = "task-metadata-lock-present"; message = "Task metadata lock is present."; count = 1 } }
+    if ($providerHealthLockInfo.exists) { $warnings += [pscustomobject]@{ code = "provider-health-lock-present"; message = "Provider health lock is present."; count = 1 } }
     if ($providerSummary.degraded -gt 0 -or $providerSummary.unavailable -gt 0) { $warnings += [pscustomobject]@{ code = "provider-health"; message = "One or more providers are degraded or unavailable."; count = ($providerSummary.degraded + $providerSummary.unavailable) } }
     if ($staleRunSummaries.Count -gt 0 -or $incompleteRunSummaries.Count -gt 0) { $warnings += [pscustomobject]@{ code = "stale-or-incomplete-runs"; message = "Stale or incomplete worker runs are present."; count = ($staleRunSummaries.Count + $incompleteRunSummaries.Count) } }
 
     $suggestedNextActions = @("No immediate doctor action suggested.")
     if ($lockInfo.exists -and $null -ne $lockInfo.ageMinutes -and $lockInfo.ageMinutes -ge 10) {
         $suggestedNextActions = @("Run .\brevity.ps1 doctor --repair to remove a stale task metadata lock after confirming no Brevity process is active.")
+    }
+    elseif ($providerHealthLockInfo.exists -and $providerHealthLockInfo.appearsStale) {
+        $suggestedNextActions = @("Confirm no Brevity provider command is running before any future manual provider health lock cleanup.")
     }
     elseif ($staleTasks.Count -gt 0) {
         $suggestedNextActions = @("Review stale task metadata in the doctor report.")
@@ -6137,6 +6171,7 @@ function Get-DoctorReportData {
         orphanedTaskWorktrees = $orphanedWorktrees
         cleanup = [pscustomobject]@{ summary = Get-CleanupCandidateSummary -OrphanedTaskWorktreeCandidates $orphanedWorktreeCleanupCandidates -OrphanedTaskBranchCandidates $orphanedBranchCleanupCandidates; orphanedTaskWorktrees = $orphanedWorktreeCleanupCandidates; orphanedTaskBranches = $orphanedBranchCleanupCandidates }
         lock = $lockInfo
+        providerHealthLock = $providerHealthLockInfo
         runs = [pscustomobject]@{ staleLatest = $staleRunSummaries; incompleteLatest = $incompleteRunSummaries }
         warningCount = $warnings.Count
         errorCount = 0
@@ -6173,6 +6208,7 @@ function Show-DoctorReport {
     $missingWorktreeTasks = @($runtimeTasks | Where-Object { $_.runtime.missingWorktree })
     $missingPromptTasks = @($runtimeTasks | Where-Object { $_.runtime.missingPrompt })
     $lockInfo = Get-TaskMetadataLockInfo -TasksPath $tasksPath
+    $providerHealthLockInfo = Get-ProviderHealthLockInfo
 
     Write-Host "Brevity doctor"
     Write-Host "Repo: $repoRoot"
@@ -6256,6 +6292,18 @@ function Show-DoctorReport {
             Write-Host ("Age: {0:N1} minutes" -f $lockInfo.ageMinutes)
         }
         Write-Host "If no Brevity process is active, an old lock may be stale."
+    }
+
+    Write-Section "Provider health lock"
+    if (-not $providerHealthLockInfo.exists) {
+        Write-Host "None"
+    }
+    else {
+        Write-Host "Path: $($providerHealthLockInfo.path)"
+        if ($null -ne $providerHealthLockInfo.ageMinutes) {
+            Write-Host ("Age: {0:N1} minutes" -f $providerHealthLockInfo.ageMinutes)
+        }
+        Write-Host "Guidance: $($providerHealthLockInfo.guidance)"
     }
 
     if ($Repair) {
