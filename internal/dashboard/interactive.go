@@ -127,10 +127,10 @@ func RenderInteractiveString(state contracts.RuntimeState, model InteractiveMode
 	var stdout bytes.Buffer
 	fmt.Fprintln(&stdout, "Brevity Runtime Dashboard")
 	fmt.Fprintln(&stdout, "=========================")
+	fmt.Fprintln(&stdout, "Mode: read-only watch; no dashboard input mutates state.")
 	fmt.Fprintf(&stdout, "Repo: %s\n", fallback(state.RepoRoot, "(unknown)"))
 	fmt.Fprintf(&stdout, "Generated: %s\n", fallback(state.GeneratedAt, "(unknown)"))
-	fmt.Fprintln(&stdout, "Keys: j/k move | d or Enter details | r refresh | ? help | q quit")
-	fmt.Fprintln(&stdout, "Input: line-oriented for now; type a key, then press Enter.")
+	fmt.Fprintln(&stdout, "Line input: type j/k/d/r/?/q, then press Enter. Enter alone toggles details.")
 
 	renderInteractiveProviders(&stdout, state, items, model.SelectedIndex)
 	renderInteractiveTasks(&stdout, state, items, model.SelectedIndex)
@@ -227,13 +227,15 @@ func renderInteractiveActions(stdout io.Writer, items []SelectionItem, selected 
 
 func renderInteractiveHelp(stdout io.Writer) {
 	fmt.Fprintln(stdout, "\nHelp")
-	fmt.Fprintln(stdout, "  q: quit")
-	fmt.Fprintln(stdout, "  r: refresh now")
-	fmt.Fprintln(stdout, "  j/down: move selection down")
-	fmt.Fprintln(stdout, "  k/up: move selection up")
-	fmt.Fprintln(stdout, "  enter or d: show/hide details")
-	fmt.Fprintln(stdout, "  ?: show/hide help")
-	fmt.Fprintln(stdout, "  Input is line-oriented; press Enter after a key in plain consoles.")
+	fmt.Fprintln(stdout, "  This dashboard is read-only; it displays runtime state and guidance only.")
+	fmt.Fprintln(stdout, "  j then Enter: move selection down")
+	fmt.Fprintln(stdout, "  k then Enter: move selection up")
+	fmt.Fprintln(stdout, "  d then Enter: show/hide details")
+	fmt.Fprintln(stdout, "  Enter alone: show/hide details")
+	fmt.Fprintln(stdout, "  r then Enter: refresh now")
+	fmt.Fprintln(stdout, "  ? then Enter: show/hide help")
+	fmt.Fprintln(stdout, "  q then Enter: quit")
+	fmt.Fprintln(stdout, "  Input is line-oriented for now; raw key input is deferred.")
 }
 
 func renderInteractiveDetails(stdout io.Writer, items []SelectionItem, selected int) {

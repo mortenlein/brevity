@@ -28,7 +28,7 @@ metadata. It does not mean Go writes those files itself.
 | --- | --- | --- | --- | --- | --- |
 | `go run ./cmd/brevity` | Dashboard/frontend | PowerShell runtime state JSON | Read-only | Implemented | Polls `.\brevity.ps1 runtime state --json` and renders the dashboard. |
 | `go run ./cmd/brevity --once` | Dashboard/frontend | PowerShell runtime state JSON | Read-only | Implemented | Renders one runtime-state snapshot and exits. |
-| `go run ./cmd/brevity --watch` | Dashboard/frontend | PowerShell runtime state JSON | Read-only | Implemented | Keeps polling runtime state until interrupted; Ctrl+C exits cleanly. |
+| `go run ./cmd/brevity --watch` | Dashboard/frontend | PowerShell runtime state JSON | Read-only | Implemented | Keeps polling runtime state until interrupted; line-oriented input supports `j`/`k` then Enter for movement, `d` or Enter for details, `r` then Enter for refresh, `?` then Enter for help, and `q` then Enter to quit. |
 | `go run ./cmd/brevity --watch --refresh 5s` | Dashboard/frontend | PowerShell runtime state JSON | Read-only | Implemented | Uses a Go duration value for the watch-mode polling interval. |
 | `go run ./cmd/brevity --watch --no-clear` | Dashboard/frontend | PowerShell runtime state JSON | Read-only | Implemented | Suppresses screen clearing on changed renders; unchanged stable dashboard content does not redraw. |
 | `go run ./cmd/brevity provider set <provider> <status>` | PowerShell-backed action | PowerShell command-result JSON | Mutating | Implemented | Updates provider health through `.\brevity.ps1 provider set ... --json`. |
@@ -58,9 +58,17 @@ metadata. It does not mean Go writes those files itself.
   mode is the active frontend direction.
 - Dashboard watch mode is still read-only: each refresh reads
   `brevity.runtime-state.v1` from PowerShell and renders it.
+- Watch mode uses line-oriented input for now. Operators type a key and press
+  Enter: `j`/`k` move the selection, `d` or Enter toggles details, `r`
+  refreshes, `?` toggles help, and `q` quits.
+- Detail panes currently cover providers, tasks, cleanup candidates, and
+  suggested actions. Suggested actions are read-only guidance and are not
+  executed by the dashboard.
 - Watch mode suppresses redraws when stable dashboard content is unchanged.
   Runtime `GeneratedAt` and poll timestamps do not force redraws by themselves.
 - `--no-clear` disables clear-screen behavior on changed dashboard renders.
+- Raw terminal input and Bubble Tea-style framework adoption are deferred. The
+  current dashboard stays dependency-free, Windows-friendly, and read-only.
 - Go support should stay narrower than the PowerShell surface until parity is
   explicit and tested.
 - New Go commands should be added here when they are exposed, even if the

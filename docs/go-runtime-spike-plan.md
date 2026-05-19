@@ -84,6 +84,16 @@ Runtime `GeneratedAt` and poll timestamps do not force redraws by themselves.
 `--refresh` sets the polling interval using a Go duration such as `5s`.
 `--no-clear` disables clear-screen behavior on changed renders.
 
+The current watch input model is line-oriented to remain dependency-free and
+friendly to Windows consoles. Operators type one control and press Enter:
+`j`/`k` move the selection, `d` toggles details, Enter alone toggles details,
+`r` refreshes, `?` toggles help, and `q` quits. Raw terminal input is deferred.
+
+The current read-only detail panes cover provider details, task details,
+cleanup candidate details, and suggested action details. Cleanup candidates and
+suggested actions are inspection records and guidance only; the dashboard does
+not execute them or mutate runtime state.
+
 Current Go action commands route to PowerShell JSON contracts. They may cause
 PowerShell to perform the requested mutation or execution, but the Go client
 itself does not write `.brevity` metadata or own runtime state.
@@ -97,6 +107,7 @@ command surface changes.
 ## Non-Goals
 
 - No interactive mutation UI in the PowerShell TUI or Go dashboard yet.
+- No raw terminal input or Bubble Tea adoption yet.
 - No native Go runtime state ownership yet.
 - No direct Go writes to `.brevity` runtime metadata yet.
 - No replacing `brevity.ps1` yet.

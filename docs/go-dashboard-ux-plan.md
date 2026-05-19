@@ -7,7 +7,9 @@ remains a frontend/runtime client until native Go parity is proven.
 
 The current Go dashboard and watch mode are read-only. Existing Go action
 runners dispatch explicit PowerShell-backed commands, but there is no
-interactive mutation UI yet.
+interactive mutation UI yet. PowerShell remains the authoritative backend for
+runtime state, worker lifecycle, cleanup, branch integration, command-result
+contracts, and all `.brevity` mutation.
 
 ## UX Principles
 
@@ -48,7 +50,28 @@ Watch mode should continue to be conservative:
 - Display polling failures as dashboard state, including enough error context to
   act, instead of crashing on the first transient failure.
 - Exit cleanly on Ctrl+C without mutating `.brevity`.
+- Use line-oriented controls for now: `j`/`k` then Enter moves the selection,
+  `d` then Enter or Enter alone toggles details, `r` then Enter refreshes, `?`
+  then Enter toggles help, and `q` then Enter quits.
 - Add terminal resize handling later when interaction pressure justifies it.
+
+Line-oriented input is deliberate for the current implementation. It keeps the
+dashboard dependency-free, easy to validate in pipes, and friendly to Windows
+PowerShell consoles. Raw terminal input is deferred until the UI needs a real
+terminal event loop.
+
+## Current Detail Panes
+
+The current detail panes are read-only inspection views:
+
+- Provider details show provider name, status, update timestamp, note, and a
+  short health hint.
+- Task details show task status, normalized state, worktree/context facts,
+  latest run summary, provider, and profile.
+- Cleanup candidate details show severity, category, path, branch, dirty state,
+  safety flags, dirty reasons, and suggested inspection commands.
+- Suggested action details show the runtime guidance text and explicitly note
+  that no action is executed by the dashboard.
 
 ## Future Keyboard and Action Model
 
@@ -124,11 +147,13 @@ If a framework becomes necessary, evaluate Bubble Tea first because it fits
 command-line application structure and simple model/update/view flows. Consider
 tcell later for lower-level terminal control if Bubble Tea is not a fit.
 
-No framework adoption belongs in this task.
+No framework adoption belongs in this task. Bubble Tea and raw terminal input
+remain deferred; the current mode stays dependency-free and Windows-friendly.
 
 ## Non-Goals
 
 - No direct `.brevity` mutation from Go yet.
+- No raw terminal input yet.
 - No daemon.
 - No background worker lifecycle.
 - No PowerShell replacement yet.

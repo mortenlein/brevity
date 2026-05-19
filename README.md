@@ -224,8 +224,17 @@ The dashboard reads the PowerShell-produced runtime-state contract:
 `5s` and controls the polling interval. Watch mode suppresses redraws when the
 stable dashboard content is unchanged, so runtime `GeneratedAt` and poll
 timestamps do not force a redraw by themselves. `--no-clear` disables
-clear-screen behavior on changed renders. Press Ctrl+C to stop watch mode; the
-Go client exits cleanly without mutating `.brevity` state.
+clear-screen behavior on changed renders. The current watch UI uses
+line-oriented input for Windows-friendly, dependency-free consoles: type `j` or
+`k` and press Enter to move the selection, type `d` and press Enter or press
+Enter alone to toggle details, type `r` then Enter to refresh, type `?` then
+Enter to toggle help, and type `q` then Enter to quit. Ctrl+C also stops watch
+mode. The Go client exits cleanly without mutating `.brevity` state.
+
+Watch detail panes are read-only inspection views. They currently cover
+provider details, task details, cleanup candidate details, and suggested action
+details. Suggested actions are guidance from runtime state, not executable
+dashboard commands.
 
 PowerShell remains the authoritative runtime backend and the source of truth for
 runtime state, command-result JSON contracts, worker lifecycle, cleanup, branch
@@ -233,6 +242,10 @@ integration, and all `.brevity` mutations. Go does not mutate `.brevity`
 directly. Current Go actions are PowerShell-backed: they dispatch to
 `.\brevity.ps1 ... --json`, parse the PowerShell command-result contract, and
 render concise operator output.
+
+Raw terminal input and a framework such as Bubble Tea are deferred. The current
+dashboard mode stays dependency-free and Windows-friendly while the operator
+frontend stabilizes.
 
 The supported Go command surface, including implemented and deferred commands,
 is tracked in [`docs/go-support-matrix.md`](docs/go-support-matrix.md). There is

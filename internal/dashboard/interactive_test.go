@@ -117,10 +117,10 @@ func TestRenderInteractiveHelpToggle(t *testing.T) {
 
 	withHelp := RenderInteractiveString(state, InteractiveModel{ShowHelp: true})
 	assertOutputContains(t, withHelp, "Help")
-	assertOutputContains(t, withHelp, "Keys: j/k move | d or Enter details | r refresh | ? help | q quit")
-	assertOutputContains(t, withHelp, "Input: line-oriented for now; type a key, then press Enter.")
-	assertOutputContains(t, withHelp, "q: quit")
-	assertOutputContains(t, withHelp, "Input is line-oriented")
+	assertOutputContains(t, withHelp, "Mode: read-only watch; no dashboard input mutates state.")
+	assertOutputContains(t, withHelp, "Line input: type j/k/d/r/?/q, then press Enter. Enter alone toggles details.")
+	assertOutputContains(t, withHelp, "q then Enter: quit")
+	assertOutputContains(t, withHelp, "Input is line-oriented for now")
 }
 
 func interactiveState() contracts.RuntimeState {
