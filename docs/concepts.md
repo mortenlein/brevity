@@ -226,6 +226,37 @@ Future interactive features should keep a clear boundary between the runtime
 client, renderer, and action system. Mutating actions should use structured
 command-result contracts and remain explicit.
 
+### Go Runtime Client
+
+The Go CLI under `cmd\brevity` is currently a frontend/runtime client over the
+PowerShell backend. It can render the dashboard and dispatch selected
+PowerShell-backed action runners, but it does not own runtime state and does
+not write `.brevity` metadata directly.
+
+The supported Go command surface is intentionally smaller than the PowerShell
+surface:
+
+```powershell
+go run ./cmd/brevity
+go run ./cmd/brevity --once
+go run ./cmd/brevity doctor
+go run ./cmd/brevity provider set <provider> <status>
+go run ./cmd/brevity provider reset <provider>
+go run ./cmd/brevity task new <slug>
+go run ./cmd/brevity task cleanup <slug> --force
+go run ./cmd/brevity task context refresh <slug>
+go run ./cmd/brevity task runtime-info <slug>
+go run ./cmd/brevity task runs <slug>
+go run ./cmd/brevity task run <slug> --execute [--profile <profile>] [--smoke]
+go run ./cmd/brevity task runs reconcile --dry-run
+go run ./cmd/brevity task runs retention --dry-run
+go run ./cmd/brevity task runs compact --dry-run
+```
+
+PowerShell JSON contracts are the source of truth for both read-only runtime
+state and mutating command results. There is no TUI mutation UI yet, and native
+Go `.brevity` state ownership remains a future migration step.
+
 The v1 snapshot includes these major sections:
 
 - `providers` - provider health totals and per-provider health records.

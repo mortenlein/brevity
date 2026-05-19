@@ -10,19 +10,24 @@ Brevity should not do a big-bang rewrite. The current PowerShell runtime remains
 the executable reference implementation for behavior, state interpretation, and
 operator-facing command results.
 
-Go starts as a parallel implementation and spike. Its first responsibility is to
-consume existing runtime contracts and render the same read-only operational
-view that PowerShell already exposes. Compatibility is driven by documented JSON
-contracts, smoke validation, and observable parity with PowerShell behavior.
+Go starts as a frontend/runtime client and spike. Its first responsibility is
+to consume existing runtime contracts, render the same operational view that
+PowerShell already exposes, and dispatch selected actions through the
+PowerShell JSON command-result surface. Compatibility is driven by documented
+JSON contracts, smoke validation, and observable parity with PowerShell
+behavior.
 
-The PowerShell runtime should continue to own mutation, worker lifecycle,
-cleanup, and branch integration until a Go behavior has a clear reference
-behavior, a stable contract, and a rollback path.
+The PowerShell runtime should continue to own `.brevity` mutation, worker
+lifecycle, cleanup, and branch integration until a Go behavior has a clear
+reference behavior, a stable contract, and a rollback path. Go must not mutate
+`.brevity` state directly in the current spike.
 
-## Initial Go Scope
+## Current Go Scope
 
-The initial Go runtime spike should be read-only. It may inspect existing
-Brevity state files and render an equivalent runtime state dashboard.
+The current Go runtime spike is a PowerShell-backed client. The dashboard reads
+PowerShell-produced runtime state, and the action runners invoke PowerShell
+commands that return command-result JSON. Native Go runtime state ownership has
+not started.
 
 Initial inputs:
 
@@ -31,7 +36,7 @@ Initial inputs:
 - `.brevity\provider-health.json`
 - `.brevity\runs.jsonl`
 
-The preferred first step is to consume:
+The dashboard consumes:
 
 ```powershell
 .\brevity.ps1 runtime state --json
@@ -41,20 +46,39 @@ Reading PowerShell-produced runtime state first keeps the spike anchored to the
 reference implementation while the Go data model and rendering path mature.
 Native `.brevity` file reading can follow once the JSON contract path is stable.
 
-## Current Spike Usage
+## Current Go Command Surface
 
-The first Go dashboard spike requires Go on `PATH` and runs from the repository
-root:
+The Go client requires Go on `PATH` and runs from the repository root:
 
 ```powershell
 go run ./cmd/brevity
+go run ./cmd/brevity --once
 ```
 
-The command is a read-only consumer. It invokes
-`.\brevity.ps1 runtime state --json`, validates the
+The dashboard invokes `.\brevity.ps1 runtime state --json`, validates the
 `brevity.runtime-state.v1` schema, and renders a plain dashboard from that
-PowerShell-produced snapshot. It must not write `.brevity` metadata, start
-workers, merge branches, run cleanup, or replace `brevity.ps1`.
+PowerShell-produced snapshot.
+
+The currently supported Go action commands are:
+
+```powershell
+go run ./cmd/brevity doctor
+go run ./cmd/brevity provider set <provider> <status>
+go run ./cmd/brevity provider reset <provider>
+go run ./cmd/brevity task new <slug>
+go run ./cmd/brevity task cleanup <slug> --force
+go run ./cmd/brevity task context refresh <slug>
+go run ./cmd/brevity task runtime-info <slug>
+go run ./cmd/brevity task runs <slug>
+go run ./cmd/brevity task run <slug> --execute [--profile <profile>] [--smoke]
+go run ./cmd/brevity task runs reconcile --dry-run
+go run ./cmd/brevity task runs retention --dry-run
+go run ./cmd/brevity task runs compact --dry-run
+```
+
+These commands route to PowerShell JSON contracts. They may cause PowerShell to
+perform the requested mutation or execution, but the Go client itself does not
+write `.brevity` metadata or own runtime state.
 
 PowerShell remains the reference runtime for state interpretation,
 orchestration behavior, mutations, worker lifecycle, cleanup, and branch
@@ -62,9 +86,9 @@ integration.
 
 ## Non-Goals
 
-- No mutating commands initially.
-- No worker execution initially.
-- No cleanup execution initially.
+- No TUI mutation UI yet.
+- No native Go runtime state ownership yet.
+- No direct Go writes to `.brevity` runtime metadata yet.
 - No replacing `brevity.ps1` yet.
 - No planner automation in the Go spike.
 

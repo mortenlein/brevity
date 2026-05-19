@@ -197,26 +197,51 @@ embed Git operations. Future mutation support should go through explicit
 command-result contracts rather than duplicating orchestration logic in the
 view layer.
 
-## Go Runtime Dashboard Spike
+## Go Runtime Client
 
-The experimental Go dashboard requires Go to be installed and available on
-`PATH`. Run it from the repository root:
+The experimental Go layer requires Go to be installed and available on `PATH`.
+Run it from the repository root. It is currently a frontend/runtime client over
+the PowerShell runtime, not a replacement runtime:
 
 ```powershell
 go run ./cmd/brevity
+go run ./cmd/brevity --once
 ```
 
-The Go command is read-only. It shells out to the PowerShell reference runtime:
+The dashboard command renders PowerShell-produced runtime state:
 
 ```powershell
 .\brevity.ps1 runtime state --json
 ```
 
-The PowerShell command remains the source of truth for runtime state,
-orchestration behavior, mutations, worker lifecycle, cleanup, and branch
-integration. The Go spike consumes the `brevity.runtime-state.v1` contract,
-tolerates unknown fields, validates the schema before rendering, and does not
-write `.brevity` metadata.
+PowerShell remains the authoritative runtime backend and the source of truth for
+runtime state, command-result JSON contracts, worker lifecycle, cleanup, branch
+integration, and all `.brevity` mutations. Go does not mutate `.brevity`
+directly. Go action commands dispatch to `.\brevity.ps1 ... --json`, parse the
+PowerShell command-result contract, and render a concise operator result.
+
+Currently supported Go commands are:
+
+```powershell
+go run ./cmd/brevity
+go run ./cmd/brevity --once
+go run ./cmd/brevity doctor
+go run ./cmd/brevity provider set <provider> <status>
+go run ./cmd/brevity provider reset <provider>
+go run ./cmd/brevity task new <slug>
+go run ./cmd/brevity task cleanup <slug> --force
+go run ./cmd/brevity task context refresh <slug>
+go run ./cmd/brevity task runtime-info <slug>
+go run ./cmd/brevity task runs <slug>
+go run ./cmd/brevity task run <slug> --execute [--profile <profile>] [--smoke]
+go run ./cmd/brevity task runs reconcile --dry-run
+go run ./cmd/brevity task runs retention --dry-run
+go run ./cmd/brevity task runs compact --dry-run
+```
+
+There is no TUI mutation UI yet and no native Go runtime state ownership yet.
+The supported Go surface should stay conservative until the PowerShell JSON
+contracts and parity checks make a behavior safe to move.
 
 ## Runtime State Contract
 
