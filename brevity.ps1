@@ -4009,16 +4009,34 @@ function Test-TaskRuntimeState {
 
 function Show-TaskRuntimeInfoCommand {
     param(
-        [string]$Slug
+        [string]$Slug,
+        [bool]$Json = $false
     )
 
     if ([string]::IsNullOrWhiteSpace($Slug)) {
+        if ($Json) {
+            Write-CommandErrorResult -Command "task runtime-info" -Code "missing-slug" -Message "Missing task slug."
+            exit 1
+        }
+
         Write-Host "Missing task slug." -ForegroundColor Red
         Write-Host "Usage: .\brevity.ps1 task runtime-info <slug>"
         exit 1
     }
 
-    Get-TaskRuntimeInfo -Slug $Slug | ConvertTo-Json -Depth 10
+    $task = Find-BrevityTaskBySlug -Slug $Slug
+    if ($Json -and $null -eq $task) {
+        Write-CommandErrorResult -Command "task runtime-info" -Code "task-not-found" -Message "Task not found." -Details ([pscustomobject]@{ slug = $Slug })
+        exit 1
+    }
+
+    $runtimeInfo = Get-TaskRuntimeInfo -Slug $Slug
+    if ($Json) {
+        Write-CommandResult -Command "task runtime-info" -Success $true -Severity "info" -Payload $runtimeInfo
+        return
+    }
+
+    $runtimeInfo | ConvertTo-Json -Depth 10
 }
 
 function Get-RequiredTaskForContextCommand {
@@ -8231,14 +8249,30 @@ switch ($Command.ToLowerInvariant()) {
             "status" { Show-TaskStatus }
             "runtime-info" {
                 $taskSlug = $null
+                $jsonOutput = $false
                 if ($null -ne $RemainingArgs) {
+                    $jsonOutput = [bool]@($RemainingArgs | Where-Object { $_ -eq "--json" }).Count
                     foreach ($taskArg in $RemainingArgs) {
-                        $taskSlug = [string]$taskArg
-                        break
+                        if ($taskArg -eq "--json") {
+                            continue
+                        }
+                        elseif ([string]::IsNullOrWhiteSpace($taskSlug)) {
+                            $taskSlug = [string]$taskArg
+                        }
+                        else {
+                            if ($jsonOutput) {
+                                Write-CommandErrorResult -Command "task runtime-info" -Code "unknown-argument" -Message "Unknown argument for brevity task runtime-info: $taskArg"
+                            }
+                            else {
+                                Write-Host "Unknown argument for brevity task runtime-info: $taskArg" -ForegroundColor Red
+                                Write-Host "Usage: .\brevity.ps1 task runtime-info <slug> [--json]"
+                            }
+                            exit 1
+                        }
                     }
                 }
 
-                Show-TaskRuntimeInfoCommand -Slug $taskSlug
+                Show-TaskRuntimeInfoCommand -Slug $taskSlug -Json $jsonOutput
             }
             "runs" {
                 $taskSlug = $null
