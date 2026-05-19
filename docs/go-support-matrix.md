@@ -5,6 +5,12 @@ client. PowerShell remains the authoritative runtime backend and the source of
 truth for state interpretation, orchestration behavior, worker lifecycle,
 cleanup, branch integration, `.brevity` mutation, and JSON contracts.
 
+The original PowerShell `.\brevity.ps1 tui` command is a lightweight read-only
+runtime/operator scaffold. The Go dashboard and `--watch` mode are the active
+frontend direction for the future operator UX. Both paths currently consume
+PowerShell-produced runtime-state data; neither path provides an interactive
+mutation UI yet.
+
 The Go client does not mutate `.brevity` files directly. Current Go actions are
 PowerShell-backed: they invoke `.\brevity.ps1 ... --json`, parse the structured
 `brevity.command-result.v1` contract, and render concise operator output. The
@@ -34,8 +40,9 @@ metadata. It does not mean Go writes those files itself.
 | `go run ./cmd/brevity task runs retention --dry-run` | Read-only inspection | PowerShell command-result JSON | Read-only | Implemented | Reports run-index retention signals; dry-run only. |
 | `go run ./cmd/brevity task runs compact --dry-run` | Read-only inspection | PowerShell command-result JSON | Read-only | Implemented | Reports a compaction plan; dry-run only. |
 | `go run ./cmd/brevity doctor` | Read-only inspection | PowerShell command-result JSON | Read-only | Implemented | Displays runtime diagnostics from `.\brevity.ps1 doctor --json`. |
+| `.\brevity.ps1 tui` | PowerShell TUI scaffold | PowerShell runtime state JSON | Read-only | Implemented | Original lightweight operator scaffold; useful as a reference, not the active future frontend direction. |
 | Native Go `.brevity` reader | Runtime migration | Future Go reader | Read-only | Planned/deferred | Future migration step after JSON-first behavior stays stable. |
-| TUI mutation UI | Frontend mutation UI | Future command-result actions | Mutating | Planned/deferred | No interactive mutation UI exists yet. |
+| Interactive mutation UI | Frontend mutation UI | Future command-result actions | Mutating | Planned/deferred | No interactive mutation UI exists yet in the PowerShell TUI or Go dashboard. |
 | `go run ./cmd/brevity task merge <slug>` | PowerShell-backed action | PowerShell command-result JSON | Mutating | Planned/deferred | PowerShell has merge behavior; Go command surface does not expose it yet. |
 | Orphan cleanup execute | PowerShell-backed action | PowerShell command-result JSON | Mutating | Planned/deferred | Go does not expose mutating orphan cleanup execution yet. |
 | `go run ./cmd/brevity task runs compact --execute --archive` | PowerShell-backed action | PowerShell command-result JSON | Mutating | Planned/deferred | Go exposes only dry-run compaction planning. |
@@ -44,6 +51,8 @@ metadata. It does not mean Go writes those files itself.
 ## Documentation Notes
 
 - PowerShell remains the source of truth for behavior and JSON contracts.
+- PowerShell `tui` remains a lightweight read-only scaffold; Go dashboard/watch
+  mode is the active frontend direction.
 - Dashboard watch mode is still read-only: each refresh reads
   `brevity.runtime-state.v1` from PowerShell and renders it.
 - Watch mode suppresses redraws when stable dashboard content is unchanged.

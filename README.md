@@ -185,23 +185,25 @@ Brevity v0 supports:
 
 ## TUI
 
-`.\brevity.ps1 tui` starts the first read-only Brevity terminal dashboard. It
-polls `.\brevity.ps1 runtime state --json` every few seconds and renders a
-compact view of repo/runtime summary, provider health, task counts by
-normalized state, recent tasks, cleanup warnings, and stale or incomplete run
-indicators. Press `q` or `Esc` to quit.
+`.\brevity.ps1 tui` starts the original PowerShell runtime/operator dashboard
+scaffold. It is read-only, polls `.\brevity.ps1 runtime state --json` every few
+seconds, and renders a compact view of repo/runtime summary, provider health,
+task counts by normalized state, recent tasks, cleanup warnings, and stale or
+incomplete run indicators. Press `q` or `Esc` to quit.
 
 The TUI is intentionally a thin runtime-state consumer. It does not start
 workers, mutate task metadata, merge branches, edit files, stream events, or
 embed Git operations. Future mutation support should go through explicit
-command-result contracts rather than duplicating orchestration logic in the
-view layer.
+command-result contracts rather than duplicating orchestration logic in a view
+layer. The PowerShell TUI remains useful as a lightweight reference scaffold,
+but it is not the primary direction for the future operator UX.
 
 ## Go Runtime Client
 
 The experimental Go layer requires Go to be installed and available on `PATH`.
 Run it from the repository root. It is currently a frontend/runtime client over
-the PowerShell backend, not a replacement runtime:
+the PowerShell backend, not a replacement runtime. The Go dashboard, especially
+watch mode, is the active direction for the future operator UX:
 
 ```powershell
 go run ./cmd/brevity
@@ -234,9 +236,10 @@ render concise operator output.
 
 The supported Go command surface, including implemented and deferred commands,
 is tracked in [`docs/go-support-matrix.md`](docs/go-support-matrix.md). There is
-no TUI mutation UI yet and no native Go runtime state ownership yet. The Go
-surface should stay conservative until the PowerShell JSON contracts and parity
-checks make a behavior safe to move.
+no interactive mutation UI in either the PowerShell TUI or the Go dashboard yet,
+and no native Go runtime state ownership yet. The Go surface should stay
+conservative until the PowerShell JSON contracts and parity checks make a
+behavior safe to move.
 
 ## Runtime State Contract
 

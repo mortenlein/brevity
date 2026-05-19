@@ -16,6 +16,11 @@ PowerShell already exposes, and dispatch selected actions through PowerShell
 JSON command-result contracts. Compatibility is driven by documented JSON
 contracts, smoke validation, and observable parity with PowerShell behavior.
 
+Operator-facing UI should evolve in the Go dashboard/watch path. The
+PowerShell `tui` command remains the original lightweight runtime/operator
+scaffold and a useful reference implementation, but PowerShell remains the
+authoritative backend/runtime rather than the long-term frontend direction.
+
 The PowerShell runtime should continue to own `.brevity` mutation, worker
 lifecycle, cleanup, and branch integration until a Go behavior has a clear
 reference behavior, a stable contract, and a rollback path. Go must not mutate
@@ -29,6 +34,11 @@ contract, and action runners invoke PowerShell commands that return
 `brevity.command-result.v1`. Native Go runtime state ownership has not started.
 The current supported and deferred command surface is tracked in
 [`docs/go-support-matrix.md`](go-support-matrix.md).
+
+Both the PowerShell TUI and the Go dashboard consume runtime-state style data.
+Neither path currently provides an interactive mutation UI. Mutating Go command
+entries, where implemented, are explicit command-line actions that delegate to
+PowerShell JSON contracts.
 
 Future native-reader inputs:
 
@@ -83,7 +93,7 @@ command surface changes.
 
 ## Non-Goals
 
-- No TUI mutation UI yet.
+- No interactive mutation UI in the PowerShell TUI or Go dashboard yet.
 - No native Go runtime state ownership yet.
 - No direct Go writes to `.brevity` runtime metadata yet.
 - No replacing `brevity.ps1` yet.

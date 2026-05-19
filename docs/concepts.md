@@ -212,9 +212,9 @@ including runtime-state and command-result contracts.
 
 ### TUI MVP
 
-`Brevity tui` is the first minimal interactive dashboard. It is read-only and
-polls `Brevity runtime state --json` on a conservative interval instead of
-owning orchestration state itself.
+`Brevity tui` is the original minimal PowerShell runtime/operator dashboard
+scaffold. It is read-only and polls `Brevity runtime state --json` on a
+conservative interval instead of owning orchestration state itself.
 
 The v1 TUI renders compact runtime summary, provider health, task counts by
 normalized state, recent tasks, cleanup warnings, and stale or incomplete run
@@ -233,29 +233,19 @@ PowerShell backend. It can render the dashboard and dispatch selected
 PowerShell-backed action runners, but it does not own runtime state and does
 not write `.brevity` metadata directly.
 
-The supported Go command surface is intentionally smaller than the PowerShell
-surface:
+The Go dashboard and watch mode are the active direction for the future
+operator UX. The PowerShell TUI remains useful as a lightweight reference
+scaffold, and both dashboard paths currently consume PowerShell-produced
+runtime-state style data.
 
-```powershell
-go run ./cmd/brevity
-go run ./cmd/brevity --once
-go run ./cmd/brevity doctor
-go run ./cmd/brevity provider set <provider> <status>
-go run ./cmd/brevity provider reset <provider>
-go run ./cmd/brevity task new <slug>
-go run ./cmd/brevity task cleanup <slug> --force
-go run ./cmd/brevity task context refresh <slug>
-go run ./cmd/brevity task runtime-info <slug>
-go run ./cmd/brevity task runs <slug>
-go run ./cmd/brevity task run <slug> --execute [--profile <profile>] [--smoke]
-go run ./cmd/brevity task runs reconcile --dry-run
-go run ./cmd/brevity task runs retention --dry-run
-go run ./cmd/brevity task runs compact --dry-run
-```
+The supported Go command surface is intentionally smaller than the PowerShell
+surface. The authoritative command list and implementation status live in the
+[Go frontend support matrix](go-support-matrix.md).
 
 PowerShell JSON contracts are the source of truth for both read-only runtime
-state and mutating command results. There is no TUI mutation UI yet, and native
-Go `.brevity` state ownership remains a future migration step.
+state and mutating command results. There is no interactive mutation UI yet in
+either the PowerShell TUI or the Go dashboard, and native Go `.brevity` state
+ownership remains a future migration step.
 
 The v1 snapshot includes these major sections:
 
