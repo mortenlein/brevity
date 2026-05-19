@@ -1,12 +1,14 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"flag"
 	"fmt"
 	"io"
 	"os"
 	"os/signal"
+	"strings"
 	"time"
 
 	"github.com/mortenlein/brevity/internal/actions"
@@ -351,6 +353,7 @@ func runWithContextOptions(ctx context.Context, stdout io.Writer, client runtime
 			return watchDashboard(ctx, stdout, client, watchOptions{
 				refresh: options.refresh,
 				clear:   !options.noClear,
+				input:   os.Stdin,
 			})
 		}
 		return routeDashboardCommand(stdout, client)
@@ -358,21 +361,38 @@ func runWithContextOptions(ctx context.Context, stdout io.Writer, client runtime
 }
 
 func routeDashboardCommand(stdout io.Writer, client runtimeclient.Client) error {
-	_, err := renderDashboardRefresh(stdout, client, time.Now, false, "", false)
+	output, err := client.RuntimeStateJSON()
+	if err != nil {
+		return err
+	}
+	state, err := contracts.ParseRuntimeState(output)
+	if err != nil {
+		return err
+	}
+	dashboard.Render(stdout, state)
 	return err
 }
 
 type watchOptions struct {
 	refresh time.Duration
 	clear   bool
+	input   io.Reader
 }
 
 func watchDashboard(ctx context.Context, stdout io.Writer, client runtimeclient.Client, options watchOptions) error {
+	model := dashboard.InteractiveModel{}
+	lastItemCount := 0
+	inputs := readInputLines(ctx, options.input)
 	lastSuccess := ""
 	lastRenderKey := ""
-	if render, err := renderDashboardRefresh(stdout, client, time.Now, options.clear, lastSuccess, true); err == nil {
+	var currentState contracts.RuntimeState
+	hasCurrentState := false
+	if render, err := renderDashboardRefresh(stdout, client, time.Now, options.clear, lastSuccess, true, model); err == nil {
 		lastRenderKey = render.key
 		lastSuccess = time.Now().Format(time.RFC3339)
+		lastItemCount = render.itemCount
+		currentState = render.state
+		hasCurrentState = true
 	}
 
 	ticker := time.NewTicker(options.refresh)
@@ -383,8 +403,47 @@ func watchDashboard(ctx context.Context, stdout io.Writer, client runtimeclient.
 		case <-ctx.Done():
 			fmt.Fprintln(stdout, "\nStopped.")
 			return nil
+		case input, ok := <-inputs:
+			if !ok {
+				inputs = nil
+				continue
+			}
+			changed, refreshNow, quit := applyDashboardInput(&model, input, lastItemCount)
+			if quit {
+				fmt.Fprintln(stdout, "\nStopped.")
+				return nil
+			}
+			if !changed && !refreshNow {
+				continue
+			}
+			var render dashboardSnapshot
+			var err error
+			if refreshNow || !hasCurrentState {
+				render, err = renderDashboardSnapshot(client, model)
+				if err != nil {
+					if options.clear {
+						clearScreen(stdout)
+					}
+					renderDashboardError(stdout, time.Now, lastSuccess, err)
+					continue
+				}
+				currentState = render.state
+				hasCurrentState = true
+			} else {
+				render = renderDashboardState(currentState, model)
+			}
+			if options.clear {
+				clearScreen(stdout)
+			}
+			fmt.Fprint(stdout, render.body)
+			if refreshNow {
+				lastSuccess = time.Now().Format(time.RFC3339)
+			}
+			fmt.Fprintf(stdout, "\nLast successful refresh: %s\n", fallbackRefresh(lastSuccess))
+			lastRenderKey = render.key
+			lastItemCount = render.itemCount
 		case <-ticker.C:
-			render, err := renderDashboardSnapshot(client)
+			render, err := renderDashboardSnapshot(client, model)
 			if err != nil {
 				if options.clear {
 					clearScreen(stdout)
@@ -403,16 +462,19 @@ func watchDashboard(ctx context.Context, stdout io.Writer, client runtimeclient.
 			fmt.Fprintf(stdout, "\nLast successful refresh: %s\n", time.Now().Format(time.RFC3339))
 			lastRenderKey = render.key
 			lastSuccess = time.Now().Format(time.RFC3339)
+			lastItemCount = render.itemCount
+			currentState = render.state
+			hasCurrentState = true
 		}
 	}
 }
 
-func renderDashboardRefresh(stdout io.Writer, client runtimeclient.Client, now func() time.Time, clear bool, lastSuccess string, showErrors bool) (dashboardSnapshot, error) {
+func renderDashboardRefresh(stdout io.Writer, client runtimeclient.Client, now func() time.Time, clear bool, lastSuccess string, showErrors bool, model dashboard.InteractiveModel) (dashboardSnapshot, error) {
 	if clear {
 		clearScreen(stdout)
 	}
 
-	render, err := renderDashboardSnapshot(client)
+	render, err := renderDashboardSnapshot(client, model)
 	if err != nil {
 		if showErrors {
 			renderDashboardError(stdout, now, lastSuccess, err)
@@ -428,11 +490,13 @@ func renderDashboardRefresh(stdout io.Writer, client runtimeclient.Client, now f
 }
 
 type dashboardSnapshot struct {
-	body string
-	key  string
+	body      string
+	key       string
+	itemCount int
+	state     contracts.RuntimeState
 }
 
-func renderDashboardSnapshot(client runtimeclient.Client) (dashboardSnapshot, error) {
+func renderDashboardSnapshot(client runtimeclient.Client, model dashboard.InteractiveModel) (dashboardSnapshot, error) {
 	output, err := client.RuntimeStateJSON()
 	if err != nil {
 		return dashboardSnapshot{}, err
@@ -443,13 +507,21 @@ func renderDashboardSnapshot(client runtimeclient.Client) (dashboardSnapshot, er
 		return dashboardSnapshot{}, err
 	}
 
+	return renderDashboardState(state, model), nil
+}
+
+func renderDashboardState(state contracts.RuntimeState, model dashboard.InteractiveModel) dashboardSnapshot {
 	keyState := state
 	keyState.GeneratedAt = ""
+	items := dashboard.SelectableItems(state)
+	model.Clamp(len(items))
 
 	return dashboardSnapshot{
-		body: dashboard.RenderString(state),
-		key:  dashboard.RenderString(keyState),
-	}, nil
+		body:      dashboard.RenderInteractiveString(state, model),
+		key:       dashboard.RenderInteractiveString(keyState, model),
+		itemCount: len(items),
+		state:     state,
+	}
 }
 
 func renderDashboardError(stdout io.Writer, now func() time.Time, lastSuccess string, err error) {
@@ -469,6 +541,64 @@ func fallbackRefresh(value string) string {
 		return "(none)"
 	}
 	return value
+}
+
+func readInputLines(ctx context.Context, input io.Reader) <-chan string {
+	if input == nil {
+		return nil
+	}
+	lines := make(chan string)
+	go func() {
+		defer close(lines)
+		scanner := bufio.NewScanner(input)
+		for scanner.Scan() {
+			select {
+			case <-ctx.Done():
+				return
+			case lines <- scanner.Text():
+			}
+		}
+	}()
+	return lines
+}
+
+func applyDashboardInput(model *dashboard.InteractiveModel, input string, itemCount int) (changed bool, refreshNow bool, quit bool) {
+	switch normalizeDashboardInput(input) {
+	case "q":
+		return false, false, true
+	case "r":
+		return false, true, false
+	case "j", "down":
+		before := model.SelectedIndex
+		model.MoveDown(itemCount)
+		return before != model.SelectedIndex, false, false
+	case "k", "up":
+		before := model.SelectedIndex
+		model.MoveUp(itemCount)
+		return before != model.SelectedIndex, false, false
+	case "d", "enter":
+		model.ToggleDetails()
+		return true, false, false
+	case "?":
+		model.ToggleHelp()
+		return true, false, false
+	default:
+		return false, false, false
+	}
+}
+
+func normalizeDashboardInput(input string) string {
+	input = strings.TrimSpace(input)
+	switch input {
+	case "":
+		return "enter"
+	case "\x1b[B":
+		return "down"
+	case "\x1b[A":
+		return "up"
+	default:
+		return strings.ToLower(input)
+	}
 }
 
 func routeProviderCommand(stdout io.Writer, client runtimeclient.Client, options cliOptions) error {

@@ -14,6 +14,7 @@ type RuntimeState struct {
 	GeneratedAt          string         `json:"generatedAt"`
 	Providers            Providers      `json:"providers"`
 	TaskCounts           TaskCounts     `json:"taskCounts"`
+	Tasks                []TaskSummary  `json:"tasks"`
 	Cleanup              *Cleanup       `json:"cleanup,omitempty"`
 	SuggestedNextActions []string       `json:"suggestedNextActions"`
 	Groups               map[string]any `json:"groups"`
@@ -47,8 +48,34 @@ type TaskCounts struct {
 	Review        int `json:"review"`
 }
 
+type TaskSummary struct {
+	Slug            string          `json:"slug"`
+	Status          string          `json:"status"`
+	NormalizedState string          `json:"normalizedState"`
+	WorktreePath    string          `json:"worktreePath"`
+	Worktree        *TaskWorktree   `json:"worktree,omitempty"`
+	Execution       *TaskExecution  `json:"execution,omitempty"`
+	LatestRun       json.RawMessage `json:"latestRun,omitempty"`
+	Extras          map[string]any  `json:"-"`
+}
+
+type TaskWorktree struct {
+	Exists bool   `json:"exists"`
+	Path   string `json:"path"`
+	Branch string `json:"branch"`
+}
+
+type TaskExecution struct {
+	Status    string `json:"status"`
+	LastRunID string `json:"lastRunId"`
+	LogPath   string `json:"lastLogPath"`
+}
+
 type Cleanup struct {
-	Summary *CleanupSummary `json:"summary,omitempty"`
+	Summary               *CleanupSummary    `json:"summary,omitempty"`
+	OrphanedTaskWorktrees []CleanupCandidate `json:"orphanedTaskWorktrees,omitempty"`
+	OrphanedTaskBranches  []CleanupCandidate `json:"orphanedTaskBranches,omitempty"`
+	Extras                map[string]any     `json:"-"`
 }
 
 type CleanupSummary struct {
@@ -59,6 +86,17 @@ type CleanupSummary struct {
 	OrphanedTaskBranchCount   int            `json:"orphanedTaskBranchCount"`
 	BySeverity                map[string]int `json:"bySeverity"`
 	ByCategory                map[string]int `json:"byCategory"`
+}
+
+type CleanupCandidate struct {
+	ID                string   `json:"id"`
+	Severity          string   `json:"severity"`
+	Category          string   `json:"category"`
+	Path              string   `json:"path"`
+	Branch            string   `json:"branch"`
+	Dirty             bool     `json:"dirty"`
+	DirtyReasons      []string `json:"dirtyReasons"`
+	SuggestedCommands []string `json:"suggestedCommands"`
 }
 
 func ParseRuntimeState(input []byte) (RuntimeState, error) {

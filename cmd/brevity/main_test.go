@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/mortenlein/brevity/internal/commands"
+	"github.com/mortenlein/brevity/internal/dashboard"
 )
 
 type fakeRuntimeClient struct {
@@ -322,6 +323,44 @@ func TestWatchDashboardShowsPollingErrorWithoutFailing(t *testing.T) {
 			t.Fatalf("output missing %q:\n%s", want, output)
 		}
 	}
+}
+
+func TestApplyDashboardInputNavigatesTogglesAndQuits(t *testing.T) {
+	model := dashboardModel()
+
+	changed, refreshNow, quit := applyDashboardInput(&model, "j", 2)
+	if !changed || refreshNow || quit || model.SelectedIndex != 1 {
+		t.Fatalf("j result changed=%t refresh=%t quit=%t selected=%d", changed, refreshNow, quit, model.SelectedIndex)
+	}
+
+	changed, refreshNow, quit = applyDashboardInput(&model, "k", 2)
+	if !changed || refreshNow || quit || model.SelectedIndex != 0 {
+		t.Fatalf("k result changed=%t refresh=%t quit=%t selected=%d", changed, refreshNow, quit, model.SelectedIndex)
+	}
+
+	changed, refreshNow, quit = applyDashboardInput(&model, "d", 2)
+	if !changed || refreshNow || quit || !model.ShowDetails {
+		t.Fatalf("d result changed=%t refresh=%t quit=%t details=%t", changed, refreshNow, quit, model.ShowDetails)
+	}
+
+	changed, refreshNow, quit = applyDashboardInput(&model, "?", 2)
+	if !changed || refreshNow || quit || !model.ShowHelp {
+		t.Fatalf("? result changed=%t refresh=%t quit=%t help=%t", changed, refreshNow, quit, model.ShowHelp)
+	}
+
+	changed, refreshNow, quit = applyDashboardInput(&model, "r", 2)
+	if changed || !refreshNow || quit {
+		t.Fatalf("r result changed=%t refresh=%t quit=%t", changed, refreshNow, quit)
+	}
+
+	changed, refreshNow, quit = applyDashboardInput(&model, "q", 2)
+	if changed || refreshNow || !quit {
+		t.Fatalf("q result changed=%t refresh=%t quit=%t", changed, refreshNow, quit)
+	}
+}
+
+func dashboardModel() dashboard.InteractiveModel {
+	return dashboard.InteractiveModel{}
 }
 
 type assertErr string
