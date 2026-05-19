@@ -181,6 +181,20 @@ func TestParseOptionsAcceptsWatchRefresh(t *testing.T) {
 	}
 }
 
+func TestParseOptionsAcceptsBubble(t *testing.T) {
+	options, err := parseOptions([]string{"--bubble", "--refresh", "2s"})
+	if err != nil {
+		t.Fatalf("parseOptions returned error: %v", err)
+	}
+
+	if !options.bubble {
+		t.Fatal("bubble = false, want true")
+	}
+	if options.refresh != 2*time.Second {
+		t.Fatalf("refresh = %s, want 2s", options.refresh)
+	}
+}
+
 func TestParseOptionsAcceptsNoClear(t *testing.T) {
 	options, err := parseOptions([]string{"--watch", "--no-clear"})
 	if err != nil {
@@ -192,6 +206,23 @@ func TestParseOptionsAcceptsNoClear(t *testing.T) {
 	}
 	if !options.noClear {
 		t.Fatal("noClear = false, want true")
+	}
+}
+
+func TestParseOptionsRejectsBubbleWithWatchOrOnce(t *testing.T) {
+	for _, args := range [][]string{
+		{"--bubble", "--watch"},
+		{"--bubble", "--once"},
+	} {
+		t.Run(strings.Join(args, " "), func(t *testing.T) {
+			_, err := parseOptions(args)
+			if err == nil {
+				t.Fatal("parseOptions returned nil error")
+			}
+			if !strings.Contains(err.Error(), "--bubble") {
+				t.Fatalf("unexpected error: %v", err)
+			}
+		})
 	}
 }
 

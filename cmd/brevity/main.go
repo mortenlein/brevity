@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/mortenlein/brevity/internal/actions"
+	"github.com/mortenlein/brevity/internal/bubbleteadashboard"
 	"github.com/mortenlein/brevity/internal/commands"
 	"github.com/mortenlein/brevity/internal/contracts"
 	"github.com/mortenlein/brevity/internal/dashboard"
@@ -48,6 +49,7 @@ type cliOptions struct {
 	kind       commandKind
 	once       bool
 	watch      bool
+	bubble     bool
 	noClear    bool
 	refresh    time.Duration
 	jsonSource string
@@ -98,6 +100,7 @@ func parseOptions(args []string) (cliOptions, error) {
 	flags.SetOutput(io.Discard)
 	flags.BoolVar(&options.once, "once", false, "render the dashboard once")
 	flags.BoolVar(&options.watch, "watch", false, "refresh the dashboard until interrupted")
+	flags.BoolVar(&options.bubble, "bubble", false, "run the experimental Bubble Tea dashboard")
 	flags.BoolVar(&options.noClear, "no-clear", false, "do not clear the screen before changed dashboard renders")
 	refresh := flags.String("refresh", options.refresh.String(), "dashboard refresh interval")
 	jsonSource := flags.String("json-source", options.jsonSource, "runtime JSON source")
@@ -119,6 +122,12 @@ func parseOptions(args []string) (cliOptions, error) {
 	options.jsonSource = *jsonSource
 	if options.once && options.watch {
 		return cliOptions{}, fmt.Errorf("--once and --watch cannot be used together")
+	}
+	if options.bubble && options.watch {
+		return cliOptions{}, fmt.Errorf("--bubble and --watch cannot be used together")
+	}
+	if options.bubble && options.once {
+		return cliOptions{}, fmt.Errorf("--bubble and --once cannot be used together")
 	}
 	if flags.NArg() > 0 {
 		return cliOptions{}, fmt.Errorf("unexpected argument: %s", flags.Arg(0))
@@ -353,6 +362,12 @@ func runWithContextOptions(ctx context.Context, stdout io.Writer, client runtime
 	case commandTaskRuns, commandRunsReconcile, commandRunsRetention, commandRunsCompact:
 		return routeTaskRunsCommand(stdout, client, options)
 	default:
+		if options.bubble {
+			if options.refresh <= 0 {
+				options.refresh = 5 * time.Second
+			}
+			return bubbleteadashboard.Run(ctx, os.Stdin, stdout, client, options.refresh)
+		}
 		if options.watch {
 			if options.refresh <= 0 {
 				options.refresh = 5 * time.Second
@@ -842,6 +857,7 @@ func writeUsage(stdout io.Writer) {
 	fmt.Fprintln(stdout, "Flags:")
 	fmt.Fprintln(stdout, "  --once                    Render the dashboard once.")
 	fmt.Fprintln(stdout, "  --watch                   Refresh the dashboard until interrupted.")
+	fmt.Fprintln(stdout, "  --bubble                  Run the experimental Bubble Tea dashboard.")
 	fmt.Fprintln(stdout, "  --refresh <duration>      Set the dashboard refresh interval.")
 	fmt.Fprintln(stdout, "  --json-source <source>    Runtime JSON source: powershell or native.")
 	fmt.Fprintln(stdout, "  --no-clear                Do not clear before changed dashboard renders.")
