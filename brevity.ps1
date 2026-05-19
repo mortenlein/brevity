@@ -325,8 +325,12 @@ function Ensure-ProviderHealthFile {
         [object[]]$Results
     )
 
-    $healthLines = @(ConvertTo-Json -InputObject (Get-DefaultProviderHealthState) -Depth 10)
-    return Ensure-File -Path $Path -Lines $healthLines -Results $Results
+    if (Test-Path -LiteralPath $Path) {
+        return Add-InitResult -Results $Results -Status "existing" -Path $Path
+    }
+
+    Write-ProviderHealthFile -Path $Path -Health (Get-DefaultProviderHealthState)
+    return Add-InitResult -Results $Results -Status "created" -Path $Path
 }
 
 function Get-SupportedProviderHealthStatuses {
@@ -361,6 +365,48 @@ function Read-ProviderHealth {
         path = $healthPath
         health = $health
     }))
+}
+
+function Write-ProviderHealthFile {
+    param(
+        [string]$Path,
+        [object]$Health
+    )
+
+    $brevityRoot = Split-Path -Parent $Path
+    $tempPath = Join-Path $brevityRoot ("provider-health.{0}.tmp" -f ([Guid]::NewGuid().ToString("N")))
+    $backupPath = Join-Path $brevityRoot ("provider-health.{0}.bak" -f ([Guid]::NewGuid().ToString("N")))
+
+    try {
+        if (-not (Test-Path -LiteralPath $brevityRoot)) {
+            New-Item -ItemType Directory -Path $brevityRoot -Force | Out-Null
+        }
+
+        $healthJson = @(ConvertTo-Json -InputObject $Health -Depth 10)
+        Set-Content -LiteralPath $tempPath -Value $healthJson -Encoding ASCII
+
+        $rawTempHealth = Get-Content -LiteralPath $tempPath -Raw
+        if ([string]::IsNullOrWhiteSpace($rawTempHealth)) {
+            throw "Provider health temp file is empty: $tempPath"
+        }
+
+        $null = $rawTempHealth | ConvertFrom-Json
+
+        if (Test-Path -LiteralPath $Path) {
+            [System.IO.File]::Replace($tempPath, $Path, $backupPath)
+        }
+        else {
+            Move-Item -LiteralPath $tempPath -Destination $Path -Force
+        }
+    }
+    finally {
+        if (Test-Path -LiteralPath $tempPath) {
+            Remove-Item -LiteralPath $tempPath -Force
+        }
+        if (Test-Path -LiteralPath $backupPath) {
+            Remove-Item -LiteralPath $backupPath -Force
+        }
+    }
 }
 
 function Enter-ProviderHealthLock {
@@ -826,7 +872,7 @@ function Set-ProviderStatus {
         Set-ConfigField -Config $provider -Name "note" -Value ([string]$Note)
         Set-ConfigField -Config $provider -Name "updatedAt" -Value $updatedAt
 
-        ConvertTo-Json -InputObject $health -Depth 10 | Set-Content -LiteralPath $providerHealth.path -Encoding ASCII
+        Write-ProviderHealthFile -Path $providerHealth.path -Health $health
     }
     finally {
         Exit-ProviderHealthLock -Lock $providerHealthLock
