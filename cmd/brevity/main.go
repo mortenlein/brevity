@@ -22,12 +22,15 @@ func main() {
 type commandKind string
 
 const (
-	commandDashboard      commandKind = "dashboard"
-	commandProviderSet    commandKind = "provider-set"
-	commandProviderReset  commandKind = "provider-reset"
-	commandContextRefresh commandKind = "context-refresh"
-	commandTaskCleanup    commandKind = "task-cleanup"
-	commandTaskNew        commandKind = "task-new"
+	commandDashboard       commandKind = "dashboard"
+	commandProviderSet     commandKind = "provider-set"
+	commandProviderReset   commandKind = "provider-reset"
+	commandContextRefresh  commandKind = "context-refresh"
+	commandDoctor          commandKind = "doctor"
+	commandTaskCleanup     commandKind = "task-cleanup"
+	commandTaskNew         commandKind = "task-new"
+	commandTaskRuntimeInfo commandKind = "task-runtime-info"
+	commandTaskRuns        commandKind = "task-runs"
 )
 
 type cliOptions struct {
@@ -52,6 +55,9 @@ func parseOptions(args []string) (cliOptions, error) {
 	if len(args) > 0 && args[0] == "provider" {
 		return parseProviderOptions(args)
 	}
+	if len(args) > 0 && args[0] == "doctor" {
+		return parseDoctorOptions(args)
+	}
 	if len(args) > 0 && args[0] == "task" {
 		return parseTaskOptions(args)
 	}
@@ -68,6 +74,14 @@ func parseOptions(args []string) (cliOptions, error) {
 	}
 
 	return options, nil
+}
+
+func parseDoctorOptions(args []string) (cliOptions, error) {
+	if len(args) != 1 {
+		return cliOptions{}, fmt.Errorf("usage: brevity doctor")
+	}
+
+	return cliOptions{kind: commandDoctor}, nil
 }
 
 func parseProviderOptions(args []string) (cliOptions, error) {
@@ -99,7 +113,7 @@ func parseProviderOptions(args []string) (cliOptions, error) {
 
 func parseTaskOptions(args []string) (cliOptions, error) {
 	if len(args) < 2 {
-		return cliOptions{}, fmt.Errorf("missing task command: supported commands: context refresh, new, cleanup")
+		return cliOptions{}, fmt.Errorf("missing task command: supported commands: context refresh, runtime-info, runs, new, cleanup")
 	}
 	if args[1] == "context" {
 		if len(args) != 4 || args[2] != "refresh" {
@@ -117,8 +131,14 @@ func parseTaskOptions(args []string) (cliOptions, error) {
 	if args[1] == "new" {
 		return parseTaskNewOptions(args)
 	}
+	if args[1] == "runtime-info" {
+		return parseTaskRuntimeInfoOptions(args)
+	}
+	if args[1] == "runs" {
+		return parseTaskRunsOptions(args)
+	}
 
-	return cliOptions{}, fmt.Errorf("unsupported task command %q: supported commands: context refresh, new, cleanup", args[1])
+	return cliOptions{}, fmt.Errorf("unsupported task command %q: supported commands: context refresh, runtime-info, runs, new, cleanup", args[1])
 }
 
 func parseTaskNewOptions(args []string) (cliOptions, error) {
@@ -153,6 +173,22 @@ func parseTaskCleanupOptions(args []string) (cliOptions, error) {
 	return options, nil
 }
 
+func parseTaskRuntimeInfoOptions(args []string) (cliOptions, error) {
+	if len(args) != 3 || args[2] == "" {
+		return cliOptions{}, fmt.Errorf("usage: brevity task runtime-info <slug>")
+	}
+
+	return cliOptions{kind: commandTaskRuntimeInfo, slug: args[2]}, nil
+}
+
+func parseTaskRunsOptions(args []string) (cliOptions, error) {
+	if len(args) != 3 || args[2] == "" {
+		return cliOptions{}, fmt.Errorf("usage: brevity task runs <slug>")
+	}
+
+	return cliOptions{kind: commandTaskRuns, slug: args[2]}, nil
+}
+
 func run(stdout io.Writer, args []string) error {
 	options, err := parseOptions(args)
 	if err != nil {
@@ -177,11 +213,20 @@ func runWithOptions(stdout io.Writer, client runtimeclient.Client, options cliOp
 	if options.kind == commandContextRefresh {
 		return runTaskContextRefresh(stdout, client, options)
 	}
+	if options.kind == commandDoctor {
+		return runDoctor(stdout, client)
+	}
 	if options.kind == commandTaskCleanup {
 		return runTaskCleanup(stdout, client, options)
 	}
 	if options.kind == commandTaskNew {
 		return runTaskNew(stdout, client, options)
+	}
+	if options.kind == commandTaskRuntimeInfo {
+		return runTaskRuntimeInfo(stdout, client, options)
+	}
+	if options.kind == commandTaskRuns {
+		return runTaskRuns(stdout, client, options)
 	}
 
 	output, err := client.RuntimeStateJSON()
@@ -198,6 +243,29 @@ func runWithOptions(stdout io.Writer, client runtimeclient.Client, options cliOp
 	return nil
 }
 
+func runDoctor(stdout io.Writer, client runtimeclient.Client) error {
+	output, err := client.DoctorJSON()
+	result, parseErr := contracts.ParseCommandResult(output)
+	if parseErr != nil {
+		if err != nil {
+			return fmt.Errorf("%v; additionally failed to parse command result: %w", err, parseErr)
+		}
+		return parseErr
+	}
+
+	if renderErr := actions.RenderDoctorResult(stdout, result); renderErr != nil {
+		return renderErr
+	}
+	if err != nil {
+		return err
+	}
+	if !result.Success {
+		return fmt.Errorf("%s reported success=false", result.Command)
+	}
+
+	return nil
+}
+
 func runTaskNew(stdout io.Writer, client runtimeclient.Client, options cliOptions) error {
 	output, err := client.TaskNewJSON(options.slug)
 	result, parseErr := contracts.ParseCommandResult(output)
@@ -209,6 +277,52 @@ func runTaskNew(stdout io.Writer, client runtimeclient.Client, options cliOption
 	}
 
 	if renderErr := actions.RenderTaskNewResult(stdout, result); renderErr != nil {
+		return renderErr
+	}
+	if err != nil {
+		return err
+	}
+	if !result.Success {
+		return fmt.Errorf("%s reported success=false", result.Command)
+	}
+
+	return nil
+}
+
+func runTaskRuntimeInfo(stdout io.Writer, client runtimeclient.Client, options cliOptions) error {
+	output, err := client.TaskRuntimeInfoJSON(options.slug)
+	result, parseErr := contracts.ParseCommandResult(output)
+	if parseErr != nil {
+		if err != nil {
+			return fmt.Errorf("%v; additionally failed to parse command result: %w", err, parseErr)
+		}
+		return parseErr
+	}
+
+	if renderErr := actions.RenderTaskRuntimeInfoResult(stdout, result); renderErr != nil {
+		return renderErr
+	}
+	if err != nil {
+		return err
+	}
+	if !result.Success {
+		return fmt.Errorf("%s reported success=false", result.Command)
+	}
+
+	return nil
+}
+
+func runTaskRuns(stdout io.Writer, client runtimeclient.Client, options cliOptions) error {
+	output, err := client.TaskRunsJSON(options.slug)
+	result, parseErr := contracts.ParseCommandResult(output)
+	if parseErr != nil {
+		if err != nil {
+			return fmt.Errorf("%v; additionally failed to parse command result: %w", err, parseErr)
+		}
+		return parseErr
+	}
+
+	if renderErr := actions.RenderTaskRunsResult(stdout, result); renderErr != nil {
 		return renderErr
 	}
 	if err != nil {
@@ -312,10 +426,13 @@ func writeUsage(stdout io.Writer) {
 	fmt.Fprintln(stdout)
 	fmt.Fprintln(stdout, "Usage:")
 	fmt.Fprintln(stdout, "  brevity [--once]")
+	fmt.Fprintln(stdout, "  brevity doctor")
 	fmt.Fprintln(stdout, "  brevity provider set <provider> <status>")
 	fmt.Fprintln(stdout, "  brevity provider reset <provider>")
 	fmt.Fprintln(stdout, "  brevity task context refresh <slug>")
 	fmt.Fprintln(stdout, "  brevity task new <slug>")
+	fmt.Fprintln(stdout, "  brevity task runtime-info <slug>")
+	fmt.Fprintln(stdout, "  brevity task runs <slug>")
 	fmt.Fprintln(stdout, "  brevity task cleanup <slug> --force")
 	fmt.Fprintln(stdout)
 	fmt.Fprintln(stdout, "The dashboard remains read-only. Mutating actions are dispatched")

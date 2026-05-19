@@ -22,6 +22,7 @@ type CommandResult struct {
 type ResultMessage struct {
 	Code    string         `json:"code,omitempty"`
 	Message string         `json:"message,omitempty"`
+	Count   int            `json:"count,omitempty"`
 	Details map[string]any `json:"details,omitempty"`
 	Text    string         `json:"-"`
 }
@@ -96,6 +97,74 @@ type TaskNewPayload struct {
 	MetadataPath string `json:"metadataPath"`
 }
 
+type TaskRuntimeInfoPayload struct {
+	Slug            string                      `json:"slug"`
+	Status          string                      `json:"status"`
+	NormalizedState string                      `json:"normalizedState"`
+	TaskExists      bool                        `json:"taskExists"`
+	Worktree        TaskRuntimeWorktreePayload  `json:"worktree"`
+	Context         TaskRuntimeContextPayload   `json:"context"`
+	Execution       TaskRuntimeExecutionPayload `json:"execution"`
+}
+
+type TaskRuntimeWorktreePayload struct {
+	Exists bool   `json:"exists"`
+	Path   string `json:"path"`
+}
+
+type TaskRuntimeContextPayload struct {
+	MaterializedFileCount int      `json:"materializedFileCount"`
+	MissingFiles          []string `json:"missingFiles"`
+}
+
+type TaskRuntimeExecutionPayload struct {
+	Status      string `json:"status"`
+	LastRunID   string `json:"lastRunId"`
+	LastLogPath string `json:"lastLogPath"`
+}
+
+type TaskRunsPayload struct {
+	Slug  string           `json:"slug"`
+	Count int              `json:"count"`
+	Runs  []TaskRunPayload `json:"runs"`
+}
+
+type TaskRunPayload struct {
+	RunID        string `json:"runId"`
+	WorkerStatus string `json:"workerStatus"`
+	ExitCode     any    `json:"exitCode"`
+	Provider     string `json:"provider"`
+	Profile      string `json:"profile"`
+	LogPath      string `json:"logPath"`
+}
+
+type DoctorPayload struct {
+	WarningCount         int                  `json:"warningCount"`
+	ErrorCount           int                  `json:"errorCount"`
+	Providers            DoctorProviders      `json:"providers"`
+	BranchCounts         DoctorBranchCounts   `json:"branchCounts"`
+	WorktreeCounts       DoctorWorktreeCounts `json:"worktreeCounts"`
+	Lock                 DoctorLock           `json:"lock"`
+	SuggestedNextActions []string             `json:"suggestedNextActions"`
+}
+
+type DoctorProviders struct {
+	Summary ProviderSummary `json:"summary"`
+}
+
+type DoctorBranchCounts struct {
+	Orphaned int `json:"orphaned"`
+}
+
+type DoctorWorktreeCounts struct {
+	OrphanedTaskWorktrees int `json:"orphanedTaskWorktrees"`
+}
+
+type DoctorLock struct {
+	Exists bool   `json:"exists"`
+	Path   string `json:"path"`
+}
+
 func ParseCommandResult(input []byte) (CommandResult, error) {
 	var result CommandResult
 	if err := json.Unmarshal(input, &result); err != nil {
@@ -159,6 +228,45 @@ func ParseTaskNewPayload(result CommandResult) (TaskNewPayload, error) {
 	var payload TaskNewPayload
 	if err := json.Unmarshal(result.Payload, &payload); err != nil {
 		return TaskNewPayload{}, fmt.Errorf("invalid task new payload: %w", err)
+	}
+
+	return payload, nil
+}
+
+func ParseTaskRuntimeInfoPayload(result CommandResult) (TaskRuntimeInfoPayload, error) {
+	if len(result.Payload) == 0 {
+		return TaskRuntimeInfoPayload{}, errors.New("task runtime-info result missing payload")
+	}
+
+	var payload TaskRuntimeInfoPayload
+	if err := json.Unmarshal(result.Payload, &payload); err != nil {
+		return TaskRuntimeInfoPayload{}, fmt.Errorf("invalid task runtime-info payload: %w", err)
+	}
+
+	return payload, nil
+}
+
+func ParseTaskRunsPayload(result CommandResult) (TaskRunsPayload, error) {
+	if len(result.Payload) == 0 {
+		return TaskRunsPayload{}, errors.New("task runs result missing payload")
+	}
+
+	var payload TaskRunsPayload
+	if err := json.Unmarshal(result.Payload, &payload); err != nil {
+		return TaskRunsPayload{}, fmt.Errorf("invalid task runs payload: %w", err)
+	}
+
+	return payload, nil
+}
+
+func ParseDoctorPayload(result CommandResult) (DoctorPayload, error) {
+	if len(result.Payload) == 0 {
+		return DoctorPayload{}, errors.New("doctor result missing payload")
+	}
+
+	var payload DoctorPayload
+	if err := json.Unmarshal(result.Payload, &payload); err != nil {
+		return DoctorPayload{}, fmt.Errorf("invalid doctor payload: %w", err)
 	}
 
 	return payload, nil

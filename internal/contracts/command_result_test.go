@@ -72,6 +72,44 @@ func TestParseCommandResultAcceptsTaskCleanupPayload(t *testing.T) {
 	}
 }
 
+func TestParseCommandResultAcceptsInspectionPayloads(t *testing.T) {
+	runtimeInfo, err := ParseCommandResult([]byte(`{"schema":"brevity.command-result.v1","command":"task runtime-info","success":true,"severity":"info","payload":{"slug":"my-task","status":"ready-for-worker","normalizedState":"ready-for-worker","worktree":{"exists":true,"path":"C:\\repo\\worktrees\\active\\brevity-my-task"},"context":{"materializedFileCount":3,"missingFiles":["runtime.md"]},"execution":{"status":"succeeded","lastRunId":"run-abc"}}}`))
+	if err != nil {
+		t.Fatalf("ParseCommandResult runtime-info returned error: %v", err)
+	}
+	runtimePayload, err := ParseTaskRuntimeInfoPayload(runtimeInfo)
+	if err != nil {
+		t.Fatalf("ParseTaskRuntimeInfoPayload returned error: %v", err)
+	}
+	if runtimePayload.Context.MaterializedFileCount != 3 || len(runtimePayload.Context.MissingFiles) != 1 {
+		t.Fatalf("runtime context = %#v, want 3 materialized and 1 missing", runtimePayload.Context)
+	}
+
+	runs, err := ParseCommandResult([]byte(`{"schema":"brevity.command-result.v1","command":"task runs","success":true,"severity":"info","payload":{"slug":"my-task","count":1,"runs":[{"runId":"run-abc","workerStatus":"failed","exitCode":"1","provider":"codex","profile":"default","logPath":"C:\\repo\\run-abc.log"}]}}`))
+	if err != nil {
+		t.Fatalf("ParseCommandResult task runs returned error: %v", err)
+	}
+	runsPayload, err := ParseTaskRunsPayload(runs)
+	if err != nil {
+		t.Fatalf("ParseTaskRunsPayload returned error: %v", err)
+	}
+	if len(runsPayload.Runs) != 1 || runsPayload.Runs[0].Provider != "codex" {
+		t.Fatalf("runs payload = %#v, want codex run", runsPayload)
+	}
+
+	doctor, err := ParseCommandResult([]byte(`{"schema":"brevity.command-result.v1","command":"doctor","success":true,"severity":"info","warnings":[{"code":"orphaned-task-worktrees","message":"Orphaned task worktrees are present.","count":2}],"payload":{"warningCount":1,"errorCount":0,"providers":{"summary":{"total":3,"degraded":1,"unavailable":0}},"branchCounts":{"orphaned":4},"worktreeCounts":{"orphanedTaskWorktrees":2},"lock":{"exists":false,"path":"C:\\repo\\.brevity\\tasks.lock"}}}`))
+	if err != nil {
+		t.Fatalf("ParseCommandResult doctor returned error: %v", err)
+	}
+	doctorPayload, err := ParseDoctorPayload(doctor)
+	if err != nil {
+		t.Fatalf("ParseDoctorPayload returned error: %v", err)
+	}
+	if doctor.Warnings[0].Count != 2 || doctorPayload.WarningCount != 1 || doctorPayload.BranchCounts.Orphaned != 4 {
+		t.Fatalf("doctor payload = %#v warnings = %#v, want counts", doctorPayload, doctor.Warnings)
+	}
+}
+
 func TestParseCommandResultRejectsWrongSchema(t *testing.T) {
 	_, err := ParseCommandResult([]byte(`{"schema":"other","command":"provider set","success":true,"severity":"info","payload":{}}`))
 	if err == nil {

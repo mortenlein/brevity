@@ -11,9 +11,12 @@ type fakeRuntimeClient struct {
 	err            error
 	providerSet    []byte
 	providerReset  []byte
+	doctor         []byte
 	contextRefresh []byte
 	taskCleanup    []byte
 	taskNew        []byte
+	runtimeInfo    []byte
+	taskRuns       []byte
 	actionErr      error
 	calls          []string
 }
@@ -33,6 +36,11 @@ func (client *fakeRuntimeClient) ProviderResetJSON(provider string) ([]byte, err
 	return client.providerReset, client.actionErr
 }
 
+func (client *fakeRuntimeClient) DoctorJSON() ([]byte, error) {
+	client.calls = append(client.calls, "doctor")
+	return client.doctor, client.actionErr
+}
+
 func (client *fakeRuntimeClient) TaskContextRefreshJSON(slug string) ([]byte, error) {
 	client.calls = append(client.calls, "context-refresh:"+slug)
 	return client.contextRefresh, client.actionErr
@@ -46,6 +54,16 @@ func (client *fakeRuntimeClient) TaskCleanupJSON(slug string) ([]byte, error) {
 func (client *fakeRuntimeClient) TaskNewJSON(slug string) ([]byte, error) {
 	client.calls = append(client.calls, "task-new:"+slug)
 	return client.taskNew, client.actionErr
+}
+
+func (client *fakeRuntimeClient) TaskRuntimeInfoJSON(slug string) ([]byte, error) {
+	client.calls = append(client.calls, "runtime-info:"+slug)
+	return client.runtimeInfo, client.actionErr
+}
+
+func (client *fakeRuntimeClient) TaskRunsJSON(slug string) ([]byte, error) {
+	client.calls = append(client.calls, "task-runs:"+slug)
+	return client.taskRuns, client.actionErr
 }
 
 func TestRunWithClientRendersRuntimeState(t *testing.T) {
@@ -168,6 +186,45 @@ func TestParseOptionsAcceptsTaskNew(t *testing.T) {
 	}
 }
 
+func TestParseOptionsAcceptsDoctor(t *testing.T) {
+	options, err := parseOptions([]string{"doctor"})
+	if err != nil {
+		t.Fatalf("parseOptions returned error: %v", err)
+	}
+
+	if options.kind != commandDoctor {
+		t.Fatalf("kind = %q, want doctor", options.kind)
+	}
+}
+
+func TestParseOptionsAcceptsTaskRuntimeInfo(t *testing.T) {
+	options, err := parseOptions([]string{"task", "runtime-info", "my-task"})
+	if err != nil {
+		t.Fatalf("parseOptions returned error: %v", err)
+	}
+
+	if options.kind != commandTaskRuntimeInfo {
+		t.Fatalf("kind = %q, want task-runtime-info", options.kind)
+	}
+	if options.slug != "my-task" {
+		t.Fatalf("slug = %q, want my-task", options.slug)
+	}
+}
+
+func TestParseOptionsAcceptsTaskRuns(t *testing.T) {
+	options, err := parseOptions([]string{"task", "runs", "my-task"})
+	if err != nil {
+		t.Fatalf("parseOptions returned error: %v", err)
+	}
+
+	if options.kind != commandTaskRuns {
+		t.Fatalf("kind = %q, want task-runs", options.kind)
+	}
+	if options.slug != "my-task" {
+		t.Fatalf("slug = %q, want my-task", options.slug)
+	}
+}
+
 func TestParseOptionsAcceptsHelp(t *testing.T) {
 	for _, arg := range []string{"--help", "-h"} {
 		t.Run(arg, func(t *testing.T) {
@@ -196,6 +253,8 @@ func TestRunWritesHelp(t *testing.T) {
 		"provider set <provider> <status>",
 		"task context refresh <slug>",
 		"task new <slug>",
+		"task runtime-info <slug>",
+		"task runs <slug>",
 		"task cleanup <slug> --force",
 	} {
 		if !strings.Contains(output, want) {
@@ -260,6 +319,123 @@ func TestParseOptionsRejectsUnsupportedProviderCommand(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), `unsupported provider command "status"`) {
 		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestRunDoctorUsesClientAndRendersResult(t *testing.T) {
+	client := &fakeRuntimeClient{
+		doctor: []byte(`{"schema":"brevity.command-result.v1","command":"doctor","success":true,"severity":"info","warnings":[{"code":"orphaned-task-worktrees","message":"Orphaned task worktrees are present.","count":2}],"suggestedNextActions":["Run doctor."],"payload":{"warningCount":1,"errorCount":0,"providers":{"summary":{"total":3,"degraded":1,"unavailable":0}},"branchCounts":{"orphaned":4},"worktreeCounts":{"orphanedTaskWorktrees":2},"lock":{"exists":false,"path":"C:\\repo\\.brevity\\tasks.lock"},"suggestedNextActions":["Run doctor."]}}`),
+	}
+
+	var stdout bytes.Buffer
+	err := runWithOptions(&stdout, client, cliOptions{kind: commandDoctor})
+	if err != nil {
+		t.Fatalf("runWithOptions returned error: %v", err)
+	}
+
+	if len(client.calls) != 1 || client.calls[0] != "doctor" {
+		t.Fatalf("calls = %#v, want doctor only", client.calls)
+	}
+
+	output := stdout.String()
+	for _, want := range []string{
+		"Doctor",
+		"warnings: 1",
+		"errors: 0",
+		"providers: total=3 degraded=1 unavailable=0",
+		"orphanedWorktrees: 2",
+		"orphanedBranches: 4",
+		"lockExists: false",
+		"- Run doctor.",
+	} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("output missing %q:\n%s", want, output)
+		}
+	}
+}
+
+func TestRunTaskRuntimeInfoUsesClientAndRendersResult(t *testing.T) {
+	client := &fakeRuntimeClient{
+		runtimeInfo: []byte(`{"schema":"brevity.command-result.v1","command":"task runtime-info","success":true,"severity":"info","payload":{"slug":"my-task","status":"ready-for-worker","normalizedState":"ready-for-worker","worktree":{"exists":true,"path":"C:\\repo\\worktrees\\active\\brevity-my-task"},"context":{"materializedFileCount":3,"missingFiles":["runtime.md"]},"execution":{"status":"succeeded","lastRunId":"run-abc","lastLogPath":"C:\\repo\\.brevity\\logs\\my-task\\run-abc.log"}}}`),
+	}
+
+	var stdout bytes.Buffer
+	err := runWithOptions(&stdout, client, cliOptions{kind: commandTaskRuntimeInfo, slug: "my-task"})
+	if err != nil {
+		t.Fatalf("runWithOptions returned error: %v", err)
+	}
+
+	if len(client.calls) != 1 || client.calls[0] != "runtime-info:my-task" {
+		t.Fatalf("calls = %#v, want runtime info only", client.calls)
+	}
+
+	output := stdout.String()
+	for _, want := range []string{
+		"Task runtime-info",
+		"slug: my-task",
+		"status: ready-for-worker",
+		"normalizedState: ready-for-worker",
+		"worktreeExists: true",
+		"worktreePath: C:\\repo\\worktrees\\active\\brevity-my-task",
+		"contextFileCount: 3",
+		"contextMissingCount: 1",
+		"executionStatus: succeeded",
+		"latestRunId: run-abc",
+	} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("output missing %q:\n%s", want, output)
+		}
+	}
+}
+
+func TestRunTaskRuntimeInfoReturnsErrorWhenResultFails(t *testing.T) {
+	client := &fakeRuntimeClient{
+		runtimeInfo: []byte(`{"schema":"brevity.command-result.v1","command":"task runtime-info","success":false,"severity":"error","errors":[{"code":"task-not-found","message":"Task not found.","details":{"slug":"nope"}}],"payload":{}}`),
+	}
+
+	var stdout bytes.Buffer
+	err := runWithOptions(&stdout, client, cliOptions{kind: commandTaskRuntimeInfo, slug: "nope"})
+	if err == nil {
+		t.Fatal("runWithOptions returned nil error")
+	}
+	if !strings.Contains(err.Error(), "task runtime-info reported success=false") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(stdout.String(), "error: task-not-found: Task not found.") {
+		t.Fatalf("output missing structured error:\n%s", stdout.String())
+	}
+}
+
+func TestRunTaskRunsUsesClientAndRendersResult(t *testing.T) {
+	client := &fakeRuntimeClient{
+		taskRuns: []byte(`{"schema":"brevity.command-result.v1","command":"task runs","success":true,"severity":"info","payload":{"slug":"my-task","count":1,"runs":[{"runId":"run-abc","workerStatus":"failed","exitCode":"1","provider":"codex","profile":"default","logPath":"C:\\repo\\.brevity\\logs\\my-task\\run-abc.log"}]}}`),
+	}
+
+	var stdout bytes.Buffer
+	err := runWithOptions(&stdout, client, cliOptions{kind: commandTaskRuns, slug: "my-task"})
+	if err != nil {
+		t.Fatalf("runWithOptions returned error: %v", err)
+	}
+
+	if len(client.calls) != 1 || client.calls[0] != "task-runs:my-task" {
+		t.Fatalf("calls = %#v, want task runs only", client.calls)
+	}
+
+	output := stdout.String()
+	for _, want := range []string{
+		"Task runs",
+		"slug: my-task",
+		"count: 1",
+		"- runId: run-abc",
+		"status: failed",
+		"exitCode: 1",
+		"provider: codex",
+		"profile: default",
+		"logPath: C:\\repo\\.brevity\\logs\\my-task\\run-abc.log",
+	} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("output missing %q:\n%s", want, output)
+		}
 	}
 }
 

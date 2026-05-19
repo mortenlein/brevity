@@ -10,11 +10,14 @@ import (
 
 type Client interface {
 	RuntimeStateJSON() ([]byte, error)
+	DoctorJSON() ([]byte, error)
 	ProviderSetJSON(provider string, status string) ([]byte, error)
 	ProviderResetJSON(provider string) ([]byte, error)
 	TaskContextRefreshJSON(slug string) ([]byte, error)
 	TaskCleanupJSON(slug string) ([]byte, error)
 	TaskNewJSON(slug string) ([]byte, error)
+	TaskRuntimeInfoJSON(slug string) ([]byte, error)
+	TaskRunsJSON(slug string) ([]byte, error)
 }
 
 type PowerShellClient struct {
@@ -27,6 +30,10 @@ func NewPowerShellClient() PowerShellClient {
 
 func (client PowerShellClient) RuntimeStateJSON() ([]byte, error) {
 	return client.runJSON("runtime state --json", "runtime", "state", "--json")
+}
+
+func (client PowerShellClient) DoctorJSON() ([]byte, error) {
+	return client.runJSON("doctor --json", "doctor", "--json")
 }
 
 func (client PowerShellClient) ProviderSetJSON(provider string, status string) ([]byte, error) {
@@ -47,6 +54,14 @@ func (client PowerShellClient) TaskCleanupJSON(slug string) ([]byte, error) {
 
 func (client PowerShellClient) TaskNewJSON(slug string) ([]byte, error) {
 	return client.runJSON("task new "+slug+" --json", "task", "new", slug, "--json")
+}
+
+func (client PowerShellClient) TaskRuntimeInfoJSON(slug string) ([]byte, error) {
+	return client.runJSON("task runtime-info "+slug+" --json", "task", "runtime-info", slug, "--json")
+}
+
+func (client PowerShellClient) TaskRunsJSON(slug string) ([]byte, error) {
+	return client.runJSON("task runs "+slug+" --json", "task", "runs", slug, "--json")
 }
 
 func (client PowerShellClient) runJSON(description string, args ...string) ([]byte, error) {
