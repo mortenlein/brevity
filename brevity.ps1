@@ -6079,6 +6079,97 @@ function Get-ProviderHealthLockInfo {
     }
 }
 
+function Test-ActiveProviderCommandProcess {
+    $result = [ordered]@{
+        reliable = $false
+        active = $false
+        reason = ""
+    }
+
+    try {
+        $processes = @(Get-CimInstance Win32_Process -ErrorAction Stop | Where-Object {
+            $_.ProcessId -ne $PID -and
+            -not [string]::IsNullOrWhiteSpace([string]$_.CommandLine) -and
+            $_.CommandLine -match "(?i)brevity\.ps1" -and
+            $_.CommandLine -match "(?i)\bprovider\s+(set|reset)\b"
+        })
+
+        $result.reliable = $true
+        $result.active = ($processes.Count -gt 0)
+        if ($result.active) {
+            $result.reason = "Detected active Brevity provider command process."
+        }
+        else {
+            $result.reason = "No active Brevity provider command process detected."
+        }
+    }
+    catch {
+        $result.reason = "Unable to inspect process command lines: $($_.Exception.Message)"
+    }
+
+    return [pscustomobject]$result
+}
+
+function Repair-ProviderHealthLock {
+    param([object]$LockInfo)
+
+    $result = [ordered]@{
+        exists = $false
+        removed = $false
+        keptReason = "absent"
+        processCheckReliable = $false
+        activeProviderCommandDetected = $false
+        guidance = "No provider health lock is present."
+    }
+
+    if ($null -eq $LockInfo -or -not $LockInfo.exists) {
+        return [pscustomobject]$result
+    }
+
+    $result.exists = $true
+
+    if ($null -eq $LockInfo.ageMinutes) {
+        $result.keptReason = "uncertain-age"
+        $result.guidance = "Provider health lock age could not be determined; not removing automatically."
+        return [pscustomobject]$result
+    }
+
+    if ($LockInfo.ageMinutes -lt 10) {
+        $result.keptReason = "fresh"
+        $result.guidance = ("Provider health lock is fresh ({0:N1} minutes); not removing." -f $LockInfo.ageMinutes)
+        return [pscustomobject]$result
+    }
+
+    $processCheck = Test-ActiveProviderCommandProcess
+    $result.processCheckReliable = $processCheck.reliable
+    $result.activeProviderCommandDetected = $processCheck.active
+
+    if ($processCheck.reliable -and $processCheck.active) {
+        $result.keptReason = "active-provider-command"
+        $result.guidance = "Provider health lock appears old, but an active Brevity provider command was detected; not removing."
+        return [pscustomobject]$result
+    }
+
+    if (-not $processCheck.reliable -and $LockInfo.ageMinutes -lt 30) {
+        $result.keptReason = "uncertain-process-check"
+        $result.guidance = ("Provider health lock is old ({0:N1} minutes), but process detection was unavailable; not removing automatically. Confirm no provider command is active before manual cleanup." -f $LockInfo.ageMinutes)
+        return [pscustomobject]$result
+    }
+
+    Remove-Item -LiteralPath $LockInfo.path -Force
+    Write-VaultRuntimeEvent -Type "doctor-repair" -Subject "provider-health.lock" -Message "Removed stale provider health lock."
+    $result.removed = $true
+    $result.keptReason = ""
+    if ($processCheck.reliable) {
+        $result.guidance = "Removed stale provider health lock after no active Brevity provider command was detected."
+    }
+    else {
+        $result.guidance = ("Removed very old provider health lock ({0:N1} minutes) even though process detection was unavailable." -f $LockInfo.ageMinutes)
+    }
+
+    return [pscustomobject]$result
+}
+
 function Get-DoctorReportData {
     $repoRoot = Get-RepositoryRoot
     $config = Read-BrevityConfig
@@ -6309,6 +6400,17 @@ function Show-DoctorReport {
     if ($Repair) {
         Write-Section "Repair"
         $repaired = $false
+        $providerHealthLockRepair = Repair-ProviderHealthLock -LockInfo $providerHealthLockInfo
+        if ($providerHealthLockRepair.exists) {
+            if ($providerHealthLockRepair.removed) {
+                Write-Host "Removed stale provider health lock: $($providerHealthLockInfo.path)"
+                $repaired = $true
+            }
+            else {
+                Write-Host "Provider health lock kept: $($providerHealthLockRepair.guidance)"
+            }
+        }
+
         if ($lockInfo.exists -and $null -ne $lockInfo.ageMinutes) {
             if ($lockInfo.ageMinutes -ge 10) {
                 Remove-Item -LiteralPath $lockInfo.path -Force
