@@ -498,6 +498,29 @@ groups when matching tasks are present, including:
 - `done`
 - `blocked`
 
+For runtime consumers, Brevity derives a canonical `normalizedState` beside the
+existing metadata `status`. The metadata status is preserved for backward
+compatibility; normalized state is the predictable grouping field intended for
+the TUI.
+
+Canonical task states:
+
+- `planned` - durable task spec exists, but runtime task metadata has not been created.
+- `ready-for-worker` - task metadata exists and the task is eligible for worker execution.
+- `running` - the latest worker run is active, unknown-running, or incomplete.
+- `succeeded` - task work is complete under a legacy completed/done status.
+- `failed` - the latest worker run failed.
+- `reviewing` - the latest worker run succeeded and the task branch has not been merged.
+- `merged` - task branch integration succeeded and cleanup remains.
+- `stale` - recorded worktree, branch, prompt, or Git registration facts are missing.
+- `blocked` - provider health or task metadata prevents safe execution.
+- `orphaned` - task-like runtime facts exist without matching task metadata.
+
+The normalizer maps older statuses such as `done`, `completed`, and
+`stale-*` runtime statuses into the canonical set. Unknown non-empty metadata
+statuses are treated as `blocked` until a future explicit transition model
+defines them.
+
 For each task, it reports:
 
 - `slug`
@@ -596,8 +619,9 @@ Normal operator flow:
 .\brevity.ps1 task context refresh my-task
 ```
 
-`task runtime-info` exposes the current context state and last known worker
-lifecycle state for the task. `task context status` reports the managed context files in the worktree, while `task
+`task runtime-info` exposes the current context state, metadata `status`,
+derived `normalizedState`, and last known worker lifecycle state for the task.
+`task context status` reports the managed context files in the worktree, while `task
 context refresh` re-materializes them from vault memory. If a selected vault
 memory file does not exist, Brevity skips it safely. Refresh is useful when an
 operator wants to restore Brevity-managed context files before handing the task

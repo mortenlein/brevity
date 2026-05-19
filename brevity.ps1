@@ -2721,7 +2721,7 @@ function Show-Board {
 
     $runtimeTasks = @($tasks | ForEach-Object { Get-TaskRuntimeInfo -Task $_ })
     $totalTasks = $runtimeTasks.Count
-    $readyTasks = @($runtimeTasks | Where-Object { $_.status -eq "ready-for-worker" }).Count
+    $readyTasks = @($runtimeTasks | Where-Object { $_.normalizedState -eq "ready-for-worker" }).Count
     $staleTasks = @($runtimeTasks | Where-Object { $_.runtime.stale }).Count
 
     Write-Host "Tasks: $totalTasks total, $readyTasks ready, $staleTasks stale"
@@ -3816,6 +3816,90 @@ function Get-TaskRuntimeStateFlags {
     }
 }
 
+function Get-CanonicalTaskStates {
+    return @(
+        "planned",
+        "ready-for-worker",
+        "running",
+        "succeeded",
+        "failed",
+        "reviewing",
+        "merged",
+        "stale",
+        "blocked",
+        "orphaned"
+    )
+}
+
+function Resolve-TaskNormalizedState {
+    param(
+        [string]$Status,
+        [string]$MetadataStatus,
+        [object]$Runtime = $null,
+        [object]$Provider = $null,
+        [object]$Execution = $null,
+        [bool]$TaskExists = $true
+    )
+
+    if (-not $TaskExists -or $Status -eq "missing-metadata") {
+        return "orphaned"
+    }
+
+    if ($null -ne $Runtime -and $Runtime.stale) {
+        return "stale"
+    }
+
+    if ($null -ne $Provider -and $Provider.gated) {
+        return "blocked"
+    }
+
+    $executionStatus = ""
+    if ($null -ne $Execution -and $null -ne $Execution.PSObject.Properties["status"]) {
+        $executionStatus = [string]$Execution.status
+    }
+
+    if ($executionStatus -in @("running", "running-unknown", "incomplete")) {
+        return "running"
+    }
+
+    if ($executionStatus -eq "failed") {
+        return "failed"
+    }
+
+    if ($executionStatus -eq "succeeded" -and $MetadataStatus -ne "merged") {
+        return "reviewing"
+    }
+
+    $rawStatus = [string]$Status
+    if ([string]::IsNullOrWhiteSpace($rawStatus)) {
+        $rawStatus = [string]$MetadataStatus
+    }
+
+    switch ($rawStatus) {
+        "planned" { return "planned" }
+        "ready-for-worker" { return "ready-for-worker" }
+        "running" { return "running" }
+        "succeeded" { return "succeeded" }
+        "failed" { return "failed" }
+        "reviewing" { return "reviewing" }
+        "merged" { return "merged" }
+        "blocked" { return "blocked" }
+        "done" { return "succeeded" }
+        "completed" { return "succeeded" }
+        "stale-worktree" { return "stale" }
+        "stale-unregistered-worktree" { return "stale" }
+        "stale-prompt" { return "stale" }
+        "stale-branch" { return "stale" }
+        default {
+            if ($rawStatus -like "stale-*") {
+                return "stale"
+            }
+        }
+    }
+
+    return "blocked"
+}
+
 function Get-TaskRuntimeInfo {
     param(
         [object]$Task = $null,
@@ -3850,6 +3934,7 @@ function Get-TaskRuntimeInfo {
             slug = $Slug
             branch = Get-TaskField -Task $emptyTask -Name "branch"
             status = "missing-metadata"
+            normalizedState = (Resolve-TaskNormalizedState -Status "missing-metadata" -MetadataStatus "" -Runtime $runtime -Provider $provider -Execution $execution -TaskExists $false)
             metadataStatus = ""
             taskExists = $false
             worktree = $worktree
@@ -3885,10 +3970,13 @@ function Get-TaskRuntimeInfo {
         $runtimeStatus = "stale-branch"
     }
 
+    $normalizedState = Resolve-TaskNormalizedState -Status $runtimeStatus -MetadataStatus $metadataStatus -Runtime $runtime -Provider $provider -Execution $execution -TaskExists $true
+
     return [pscustomobject]@{
         slug = $slug
         branch = $branch
         status = $runtimeStatus
+        normalizedState = $normalizedState
         metadataStatus = $metadataStatus
         taskExists = $true
         worktree = $worktree
@@ -4004,8 +4092,8 @@ function Show-TaskStatus {
     $runtimeTasks = @($tasks | ForEach-Object { Get-TaskRuntimeInfo -Task $_ })
 
     $totalTasks = $runtimeTasks.Count
-    $readyTasks = @($runtimeTasks | Where-Object { $_.status -eq "ready-for-worker" }).Count
-    $staleTasks = @($runtimeTasks | Where-Object { $_.runtime.stale }).Count
+    $readyTasks = @($runtimeTasks | Where-Object { $_.normalizedState -eq "ready-for-worker" }).Count
+    $staleTasks = @($runtimeTasks | Where-Object { $_.normalizedState -eq "stale" }).Count
 
     Write-Host "Tasks: $totalTasks total, $readyTasks ready, $staleTasks stale"
     Write-Host ""
@@ -4016,6 +4104,7 @@ function Show-TaskStatus {
                 slug = $_.slug
                 branch = $_.branch
                 status = $_.status
+                normalizedState = $_.normalizedState
                 worktreePath = $_.worktree.path
                 promptPath = $_.prompt.path
                 provider = $_.provider.resolved
@@ -4043,13 +4132,13 @@ function Show-WorkerPlan {
         }
 
         $readiness = "blocked"
-        if ($_.metadataStatus -eq "merged") {
+        if ($_.normalizedState -eq "merged") {
             $readiness = "review"
         }
-        elseif (-not $_.runtime.stale -and -not $_.provider.gated -and $_.metadataStatus -eq "ready-for-worker") {
+        elseif ($_.normalizedState -eq "ready-for-worker") {
             $readiness = "runnable"
         }
-        elseif ($_.runtime.stale) {
+        elseif ($_.normalizedState -eq "stale") {
             $readiness = "stale"
         }
         elseif ($_.provider.gated) {
@@ -4061,6 +4150,7 @@ function Show-WorkerPlan {
             provider = $provider
             providerHealth = $_.provider.health
             status = $_.status
+            normalizedState = $_.normalizedState
             worktreeStatus = $(if ($_.worktree.exists) { $(if ($_.worktree.registered) { "registered" } else { "unregistered" }) } else { "missing" })
             worktreePath = $_.worktree.path
             stale = $_.runtime.stale
@@ -4173,7 +4263,7 @@ function Show-WorkerPlan {
     }
     else {
         $blocked | Sort-Object readiness, slug | ForEach-Object {
-            Write-Host "$($_.slug) [$($_.readiness)] status=$($_.status) worktree=$($_.worktreeStatus) provider=$($_.provider)"
+            Write-Host "$($_.slug) [$($_.readiness)] status=$($_.status) normalizedState=$($_.normalizedState) worktree=$($_.worktreeStatus) provider=$($_.provider)"
         }
     }
 }
@@ -4184,10 +4274,10 @@ function Get-SessionSummaryData {
     $providerSummary = Get-ProviderHealthSummary -Health $providerHealth.health
     $tasks = @(Read-BrevityTasks)
     $runtimeTasks = @($tasks | ForEach-Object { Get-TaskRuntimeInfo -Task $_ })
-    $runnableTasks = @($runtimeTasks | Where-Object { -not $_.runtime.stale -and -not $_.provider.gated -and $_.metadataStatus -eq "ready-for-worker" })
-    $staleTasks = @($runtimeTasks | Where-Object { $_.runtime.stale })
+    $runnableTasks = @($runtimeTasks | Where-Object { $_.normalizedState -eq "ready-for-worker" })
+    $staleTasks = @($runtimeTasks | Where-Object { $_.normalizedState -eq "stale" })
     $providerGatedTasks = @($runtimeTasks | Where-Object { $_.provider.gated })
-    $blockedTasks = @($runtimeTasks | Where-Object { $_.runtime.stale -or $_.provider.gated })
+    $blockedTasks = @($runtimeTasks | Where-Object { $_.normalizedState -eq "blocked" -or $_.provider.gated })
     $worktreeRecords = @(Get-GitWorktreeRecords)
     $orphanedTaskWorktrees = @(Get-OrphanedTaskWorktreeRecords -RuntimeTasks $runtimeTasks -WorktreeRecords $worktreeRecords)
     $tasksPath = Join-Path $repoRoot ".brevity\tasks.json"
@@ -4244,6 +4334,7 @@ function ConvertTo-RuntimeStateTaskSummary {
         slug = $Task.slug
         branch = $Task.branch
         status = $Task.status
+        normalizedState = $Task.normalizedState
         metadataStatus = $Task.metadataStatus
         provider = $Task.provider.resolved
         providerHealth = $Task.provider.health
@@ -4456,11 +4547,11 @@ function Get-RuntimeStateData {
         $recentRuntimeMemory = @(Get-Content -LiteralPath $runtimeLogPath -Tail $script:BrevityRuntimeStateRecentMemoryLimit)
     }
 
-    $runnableTasks = @($runtimeTasks | Where-Object { -not $_.runtime.stale -and -not $_.provider.gated -and $_.metadataStatus -eq "ready-for-worker" })
-    $staleTasks = @($runtimeTasks | Where-Object { $_.runtime.stale })
+    $runnableTasks = @($runtimeTasks | Where-Object { $_.normalizedState -eq "ready-for-worker" })
+    $staleTasks = @($runtimeTasks | Where-Object { $_.normalizedState -eq "stale" })
     $providerGatedTasks = @($runtimeTasks | Where-Object { $_.provider.gated })
-    $blockedTasks = @($runtimeTasks | Where-Object { $_.runtime.stale -or $_.provider.gated })
-    $reviewTasks = @($runtimeTasks | Where-Object { $_.metadataStatus -eq "merged" })
+    $blockedTasks = @($runtimeTasks | Where-Object { $_.normalizedState -eq "blocked" -or $_.provider.gated })
+    $reviewTasks = @($runtimeTasks | Where-Object { $_.normalizedState -eq "reviewing" -or $_.normalizedState -eq "merged" })
 
     $suggestedNextActions = @("No immediate runtime action suggested.")
     if ($lockInfo.exists -and $null -ne $lockInfo.ageMinutes -and $lockInfo.ageMinutes -ge 10) {
@@ -4505,6 +4596,18 @@ function Get-RuntimeStateData {
             stale = @($staleTasks | Sort-Object slug | ForEach-Object { $_.slug })
             providerGated = @($providerGatedTasks | Sort-Object slug | ForEach-Object { $_.slug })
             review = @($reviewTasks | Sort-Object slug | ForEach-Object { $_.slug })
+            byNormalizedState = [pscustomobject]@{
+                planned = @($runtimeTasks | Where-Object { $_.normalizedState -eq "planned" } | Sort-Object slug | ForEach-Object { $_.slug })
+                readyForWorker = @($runtimeTasks | Where-Object { $_.normalizedState -eq "ready-for-worker" } | Sort-Object slug | ForEach-Object { $_.slug })
+                running = @($runtimeTasks | Where-Object { $_.normalizedState -eq "running" } | Sort-Object slug | ForEach-Object { $_.slug })
+                succeeded = @($runtimeTasks | Where-Object { $_.normalizedState -eq "succeeded" } | Sort-Object slug | ForEach-Object { $_.slug })
+                failed = @($runtimeTasks | Where-Object { $_.normalizedState -eq "failed" } | Sort-Object slug | ForEach-Object { $_.slug })
+                reviewing = @($runtimeTasks | Where-Object { $_.normalizedState -eq "reviewing" } | Sort-Object slug | ForEach-Object { $_.slug })
+                merged = @($runtimeTasks | Where-Object { $_.normalizedState -eq "merged" } | Sort-Object slug | ForEach-Object { $_.slug })
+                stale = @($runtimeTasks | Where-Object { $_.normalizedState -eq "stale" } | Sort-Object slug | ForEach-Object { $_.slug })
+                blocked = @($runtimeTasks | Where-Object { $_.normalizedState -eq "blocked" } | Sort-Object slug | ForEach-Object { $_.slug })
+                orphaned = @($runtimeTasks | Where-Object { $_.normalizedState -eq "orphaned" } | Sort-Object slug | ForEach-Object { $_.slug })
+            }
         }
         orphanedTaskWorktrees = $orphanedTaskWorktrees
         cleanup = $cleanup

@@ -419,6 +419,22 @@ matching tasks are present, including:
 - `done`
 - `blocked`
 
+Runtime task state is also exposed as `normalizedState` for TUI and automation
+consumers. This does not replace existing task metadata `status`; it is a
+derived compatibility layer over metadata, runtime health, and worker history.
+Canonical normalized states are:
+
+- `planned` - durable task spec exists but no runtime worktree has been started.
+- `ready-for-worker` - task metadata is present and the task can be offered to a worker.
+- `running` - the latest worker run appears active or incomplete.
+- `succeeded` - work is complete under a legacy completed/done status.
+- `failed` - the latest worker run failed.
+- `reviewing` - a worker succeeded and the task has not been merged yet.
+- `merged` - the task branch has been merged and awaits cleanup.
+- `stale` - required worktree, branch, prompt, or registration facts are missing.
+- `blocked` - provider or metadata state prevents safe worker execution.
+- `orphaned` - runtime facts exist without matching task metadata.
+
 When no task metadata exists, it prints `No Brevity tasks found.` The board is
 read-only; it does not start work, run planner automation, merge branches, or
 change task lifecycle state.
@@ -471,7 +487,8 @@ Example operator check:
 ```
 
 `task runtime-info` shows the task's worktree, prompt, provider, context state,
-and last known worker lifecycle state. `task context status` inspects the managed files under
+existing `status`, derived `normalizedState`, and last known worker lifecycle
+state. `task context status` inspects the managed files under
 `.brevity\context`, and `task context refresh` restores those managed files from
 vault memory. Missing vault files are skipped safely, so the worker always sees
 only the local bounded context that exists for that task.
@@ -624,8 +641,8 @@ The task status command reads:
 <repo>\.brevity\tasks.json
 ```
 
-When task metadata exists, it prints the slug, branch, status, worktree path,
-and prompt path for each task. When no task metadata exists, it prints
+When task metadata exists, it prints the slug, branch, status, normalized state,
+worktree path, and prompt path for each task. When no task metadata exists, it prints
 `No Brevity tasks found.`
 
 The task merge command reads the matching record from:
