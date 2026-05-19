@@ -51,6 +51,16 @@ type cliOptions struct {
 	smoke    bool
 }
 
+type actionCall func() ([]byte, error)
+type actionRenderer func(io.Writer, contracts.CommandResult) error
+type actionCheck func(contracts.CommandResult) error
+
+type actionSpec struct {
+	call   actionCall
+	render actionRenderer
+	check  actionCheck
+}
+
 func parseOptions(args []string) (cliOptions, error) {
 	options := cliOptions{kind: commandDashboard}
 	for _, arg := range args {
@@ -333,21 +343,32 @@ func runTaskRunsMaintenance(stdout io.Writer, client runtimeclient.Client, optio
 		return fmt.Errorf("brevity %s requires --dry-run", maintenanceCommandName(options.kind))
 	}
 
-	var (
-		output []byte
-		err    error
-	)
+	var spec actionSpec
 	switch options.kind {
 	case commandRunsReconcile:
-		output, err = client.TaskRunsReconcileJSON()
+		spec = actionSpec{
+			call:   client.TaskRunsReconcileJSON,
+			render: actions.RenderTaskRunsReconcileResult,
+		}
 	case commandRunsRetention:
-		output, err = client.TaskRunsRetentionJSON()
+		spec = actionSpec{
+			call:   client.TaskRunsRetentionJSON,
+			render: actions.RenderTaskRunsRetentionResult,
+		}
 	case commandRunsCompact:
-		output, err = client.TaskRunsCompactJSON()
+		spec = actionSpec{
+			call:   client.TaskRunsCompactJSON,
+			render: actions.RenderTaskRunsCompactResult,
+		}
 	default:
 		return fmt.Errorf("unsupported task runs maintenance command: %s", options.kind)
 	}
 
+	return runPowerShellAction(stdout, spec)
+}
+
+func runPowerShellAction(stdout io.Writer, spec actionSpec) error {
+	output, err := spec.call()
 	result, parseErr := contracts.ParseCommandResult(output)
 	if parseErr != nil {
 		if err != nil {
@@ -356,16 +377,7 @@ func runTaskRunsMaintenance(stdout io.Writer, client runtimeclient.Client, optio
 		return parseErr
 	}
 
-	var renderErr error
-	switch options.kind {
-	case commandRunsReconcile:
-		renderErr = actions.RenderTaskRunsReconcileResult(stdout, result)
-	case commandRunsRetention:
-		renderErr = actions.RenderTaskRunsRetentionResult(stdout, result)
-	case commandRunsCompact:
-		renderErr = actions.RenderTaskRunsCompactResult(stdout, result)
-	}
-	if renderErr != nil {
+	if renderErr := spec.render(stdout, result); renderErr != nil {
 		return renderErr
 	}
 	if err != nil {
@@ -373,6 +385,9 @@ func runTaskRunsMaintenance(stdout io.Writer, client runtimeclient.Client, optio
 	}
 	if !result.Success {
 		return fmt.Errorf("%s reported success=false", result.Command)
+	}
+	if spec.check != nil {
+		return spec.check(result)
 	}
 
 	return nil
@@ -392,49 +407,19 @@ func maintenanceCommandName(kind commandKind) string {
 }
 
 func runDoctor(stdout io.Writer, client runtimeclient.Client) error {
-	output, err := client.DoctorJSON()
-	result, parseErr := contracts.ParseCommandResult(output)
-	if parseErr != nil {
-		if err != nil {
-			return fmt.Errorf("%v; additionally failed to parse command result: %w", err, parseErr)
-		}
-		return parseErr
-	}
-
-	if renderErr := actions.RenderDoctorResult(stdout, result); renderErr != nil {
-		return renderErr
-	}
-	if err != nil {
-		return err
-	}
-	if !result.Success {
-		return fmt.Errorf("%s reported success=false", result.Command)
-	}
-
-	return nil
+	return runPowerShellAction(stdout, actionSpec{
+		call:   client.DoctorJSON,
+		render: actions.RenderDoctorResult,
+	})
 }
 
 func runTaskNew(stdout io.Writer, client runtimeclient.Client, options cliOptions) error {
-	output, err := client.TaskNewJSON(options.slug)
-	result, parseErr := contracts.ParseCommandResult(output)
-	if parseErr != nil {
-		if err != nil {
-			return fmt.Errorf("%v; additionally failed to parse command result: %w", err, parseErr)
-		}
-		return parseErr
-	}
-
-	if renderErr := actions.RenderTaskNewResult(stdout, result); renderErr != nil {
-		return renderErr
-	}
-	if err != nil {
-		return err
-	}
-	if !result.Success {
-		return fmt.Errorf("%s reported success=false", result.Command)
-	}
-
-	return nil
+	return runPowerShellAction(stdout, actionSpec{
+		call: func() ([]byte, error) {
+			return client.TaskNewJSON(options.slug)
+		},
+		render: actions.RenderTaskNewResult,
+	})
 }
 
 func runTaskRun(stdout io.Writer, client runtimeclient.Client, options cliOptions) error {
@@ -442,52 +427,27 @@ func runTaskRun(stdout io.Writer, client runtimeclient.Client, options cliOption
 		return fmt.Errorf("brevity task run requires --execute")
 	}
 
-	output, err := client.TaskRunJSON(options.slug, options.profile, options.smoke)
-	result, parseErr := contracts.ParseCommandResult(output)
-	if parseErr != nil {
-		if err != nil {
-			return fmt.Errorf("%v; additionally failed to parse command result: %w", err, parseErr)
-		}
-		return parseErr
-	}
-
-	if renderErr := actions.RenderTaskRunResult(stdout, result); renderErr != nil {
-		return renderErr
-	}
-	if err != nil {
-		return err
-	}
-	if !result.Success {
-		return fmt.Errorf("%s reported success=false", result.Command)
-	}
-	if isWorkerFailure(result) {
-		return fmt.Errorf("%s worker failed", result.Command)
-	}
-
-	return nil
+	return runPowerShellAction(stdout, actionSpec{
+		call: func() ([]byte, error) {
+			return client.TaskRunJSON(options.slug, options.profile, options.smoke)
+		},
+		render: actions.RenderTaskRunResult,
+		check: func(result contracts.CommandResult) error {
+			if isWorkerFailure(result) {
+				return fmt.Errorf("%s worker failed", result.Command)
+			}
+			return nil
+		},
+	})
 }
 
 func runTaskRuntimeInfo(stdout io.Writer, client runtimeclient.Client, options cliOptions) error {
-	output, err := client.TaskRuntimeInfoJSON(options.slug)
-	result, parseErr := contracts.ParseCommandResult(output)
-	if parseErr != nil {
-		if err != nil {
-			return fmt.Errorf("%v; additionally failed to parse command result: %w", err, parseErr)
-		}
-		return parseErr
-	}
-
-	if renderErr := actions.RenderTaskRuntimeInfoResult(stdout, result); renderErr != nil {
-		return renderErr
-	}
-	if err != nil {
-		return err
-	}
-	if !result.Success {
-		return fmt.Errorf("%s reported success=false", result.Command)
-	}
-
-	return nil
+	return runPowerShellAction(stdout, actionSpec{
+		call: func() ([]byte, error) {
+			return client.TaskRuntimeInfoJSON(options.slug)
+		},
+		render: actions.RenderTaskRuntimeInfoResult,
+	})
 }
 
 func isWorkerFailure(result contracts.CommandResult) bool {
@@ -506,26 +466,12 @@ func isWorkerFailure(result contracts.CommandResult) bool {
 }
 
 func runTaskRuns(stdout io.Writer, client runtimeclient.Client, options cliOptions) error {
-	output, err := client.TaskRunsJSON(options.slug)
-	result, parseErr := contracts.ParseCommandResult(output)
-	if parseErr != nil {
-		if err != nil {
-			return fmt.Errorf("%v; additionally failed to parse command result: %w", err, parseErr)
-		}
-		return parseErr
-	}
-
-	if renderErr := actions.RenderTaskRunsResult(stdout, result); renderErr != nil {
-		return renderErr
-	}
-	if err != nil {
-		return err
-	}
-	if !result.Success {
-		return fmt.Errorf("%s reported success=false", result.Command)
-	}
-
-	return nil
+	return runPowerShellAction(stdout, actionSpec{
+		call: func() ([]byte, error) {
+			return client.TaskRunsJSON(options.slug)
+		},
+		render: actions.RenderTaskRunsResult,
+	})
 }
 
 func runTaskCleanup(stdout io.Writer, client runtimeclient.Client, options cliOptions) error {
@@ -533,85 +479,45 @@ func runTaskCleanup(stdout io.Writer, client runtimeclient.Client, options cliOp
 		return fmt.Errorf("brevity task cleanup requires --force")
 	}
 
-	output, err := client.TaskCleanupJSON(options.slug)
-	result, parseErr := contracts.ParseCommandResult(output)
-	if parseErr != nil {
-		if err != nil {
-			return fmt.Errorf("%v; additionally failed to parse command result: %w", err, parseErr)
-		}
-		return parseErr
-	}
-
-	if renderErr := actions.RenderTaskCleanupResult(stdout, result); renderErr != nil {
-		return renderErr
-	}
-	if err != nil {
-		return err
-	}
-	if !result.Success {
-		return fmt.Errorf("%s reported success=false", result.Command)
-	}
-
-	return nil
+	return runPowerShellAction(stdout, actionSpec{
+		call: func() ([]byte, error) {
+			return client.TaskCleanupJSON(options.slug)
+		},
+		render: actions.RenderTaskCleanupResult,
+	})
 }
 
 func runTaskContextRefresh(stdout io.Writer, client runtimeclient.Client, options cliOptions) error {
-	output, err := client.TaskContextRefreshJSON(options.slug)
-	result, parseErr := contracts.ParseCommandResult(output)
-	if parseErr != nil {
-		if err != nil {
-			return fmt.Errorf("%v; additionally failed to parse command result: %w", err, parseErr)
-		}
-		return parseErr
-	}
-
-	if renderErr := actions.RenderTaskContextRefreshResult(stdout, result); renderErr != nil {
-		return renderErr
-	}
-	if err != nil {
-		return err
-	}
-	if !result.Success {
-		return fmt.Errorf("%s reported success=false", result.Command)
-	}
-
-	return nil
+	return runPowerShellAction(stdout, actionSpec{
+		call: func() ([]byte, error) {
+			return client.TaskContextRefreshJSON(options.slug)
+		},
+		render: actions.RenderTaskContextRefreshResult,
+	})
 }
 
 func runProviderAction(stdout io.Writer, client runtimeclient.Client, options cliOptions) error {
-	var (
-		output []byte
-		err    error
-	)
-
+	var spec actionSpec
 	switch options.kind {
 	case commandProviderSet:
-		output, err = client.ProviderSetJSON(options.provider, options.status)
+		spec = actionSpec{
+			call: func() ([]byte, error) {
+				return client.ProviderSetJSON(options.provider, options.status)
+			},
+			render: actions.RenderProviderResult,
+		}
 	case commandProviderReset:
-		output, err = client.ProviderResetJSON(options.provider)
+		spec = actionSpec{
+			call: func() ([]byte, error) {
+				return client.ProviderResetJSON(options.provider)
+			},
+			render: actions.RenderProviderResult,
+		}
 	default:
 		return fmt.Errorf("unsupported provider action: %s", options.kind)
 	}
 
-	result, parseErr := contracts.ParseCommandResult(output)
-	if parseErr != nil {
-		if err != nil {
-			return fmt.Errorf("%v; additionally failed to parse command result: %w", err, parseErr)
-		}
-		return parseErr
-	}
-
-	if renderErr := actions.RenderProviderResult(stdout, result); renderErr != nil {
-		return renderErr
-	}
-	if err != nil {
-		return err
-	}
-	if !result.Success {
-		return fmt.Errorf("%s reported success=false", result.Command)
-	}
-
-	return nil
+	return runPowerShellAction(stdout, spec)
 }
 
 func writeUsage(stdout io.Writer) {
