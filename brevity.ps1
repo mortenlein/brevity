@@ -363,6 +363,55 @@ function Read-ProviderHealth {
     }))
 }
 
+function Enter-ProviderHealthLock {
+    $repoRoot = Get-RepositoryRoot
+    $lockPath = Join-Path $repoRoot ".brevity\provider-health.lock"
+    $deadline = [DateTime]::UtcNow.AddSeconds(5)
+
+    while ($true) {
+        try {
+            $lockStream = [System.IO.File]::Open($lockPath, [System.IO.FileMode]::CreateNew, [System.IO.FileAccess]::Write, [System.IO.FileShare]::None)
+            $lockWriter = New-Object System.IO.StreamWriter($lockStream, [System.Text.Encoding]::ASCII)
+            $lockWriter.WriteLine("pid=$PID")
+            $lockWriter.WriteLine("createdAt=$([DateTime]::UtcNow.ToString("o"))")
+            $lockWriter.Flush()
+            $lockStream.Flush()
+
+            return [pscustomobject]@{
+                path = $lockPath
+                stream = $lockStream
+                writer = $lockWriter
+            }
+        }
+        catch {
+            if ([DateTime]::UtcNow -ge $deadline) {
+                throw "Provider health is locked by another mutation: $lockPath. Wait for the active provider command to finish, then retry. If no command is active, remove the stale lock file."
+            }
+
+            Start-Sleep -Milliseconds 50
+        }
+    }
+}
+
+function Exit-ProviderHealthLock {
+    param([object]$Lock)
+
+    if ($null -eq $Lock) {
+        return
+    }
+
+    if ($null -ne $Lock.writer) {
+        $Lock.writer.Dispose()
+    }
+    elseif ($null -ne $Lock.stream) {
+        $Lock.stream.Dispose()
+    }
+
+    if (-not [string]::IsNullOrWhiteSpace([string]$Lock.path) -and (Test-Path -LiteralPath $Lock.path)) {
+        Remove-Item -LiteralPath $Lock.path -Force
+    }
+}
+
 function Test-ProviderHealthStatus {
     param([string]$Status)
 
@@ -720,42 +769,69 @@ function Set-ProviderStatus {
         exit 1
     }
 
-    $providerHealth = Read-ProviderHealth
-    $health = $providerHealth.health
-    if (-not (Get-Member -InputObject $health -Name $normalizedProviderName -MemberType NoteProperty -ErrorAction SilentlyContinue)) {
+    $providerHealthLock = $null
+    try {
+        $providerHealthLock = Enter-ProviderHealthLock
+    }
+    catch {
+        $message = $_.Exception.Message
         if ($Json) {
             Write-CommandErrorResult `
                 -Command $CommandName `
-                -Code "invalid-provider" `
-                -Message "Invalid provider: $ProviderName" `
+                -Code "provider-health-locked" `
+                -Message $message `
                 -Details ([pscustomobject]@{
-                    provider = $ProviderName
-                    knownProviders = @($health.PSObject.Properties.Name | Sort-Object)
+                    provider = $normalizedProviderName
+                    lockPath = (Join-Path (Get-RepositoryRoot) ".brevity\provider-health.lock")
                 })
             exit 1
         }
-        Write-Host "Invalid provider: $ProviderName" -ForegroundColor Red
-        Write-Host "Known providers: $((@($health.PSObject.Properties.Name) | Sort-Object) -join ', ')"
+        Write-Host $message -ForegroundColor Red
         exit 1
     }
 
-    $provider = $health.$normalizedProviderName
-    if ($null -eq $provider -or $provider -isnot [System.Management.Automation.PSCustomObject]) {
-        $provider = New-Object PSObject
-        $health.$normalizedProviderName = $provider
+    try {
+        $providerHealth = Read-ProviderHealth
+        $health = $providerHealth.health
+        if (-not (Get-Member -InputObject $health -Name $normalizedProviderName -MemberType NoteProperty -ErrorAction SilentlyContinue)) {
+            if ($Json) {
+                Write-CommandErrorResult `
+                    -Command $CommandName `
+                    -Code "invalid-provider" `
+                    -Message "Invalid provider: $ProviderName" `
+                    -Details ([pscustomobject]@{
+                        provider = $ProviderName
+                        knownProviders = @($health.PSObject.Properties.Name | Sort-Object)
+                    })
+                exit 1
+            }
+            Write-Host "Invalid provider: $ProviderName" -ForegroundColor Red
+            Write-Host "Known providers: $((@($health.PSObject.Properties.Name) | Sort-Object) -join ', ')"
+            exit 1
+        }
+
+        $provider = $health.$normalizedProviderName
+        if ($null -eq $provider -or $provider -isnot [System.Management.Automation.PSCustomObject]) {
+            $provider = New-Object PSObject
+            $health.$normalizedProviderName = $provider
+        }
+
+        $previousStatus = $null
+        if (Get-Member -InputObject $provider -Name "status" -MemberType NoteProperty -ErrorAction SilentlyContinue) {
+            $previousStatus = [string]$provider.status
+        }
+        $updatedAt = [DateTime]::UtcNow.ToString("o")
+
+        Set-ConfigField -Config $provider -Name "status" -Value $normalizedStatus
+        Set-ConfigField -Config $provider -Name "note" -Value ([string]$Note)
+        Set-ConfigField -Config $provider -Name "updatedAt" -Value $updatedAt
+
+        ConvertTo-Json -InputObject $health -Depth 10 | Set-Content -LiteralPath $providerHealth.path -Encoding ASCII
+    }
+    finally {
+        Exit-ProviderHealthLock -Lock $providerHealthLock
     }
 
-    $previousStatus = $null
-    if (Get-Member -InputObject $provider -Name "status" -MemberType NoteProperty -ErrorAction SilentlyContinue) {
-        $previousStatus = [string]$provider.status
-    }
-    $updatedAt = [DateTime]::UtcNow.ToString("o")
-
-    Set-ConfigField -Config $provider -Name "status" -Value $normalizedStatus
-    Set-ConfigField -Config $provider -Name "note" -Value ([string]$Note)
-    Set-ConfigField -Config $provider -Name "updatedAt" -Value $updatedAt
-
-    ConvertTo-Json -InputObject $health -Depth 10 | Set-Content -LiteralPath $providerHealth.path -Encoding ASCII
     Write-VaultRuntimeEvent -Type "provider" -Subject $normalizedProviderName -Message "Provider health set to $normalizedStatus."
 
     if ($Json) {
