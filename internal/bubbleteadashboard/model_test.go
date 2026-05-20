@@ -322,6 +322,93 @@ func TestModelViewLayoutSnapshotsByWidth(t *testing.T) {
 	}
 }
 
+func TestSelectableRowWarningSuffixesByKind(t *testing.T) {
+	tests := []struct {
+		name          string
+		state         contracts.RuntimeState
+		selected      int
+		wantRow       string
+		duplicateText []string
+	}{
+		{
+			name:    "degraded provider",
+			state:   bubbleStateWithProvider("codex", "degraded"),
+			wantRow: "> prov  codex: degraded !",
+			duplicateText: []string{
+				"degraded ! degraded",
+			},
+		},
+		{
+			name:    "unavailable provider",
+			state:   bubbleStateWithProvider("codex", "unavailable"),
+			wantRow: "> prov  codex: unavailable !",
+			duplicateText: []string{
+				"unavailable ! unavailable",
+			},
+		},
+		{
+			name:    "blocked task",
+			state:   bubbleStateWithTaskState("blocked"),
+			wantRow: "> task  task-one: blocked !",
+			duplicateText: []string{
+				"blocked ! blocked",
+			},
+		},
+		{
+			name:    "stale task",
+			state:   bubbleStateWithTaskState("stale"),
+			wantRow: "> task  task-one: stale !",
+			duplicateText: []string{
+				"stale ! stale",
+			},
+		},
+		{
+			name:    "failed task",
+			state:   bubbleStateWithTaskState("failed"),
+			wantRow: "> task  task-one: failed !",
+			duplicateText: []string{
+				"failed ! failed",
+			},
+		},
+		{
+			name:    "provider-gated task",
+			state:   bubbleStateWithTaskState("provider-gated"),
+			wantRow: "> task  task-one: provider-gated !",
+			duplicateText: []string{
+				"provider-gated ! provider-gated",
+			},
+		},
+		{
+			name:    "warning cleanup candidate",
+			state:   bubbleStateWithCleanupCandidate("warning", "requires-inspection"),
+			wantRow: "> clean requires-inspection: cleanup-one !",
+			duplicateText: []string{
+				"warning ! warning",
+				"requires-inspection ! requires-inspection",
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			model := NewModelWithSource(&fakeClient{}, time.Second, "native")
+			model.state = tt.state
+			model.hasState = true
+			model.selection.SelectedIndex = tt.selected
+
+			output := plainView(model.View())
+			if !strings.Contains(output, tt.wantRow) {
+				t.Fatalf("view missing warning row %q:\n%s", tt.wantRow, output)
+			}
+			for _, duplicate := range tt.duplicateText {
+				if strings.Contains(output, duplicate) {
+					t.Fatalf("view duplicated warning wording %q:\n%s", duplicate, output)
+				}
+			}
+		})
+	}
+}
+
 func TestWidePaneLayoutKeepsSelectedItemVisible(t *testing.T) {
 	model := NewModelWithSource(&fakeClient{}, time.Second, "native")
 	model.state = bubbleStateWithManyTasks(30)
@@ -647,6 +734,43 @@ func bubbleState() contracts.RuntimeState {
 			},
 		},
 		SuggestedNextActions: []string{"Inspect state."},
+	}
+}
+
+func bubbleStateWithProvider(name string, status string) contracts.RuntimeState {
+	return contracts.RuntimeState{
+		Schema:   contracts.RuntimeStateSchema,
+		RepoRoot: `C:\repo`,
+		Providers: contracts.Providers{
+			Summary: contracts.ProviderSummary{Total: 1, Degraded: 1},
+			Health: map[string]contracts.ProviderHealth{
+				name: {Status: status},
+			},
+		},
+	}
+}
+
+func bubbleStateWithTaskState(state string) contracts.RuntimeState {
+	return contracts.RuntimeState{
+		Schema:     contracts.RuntimeStateSchema,
+		RepoRoot:   `C:\repo`,
+		TaskCounts: contracts.TaskCounts{Tracked: 1},
+		Tasks: []contracts.TaskSummary{
+			{Slug: "task-one", Status: state, Branch: "task/task-one"},
+		},
+	}
+}
+
+func bubbleStateWithCleanupCandidate(severity string, category string) contracts.RuntimeState {
+	return contracts.RuntimeState{
+		Schema:   contracts.RuntimeStateSchema,
+		RepoRoot: `C:\repo`,
+		Cleanup: &contracts.Cleanup{
+			Summary: &contracts.CleanupSummary{TotalCandidates: 1, RequiresInspectionCount: 1},
+			OrphanedTaskBranches: []contracts.CleanupCandidate{
+				{ID: "cleanup-one", Severity: severity, Category: category, Branch: "task/cleanup-one"},
+			},
+		},
 	}
 }
 

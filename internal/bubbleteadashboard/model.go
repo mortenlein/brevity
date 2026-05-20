@@ -766,7 +766,7 @@ func itemWarning(item dashboard.SelectionItem) string {
 		if state == "" {
 			state = strings.ToLower(strings.TrimSpace(item.Task.Status))
 		}
-		if state == "blocked" || state == "stale" || state == "provider-gated" || state == "review" || state == "needs-review" {
+		if state == "blocked" || state == "stale" || state == "failed" || state == "provider-gated" || state == "review" || state == "needs-review" {
 			return warningMarkerSuffix("warning")
 		}
 	case dashboard.SelectionCleanup:
