@@ -12,7 +12,7 @@ import (
 const defaultTerminalWidth = 100
 const minimumTerminalWidth = 24
 const twoPaneWidthThreshold = 110
-const paneSeparator = "  |  "
+const paneSeparator = " | "
 const detailLabelWidth = 19
 const statusSeparator = " | "
 
@@ -146,11 +146,7 @@ func truncatePath(value string, width int) string {
 		return strings.Repeat(".", width)
 	}
 	suffixWidth := width - 3
-	runes := []rune(value)
-	if suffixWidth > len(runes) {
-		suffixWidth = len(runes)
-	}
-	return "..." + string(runes[len(runes)-suffixWidth:])
+	return "..." + suffixVisible(value, suffixWidth)
 }
 
 func visibleWidth(value string) int {
@@ -194,6 +190,24 @@ func truncateVisible(value string, width int) string {
 		output.WriteString("\x1b[0m")
 	}
 	return output.String()
+}
+
+func suffixVisible(value string, width int) string {
+	if width <= 0 {
+		return ""
+	}
+	runes := []rune(value)
+	start := len(runes)
+	visible := 0
+	for start > 0 {
+		nextWidth := visibleWidth(string(runes[start-1]))
+		if visible+nextWidth > width {
+			break
+		}
+		start--
+		visible += nextWidth
+	}
+	return string(runes[start:])
 }
 
 func ansiSequenceEnd(value string, start int) int {

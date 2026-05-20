@@ -136,6 +136,30 @@ func TestTruncateValueUsesVisibleWidthForANSI(t *testing.T) {
 	}
 }
 
+func TestTruncateValueUsesVisibleWidthForUnicode(t *testing.T) {
+	tests := []struct {
+		name  string
+		value string
+		width int
+	}{
+		{name: "norwegian", value: "provider blåbær kø åpen ærlig", width: 18},
+		{name: "emoji", value: "task 🚧 wide warning provider", width: 16},
+		{name: "box drawing", value: "pane │ separator ═ footer", width: 17},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := truncateValue(tt.value, tt.width)
+			if visibleWidth(got) > tt.width {
+				t.Fatalf("visible width = %d, want <= %d: %q", visibleWidth(got), tt.width, got)
+			}
+			if visibleWidth(tt.value) > tt.width && !strings.Contains(got, "...") {
+				t.Fatalf("unicode truncation missing ellipsis: %q", got)
+			}
+		})
+	}
+}
+
 func TestStyledWarningMarkerSurvivesProtectedTruncation(t *testing.T) {
 	value := "provider-with-a-very-long-name: unavailable " + ansiStyle("!")
 
@@ -167,19 +191,59 @@ func TestStyledCompactWarningCountSurvivesProtectedTruncation(t *testing.T) {
 	}
 }
 
+func TestUnicodeWarningMarkersSurviveProtectedTruncation(t *testing.T) {
+	tests := []struct {
+		name   string
+		value  string
+		width  int
+		suffix string
+	}{
+		{name: "plain marker", value: "oppgave-æøå-med-emoji-🚧 provider-gated !", width: 24, suffix: " !"},
+		{name: "compact count", value: "varsler blåbær-provider 🚧 !12", width: 20, suffix: " !12"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := truncateValuePreservingWarning(tt.value, tt.width)
+			if !strings.HasSuffix(plainView(got), tt.suffix) {
+				t.Fatalf("unicode warning suffix was not preserved: %q", plainView(got))
+			}
+			if visibleWidth(got) > tt.width {
+				t.Fatalf("visible width = %d, want <= %d: %q", visibleWidth(got), tt.width, plainView(got))
+			}
+		})
+	}
+}
+
 func TestTruncatePathPreservesSuffix(t *testing.T) {
 	path := `C:\dev\repos\active\brevity\worktrees\active\very-long-task-name\runs\latest\worker-output.log`
 
 	got := truncatePath(path, 32)
 
-	if len([]rune(got)) > 32 {
-		t.Fatalf("truncatePath length = %d, want <= 32: %q", len([]rune(got)), got)
+	if visibleWidth(got) > 32 {
+		t.Fatalf("truncatePath visible width = %d, want <= 32: %q", visibleWidth(got), got)
 	}
 	if !strings.HasPrefix(got, "...") {
 		t.Fatalf("truncatePath = %q, want prefix ...", got)
 	}
 	if !strings.HasSuffix(got, `latest\worker-output.log`) {
 		t.Fatalf("truncatePath = %q, want important suffix", got)
+	}
+}
+
+func TestTruncatePathUsesVisibleWidthForUnicodeSuffix(t *testing.T) {
+	path := `C:\dev\repos\active\brevity\worktrees\active\oppgave-æøå-🚧\runs\latest\worker-output-✅.log`
+
+	got := truncatePath(path, 34)
+
+	if visibleWidth(got) > 34 {
+		t.Fatalf("unicode path visible width = %d, want <= 34: %q", visibleWidth(got), got)
+	}
+	if !strings.HasPrefix(got, "...") {
+		t.Fatalf("unicode path = %q, want prefix ...", got)
+	}
+	if !strings.HasSuffix(got, `worker-output-✅.log`) {
+		t.Fatalf("unicode path = %q, want important suffix", got)
 	}
 }
 
@@ -218,8 +282,8 @@ func TestModelViewReadableAtNarrowWidth(t *testing.T) {
 	output := plainView(model.View())
 
 	for index, line := range strings.Split(output, "\n") {
-		if len([]rune(line)) > model.width {
-			t.Fatalf("line %d width = %d, want <= %d:\n%s", index+1, len([]rune(line)), model.width, output)
+		if visibleWidth(line) > model.width {
+			t.Fatalf("line %d visible width = %d, want <= %d:\n%s", index+1, visibleWidth(line), model.width, output)
 		}
 	}
 	if !strings.Contains(output, "...") {
@@ -228,6 +292,51 @@ func TestModelViewReadableAtNarrowWidth(t *testing.T) {
 	if strings.Contains(output, `C:\dev\repos\active\brevity\worktrees\active\very-long-task-name`) {
 		t.Fatalf("narrow view contains unshortened long path:\n%s", output)
 	}
+}
+
+func TestUnicodeHeavyViewKeepsRowsWithinWidth(t *testing.T) {
+	model := NewModelWithSource(&fakeClient{}, time.Second, "native-æøå-🚧")
+	model.state = bubbleStateWithUnicodeText()
+	model.hasState = true
+	model.width = 44
+	model.height = 28
+	model.selection.SelectedIndex = 1
+	model.selection.ShowDetails = true
+	model.lastRefresh = "2026-05-19T10:00:00Z"
+
+	output := plainView(model.View())
+
+	for _, want := range []string{"> task", "!", "...", "state:", "read-only"} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("unicode-heavy output missing %q:\n%s", want, output)
+		}
+	}
+	assertLinesWithinWidth(t, output, model.width)
+}
+
+func TestUnicodeTwoPaneSeparatorAndFooterStayWithinWidth(t *testing.T) {
+	model := NewModelWithSource(&fakeClient{}, time.Second, "powershell-æøå-🚧")
+	model.state = bubbleStateWithUnicodeText()
+	model.hasState = true
+	model.width = 112
+	model.height = 24
+	model.selection.SelectedIndex = 1
+	model.selection.ShowDetails = true
+	model.selection.ShowHelp = true
+	model.lastRefresh = "2026-05-19T10:00:00Z"
+
+	output := plainView(model.View())
+
+	if !strings.Contains(output, "Selectable List") || !strings.Contains(output, paneSeparator+"Details Pane") {
+		t.Fatalf("unicode two-pane output missing pane separator alignment:\n%s", output)
+	}
+	if !strings.Contains(output, "> task") {
+		t.Fatalf("unicode two-pane output dropped selected marker:\n%s", output)
+	}
+	if !strings.Contains(output, "? help") || !strings.Contains(output, "powershell") {
+		t.Fatalf("unicode footer dropped readable controls/source:\n%s", output)
+	}
+	assertLinesWithinWidth(t, output, model.width)
 }
 
 func TestFooterPreservesPrioritySegmentsAtNarrowWidth(t *testing.T) {
@@ -1351,6 +1460,43 @@ func bubbleStateWithLongWarningLabels() contracts.RuntimeState {
 	return state
 }
 
+func bubbleStateWithUnicodeText() contracts.RuntimeState {
+	state := bubbleState()
+	state.RepoRoot = `C:\dev\repos\active\brevity\arbeid-æøå\prosjekt-🚧`
+	state.Providers.Health = map[string]contracts.ProviderHealth{
+		"codex-æøå-🚧-provider-with-a-long-display-name": {
+			Status:    "degraded",
+			Note:      "kapasitet lav: blåbær kø åpen │ check",
+			UpdatedAt: "2026-05-19T10:00:00Z",
+		},
+	}
+	state.Tasks = []contracts.TaskSummary{
+		{
+			Slug:              "oppgave-æøå-🚧-with-a-long-label-that-must-truncate",
+			NormalizedState:   "provider-gated",
+			Branch:            "task/oppgave-æøå-🚧-with-a-long-label-that-must-truncate",
+			WorktreePath:      `C:\dev\repos\active\brevity\worktrees\active\oppgave-æøå-🚧-with-a-long-label-that-must-truncate`,
+			LatestRunLogPath:  `C:\dev\repos\active\brevity\.brevity\runs\oppgave-æøå-🚧\latest\worker-output-✅.log`,
+			LatestRunProvider: "codex-æøå-🚧",
+			LatestRunProfile:  "norsk-åpen",
+		},
+	}
+	state.Cleanup.OrphanedTaskBranches = []contracts.CleanupCandidate{
+		{
+			ID:       "opprydding-æøå-🚧-candidate-with-long-id",
+			Severity: "warning",
+			Category: "destructive-if-removed-│-requires-review",
+			Branch:   "task/opprydding-æøå-🚧",
+			Path:     `C:\dev\repos\active\brevity\worktrees\completed\opprydding-æøå-🚧`,
+			SuggestedCommands: []string{
+				`git status --short C:\dev\repos\active\brevity\worktrees\completed\opprydding-æøå-🚧`,
+			},
+		},
+	}
+	state.SuggestedNextActions = []string{"Review 🚧 unicode-heavy task values before cleanup."}
+	return state
+}
+
 var ansiPattern = regexp.MustCompile(`\x1b\[[0-9;]*m`)
 
 func ansiStyle(value string) string {
@@ -1384,8 +1530,8 @@ func detailPaneViewWithSize(state contracts.RuntimeState, selected int, width in
 func assertLinesWithinWidth(t *testing.T, output string, width int) {
 	t.Helper()
 	for index, line := range strings.Split(output, "\n") {
-		if len([]rune(line)) > width {
-			t.Fatalf("line %d width = %d, want <= %d:\n%s", index+1, len([]rune(line)), width, output)
+		if visibleWidth(line) > width {
+			t.Fatalf("line %d visible width = %d, want <= %d:\n%s", index+1, visibleWidth(line), width, output)
 		}
 	}
 }
