@@ -436,6 +436,62 @@ func TestModelViewRendersOperatorSections(t *testing.T) {
 	}
 }
 
+func TestModelViewRendersIntentionalEmptyRuntimeSignals(t *testing.T) {
+	model := NewModelWithSource(&fakeClient{}, time.Second, "native")
+	model.state = emptyBubbleState()
+	model.hasState = true
+	model.width = 82
+	model.height = 24
+	model.lastRefresh = "2026-05-20T10:00:00Z"
+
+	output := plainView(model.View())
+
+	for _, want := range []string{
+		"Runtime Signals",
+		"No runtime signals",
+		"PowerShell backend is authoritative. This dashboard is read-only.",
+		"Refresh to re-read state.",
+		"native | read-only",
+	} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("empty state missing %q:\n%s", want, output)
+		}
+	}
+	if strings.Contains(output, "no runtime items") {
+		t.Fatalf("empty state rendered placeholder copy:\n%s", output)
+	}
+
+	lines := strings.Split(strings.TrimSuffix(output, "\n"), "\n")
+	if len(lines) != model.height {
+		t.Fatalf("empty state rows = %d, want terminal height %d:\n%s", len(lines), model.height, output)
+	}
+	if !strings.Contains(lines[len(lines)-1], "q quit | j/k move | d details | p action | r refresh | ? help") {
+		t.Fatalf("footer was not anchored on final row:\n%s", output)
+	}
+	assertLinesWithinWidth(t, output, model.width)
+}
+
+func TestModelViewRendersEmptyRuntimeSignalsWithinNarrowWidth(t *testing.T) {
+	model := NewModelWithSource(&fakeClient{}, time.Second, "native")
+	model.state = emptyBubbleState()
+	model.hasState = true
+	model.width = 36
+
+	output := plainView(model.View())
+
+	for _, want := range []string{
+		"No runtime signals",
+		"PowerShell backend",
+		"read-only",
+		"Refresh",
+	} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("narrow empty state missing %q:\n%s", want, output)
+		}
+	}
+	assertLinesWithinWidth(t, output, model.width)
+}
+
 func TestModelViewReadableAtNarrowWidth(t *testing.T) {
 	model := NewModelWithSource(&fakeClient{}, time.Second, "native")
 	model.state = bubbleStateWithLongPaths()
@@ -855,8 +911,19 @@ func TestModelLoadingViewRenderInvariantsAcrossWidths(t *testing.T) {
 			output := plainView(model.View())
 
 			assertLoadingOrErrorViewInvariants(t, output, width.width, "native")
-			if !strings.Contains(output, "Loading runtime state") {
-				t.Fatalf("loading view missing loading message:\n%s", output)
+			wants := []string{
+				"Loading runtime state",
+				"No runtime signals",
+				"PowerShell backend is authoritative",
+				"Refresh to re-read state.",
+			}
+			if width.width >= 82 {
+				wants = append(wants, "PowerShell backend is authoritative. This dashboard is read-only.")
+			}
+			for _, want := range wants {
+				if !strings.Contains(output, want) {
+					t.Fatalf("loading view missing %q:\n%s", want, output)
+				}
 			}
 		})
 	}
@@ -886,7 +953,17 @@ func TestModelRuntimeErrorViewRenderInvariantsAcrossWidths(t *testing.T) {
 			output := plainView(model.View())
 
 			assertLoadingOrErrorViewInvariants(t, output, width.width, "native")
-			for _, want := range []string{"polling error", "runtime unavailable"} {
+			wants := []string{
+				"No runtime signals",
+				"PowerShell backend is authoritative",
+				"Refresh to re-read state.",
+				"polling error",
+				"runtime unavailable",
+			}
+			if width.width >= 82 {
+				wants = append(wants, "PowerShell backend is authoritative. This dashboard is read-only.")
+			}
+			for _, want := range wants {
 				if !strings.Contains(output, want) {
 					t.Fatalf("runtime error view missing %q:\n%s", want, output)
 				}
@@ -917,7 +994,14 @@ func TestRunWithSourceFirstPollErrorRendersFallback(t *testing.T) {
 
 	output := plainView(stdout.String())
 	assertLoadingOrErrorViewInvariants(t, output, defaultTerminalWidth, "native")
-	for _, want := range []string{"Loading runtime state", "polling error", "runtime source unavailable"} {
+	for _, want := range []string{
+		"Loading runtime state",
+		"No runtime signals",
+		"PowerShell backend is authoritative. This dashboard is read-only.",
+		"Refresh to re-read state.",
+		"polling error",
+		"runtime source unavailable",
+	} {
 		if !strings.Contains(output, want) {
 			t.Fatalf("RunWithSource fallback output missing %q:\n%s", want, output)
 		}
@@ -1994,6 +2078,17 @@ func bubbleState() contracts.RuntimeState {
 			},
 		},
 		SuggestedNextActions: []string{"Inspect state."},
+	}
+}
+
+func emptyBubbleState() contracts.RuntimeState {
+	return contracts.RuntimeState{
+		Schema:      contracts.RuntimeStateSchema,
+		RepoRoot:    `C:\repo`,
+		GeneratedAt: "2026-05-20T10:00:00Z",
+		Cleanup: &contracts.Cleanup{
+			Summary: &contracts.CleanupSummary{},
+		},
 	}
 }
 

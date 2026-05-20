@@ -24,6 +24,9 @@ const detailTruncatedIndicator = "  ... details truncated"
 const helpTruncatedIndicator = "  ... help truncated"
 const runtimeSignalsTitle = "Runtime Signals"
 const selectedDetailTitle = "Selected Detail"
+const emptyRuntimeSignalsTitle = "No runtime signals"
+const emptyRuntimeSignalsAuthority = "PowerShell backend is authoritative. This dashboard is read-only."
+const emptyRuntimeSignalsRefresh = "Refresh to re-read state."
 
 type refreshMsg struct {
 	state contracts.RuntimeState
@@ -280,6 +283,9 @@ func (model Model) renderLoadingView() string {
 	output.WriteString(model.renderLine("  status     Loading runtime state") + "\n")
 	output.WriteString(model.renderLine("  source     "+fallback(model.source, "unknown")+" / read-only") + "\n")
 	output.WriteString(model.renderLine("  authority  PowerShell runtime state") + "\n")
+	output.WriteString("\n")
+	renderSection(&output, runtimeSignalsTitle)
+	output.WriteString(model.renderEmptyRuntimeSignals())
 	if model.lastError != nil {
 		output.WriteString("\n")
 		renderSection(&output, "Warnings")
@@ -615,7 +621,7 @@ func (model Model) renderSingleColumnListAndDetails() string {
 	fmt.Fprintln(&output)
 	renderSection(&output, runtimeSignalsTitle)
 	if len(items) == 0 {
-		fmt.Fprintln(&output, "  no runtime items")
+		output.WriteString(model.renderEmptyRuntimeSignals())
 	} else {
 		if window.truncated {
 			fmt.Fprintf(&output, "  showing %d-%d of %d\n", window.start+1, window.end, len(items))
@@ -632,7 +638,7 @@ func (model Model) renderSingleColumnListAndDetails() string {
 	if selection.ShowDetails {
 		model.renderDetails(&details, items, selection.SelectedIndex)
 	} else {
-		fmt.Fprintln(&details, "  select a row, then press d for details")
+		fmt.Fprintln(&details, model.renderLine("  select a row, then press d for details"))
 	}
 	output.WriteString(truncateRows(details.String(), detailsRows, detailTruncatedIndicator, model.contentWidth()))
 	if selection.ShowHelp {
@@ -661,7 +667,7 @@ func (model Model) renderTwoPaneListAndDetails() string {
 	var left strings.Builder
 	fmt.Fprintln(&left, paneTitle(runtimeSignalsTitle))
 	if len(items) == 0 {
-		fmt.Fprintln(&left, "  no runtime items")
+		left.WriteString(leftModel.renderEmptyRuntimeSignals())
 	} else {
 		if window.truncated {
 			fmt.Fprintf(&left, "  showing %d-%d of %d\n", window.start+1, window.end, len(items))
@@ -678,7 +684,7 @@ func (model Model) renderTwoPaneListAndDetails() string {
 	if selection.ShowDetails {
 		rightModel.renderDetails(&details, items, selection.SelectedIndex)
 	} else {
-		fmt.Fprintln(&details, "  select a row, then press d for details")
+		fmt.Fprintln(&details, rightModel.renderLine("  select a row, then press d for details"))
 	}
 	detailsRows := paneRows - 2
 	if selection.ShowHelp {
@@ -699,6 +705,18 @@ func (model Model) renderTwoPaneListAndDetails() string {
 	}
 
 	return "\n" + joinPaneLines(left.String(), right.String(), leftWidth, rightWidth)
+}
+
+func (model Model) renderEmptyRuntimeSignals() string {
+	var output strings.Builder
+	for _, line := range []string{
+		"  " + emptyRuntimeSignalsTitle,
+		"  " + emptyRuntimeSignalsAuthority,
+		"  " + emptyRuntimeSignalsRefresh,
+	} {
+		fmt.Fprintln(&output, model.renderLine(line))
+	}
+	return output.String()
 }
 
 func (model Model) paneWidths() (int, int) {
