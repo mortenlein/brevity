@@ -1,6 +1,9 @@
 package bubbleteadashboard
 
 import (
+	"bytes"
+	"context"
+	"errors"
 	"fmt"
 	"regexp"
 	"strings"
@@ -649,6 +652,35 @@ func TestModelRuntimeErrorViewRenderInvariantsAcrossWidths(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestRunWithSourceFirstPollErrorRendersFallback(t *testing.T) {
+	pollErr := errors.New("runtime source unavailable")
+	client := &fakeClient{err: pollErr}
+	input := strings.NewReader("")
+	var stdout bytes.Buffer
+
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			t.Fatalf("RunWithSource panicked on first poll error: %v", recovered)
+		}
+	}()
+
+	err := RunWithSource(context.Background(), input, &stdout, client, time.Second, "native")
+	if !errors.Is(err, pollErr) {
+		t.Fatalf("RunWithSource error = %v, want %v", err, pollErr)
+	}
+	if client.calls != 1 {
+		t.Fatalf("runtime polls = %d, want 1", client.calls)
+	}
+
+	output := plainView(stdout.String())
+	assertLoadingOrErrorViewInvariants(t, output, defaultTerminalWidth, "native")
+	for _, want := range []string{"Loading runtime state", "polling error", "runtime source unavailable"} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("RunWithSource fallback output missing %q:\n%s", want, output)
+		}
 	}
 }
 
