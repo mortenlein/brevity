@@ -1519,17 +1519,17 @@ func TestSummaryWarningCountsReadableAcrossWidths(t *testing.T) {
 		{
 			name:  "narrow",
 			width: 46,
-			want:  []string{"providers", "degraded", "!1", "tasks", "bl", "!1", "cleanup", "candidates", "!1"},
+			want:  []string{"status", "providers", "!3", "tasks", "!1", "cleanup", "candidates", "!1"},
 		},
 		{
 			name:  "medium",
 			width: 82,
-			want:  []string{"providers  1 total, 1 degraded, 0 unavailable !1", "tasks      1 tracked, 0 runnable, 1 blocked, 0 stale, 0 gated, 0 review !1", "cleanup    1 candidates, 1 inspect !1"},
+			want:  []string{"status    1 providers | 1 degraded | 0 unavailable | 0 runnable", "tasks     1 tracked | 0 runnable | 1 blocked | 0 stale | 0 gated | 0 review !1", "cleanup   1 candidates | 1 inspect !1"},
 		},
 		{
 			name:  "wide",
 			width: 120,
-			want:  []string{"providers  1 total, 1 degraded, 0 unavailable !1", "tasks      1 tracked, 0 runnable, 1 blocked, 0 stale, 0 gated, 0 review !1", "cleanup    1 candidates, 1 inspect !1"},
+			want:  []string{"status    1 providers | 1 degraded | 0 unavailable | 0 runnable | 1 cleanup candidate !3", "tasks     1 tracked | 0 runnable | 1 blocked | 0 stale | 0 gated | 0 review !1", "cleanup   1 candidates | 1 inspect !1"},
 		},
 	}
 
@@ -1551,12 +1551,35 @@ func TestSummaryWarningCountsReadableAcrossWidths(t *testing.T) {
 					t.Fatalf("%s summary duplicated warning wording %q:\n%s", tt.name, duplicate, summary)
 				}
 			}
-			if strings.Count(summary, "!1") < 3 {
-				t.Fatalf("%s summary did not keep provider/task/cleanup warning counts readable:\n%s", tt.name, summary)
+			if !strings.Contains(summary, "!3") || strings.Count(summary, "!1") < 2 {
+				t.Fatalf("%s summary did not keep status/task/cleanup warning counts readable:\n%s", tt.name, summary)
 			}
 			assertLinesWithinWidth(t, summary, tt.width)
 		})
 	}
+}
+
+func TestSummaryRendersOperatorSignals(t *testing.T) {
+	model := NewModelWithSource(&fakeClient{}, time.Second, "native")
+	model.state = bubbleState()
+	model.state.GeneratedAt = "2026-05-20T11:18:03Z"
+	model.hasState = true
+	model.width = 96
+
+	summary := plainView(model.renderSummary())
+	for _, want := range []string{
+		"Runtime Summary",
+		"repo      C:\\repo",
+		"generated 2026-05-20T11:18:03Z",
+		"status    1 providers | 1 degraded | 0 unavailable | 0 runnable | 1 cleanup candidate !3",
+		"tasks     1 tracked | 0 runnable | 1 blocked | 0 stale | 0 gated | 0 review !1",
+		"cleanup   1 candidates | 1 inspect !1",
+	} {
+		if !strings.Contains(summary, want) {
+			t.Fatalf("summary missing operator signal %q:\n%s", want, summary)
+		}
+	}
+	assertLinesWithinWidth(t, summary, model.width)
 }
 
 func TestFooterCompactParityDropsRefreshMetadataFirst(t *testing.T) {

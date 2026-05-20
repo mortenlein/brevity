@@ -434,15 +434,15 @@ func (model Model) renderSummary() string {
 	var output strings.Builder
 	fmt.Fprintln(&output)
 	renderSection(&output, "Runtime Summary")
-	fmt.Fprintf(&output, "  repo       %s\n", model.renderInlinePath(fallback(state.RepoRoot, "(unknown)"), len("  repo       ")))
-	fmt.Fprintf(&output, "%s\n", model.renderLine(fmt.Sprintf("  generated  %s", fallback(state.GeneratedAt, "(unknown)"))))
-	fmt.Fprintf(&output, "%s\n", model.renderLine(fmt.Sprintf("  providers  %d total, %d degraded, %d unavailable%s",
-		state.Providers.Summary.Total,
-		state.Providers.Summary.Degraded,
-		state.Providers.Summary.Unavailable,
-		renderWarningCount(state.Providers.Summary.Degraded+state.Providers.Summary.Unavailable),
+	fmt.Fprintf(&output, "  repo      %s\n", model.renderInlinePath(fallback(state.RepoRoot, "(unknown)"), len("  repo      ")))
+	fmt.Fprintf(&output, "%s\n", model.renderLine("  generated "+fallback(state.GeneratedAt, "(unknown)")))
+	fmt.Fprintf(&output, "%s\n", model.renderLine(fmt.Sprintf("  status    %s | %d runnable | %s%s",
+		providerStatusSummary(state.Providers.Summary),
+		state.TaskCounts.Runnable,
+		cleanupCandidateSummary(state),
+		renderWarningCount(runtimeSummaryWarningCount(state)),
 	)))
-	fmt.Fprintf(&output, "%s\n", model.renderLine(fmt.Sprintf("  tasks      %d tracked, %d runnable, %d blocked, %d stale, %d gated, %d review%s",
+	fmt.Fprintf(&output, "%s\n", model.renderLine(fmt.Sprintf("  tasks     %d tracked | %d runnable | %d blocked | %d stale | %d gated | %d review%s",
 		state.TaskCounts.Tracked,
 		state.TaskCounts.Runnable,
 		state.TaskCounts.Blocked,
@@ -453,15 +453,42 @@ func (model Model) renderSummary() string {
 	)))
 	if state.Cleanup != nil && state.Cleanup.Summary != nil {
 		summary := state.Cleanup.Summary
-		fmt.Fprintf(&output, "%s\n", model.renderLine(fmt.Sprintf("  cleanup    %d candidates, %d inspect%s",
+		fmt.Fprintf(&output, "%s\n", model.renderLine(fmt.Sprintf("  cleanup   %d candidates | %d inspect%s",
 			summary.TotalCandidates,
 			summary.RequiresInspectionCount,
 			renderWarningCount(summary.TotalCandidates),
 		)))
 	} else {
-		fmt.Fprintln(&output, "  cleanup    none")
+		fmt.Fprintln(&output, "  cleanup   none")
 	}
 	return output.String()
+}
+
+func providerStatusSummary(summary contracts.ProviderSummary) string {
+	if summary.Degraded == 0 && summary.Unavailable == 0 {
+		return fmt.Sprintf("%d providers ok", summary.Total)
+	}
+	return fmt.Sprintf("%d providers | %d degraded | %d unavailable", summary.Total, summary.Degraded, summary.Unavailable)
+}
+
+func cleanupCandidateSummary(state contracts.RuntimeState) string {
+	if state.Cleanup == nil || state.Cleanup.Summary == nil {
+		return "no cleanup data"
+	}
+	count := state.Cleanup.Summary.TotalCandidates
+	if count == 1 {
+		return "1 cleanup candidate"
+	}
+	return fmt.Sprintf("%d cleanup candidates", count)
+}
+
+func runtimeSummaryWarningCount(state contracts.RuntimeState) int {
+	warnings := state.Providers.Summary.Degraded + state.Providers.Summary.Unavailable
+	warnings += state.TaskCounts.Blocked + state.TaskCounts.Stale + state.TaskCounts.ProviderGated
+	if state.Cleanup != nil && state.Cleanup.Summary != nil {
+		warnings += state.Cleanup.Summary.TotalCandidates
+	}
+	return warnings
 }
 
 func (model Model) renderListAndDetails() string {
