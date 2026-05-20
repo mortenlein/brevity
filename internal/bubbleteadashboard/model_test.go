@@ -101,8 +101,8 @@ func TestActionPaletteOpensWithShortcut(t *testing.T) {
 		"Run worker     read-only preview",
 		"Merge task     read-only preview",
 		"Cleanup task   read-only preview",
-		"Refresh state  read-only preview",
-		"esc/q/p close",
+		"Refresh state  enabled",
+		"enter activate | esc/q/p close",
 	} {
 		if !strings.Contains(output, want) {
 			t.Fatalf("palette output missing %q:\n%s", want, output)
@@ -145,7 +145,7 @@ func TestActionPaletteOpensWithCtrlPAndClosesWithShortcuts(t *testing.T) {
 	}
 }
 
-func TestActionPaletteConsumesKeysWithoutExecutingActions(t *testing.T) {
+func TestActionPaletteNavigatesWithoutChangingDashboardSelection(t *testing.T) {
 	client := &fakeClient{}
 	model := NewModelWithSource(client, time.Second, "native")
 	model.state = bubbleState()
@@ -153,7 +153,6 @@ func TestActionPaletteConsumesKeysWithoutExecutingActions(t *testing.T) {
 	model.paletteOpen = true
 
 	for _, key := range []tea.KeyMsg{
-		{Type: tea.KeyEnter},
 		{Type: tea.KeyRunes, Runes: []rune("r")},
 		{Type: tea.KeyDown},
 		{Type: tea.KeyRunes, Runes: []rune("j")},
@@ -172,6 +171,58 @@ func TestActionPaletteConsumesKeysWithoutExecutingActions(t *testing.T) {
 	}
 	if model.selection.SelectedIndex != 0 {
 		t.Fatalf("palette navigation changed dashboard selection to %d, want 0", model.selection.SelectedIndex)
+	}
+	if model.paletteSelected != 2 {
+		t.Fatalf("paletteSelected = %d, want 2", model.paletteSelected)
+	}
+}
+
+func TestActionPaletteEnterOnRefreshPollsRuntimeStateOnce(t *testing.T) {
+	client := &fakeClient{
+		output: []byte(`{"schema":"brevity.runtime-state.v1","repoRoot":"C:\\repo","taskCounts":{"tracked":3}}`),
+	}
+	model := NewModelWithSource(client, time.Second, "native")
+	model.state = bubbleState()
+	model.hasState = true
+	model.paletteOpen = true
+	model.paletteSelected = 4
+
+	updated, cmd := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model = updated.(Model)
+	if cmd == nil {
+		t.Fatal("enter on refresh returned nil command, want refresh command")
+	}
+	if model.paletteOpen {
+		t.Fatal("enter on refresh left palette open")
+	}
+
+	msg := cmd()
+	if _, ok := msg.(refreshMsg); !ok {
+		t.Fatalf("command message = %T, want refreshMsg", msg)
+	}
+	if client.calls != 1 {
+		t.Fatalf("runtime polls = %d, want 1", client.calls)
+	}
+}
+
+func TestActionPaletteEnterOnDisabledActionDoesNotPollRuntimeState(t *testing.T) {
+	client := &fakeClient{}
+	model := NewModelWithSource(client, time.Second, "native")
+	model.state = bubbleState()
+	model.hasState = true
+	model.paletteOpen = true
+	model.paletteSelected = 0
+
+	updated, cmd := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model = updated.(Model)
+	if cmd != nil {
+		t.Fatal("enter on disabled action returned command, want nil")
+	}
+	if client.calls != 0 {
+		t.Fatalf("runtime polls = %d, want 0", client.calls)
+	}
+	if !model.paletteOpen {
+		t.Fatal("enter on disabled action closed palette")
 	}
 }
 

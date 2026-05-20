@@ -37,6 +37,7 @@ type Model struct {
 	state           contracts.RuntimeState
 	hasState        bool
 	paletteOpen     bool
+	paletteSelected int
 	width           int
 	height          int
 	hasWindowSize   bool
@@ -171,6 +172,19 @@ func (model Model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		case "esc", "q", "p", "ctrl+p":
 			model.paletteOpen = false
 			return model, nil
+		case "j", "down":
+			model.movePaletteSelection(1)
+			return model, nil
+		case "k", "up":
+			model.movePaletteSelection(-1)
+			return model, nil
+		case "enter":
+			action := paletteActions()[model.clampedPaletteSelection()]
+			if !action.enabled {
+				return model, nil
+			}
+			model.paletteOpen = false
+			return model, model.refreshCmd()
 		default:
 			return model, nil
 		}
@@ -182,6 +196,7 @@ func (model Model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return model, tea.Quit
 	case "p", "ctrl+p":
 		model.paletteOpen = true
+		model.paletteSelected = 0
 		return model, nil
 	case "j", "down":
 		model.selection.MoveDown(itemCount)
@@ -786,21 +801,49 @@ func (model Model) renderActionPalette() string {
 	var output strings.Builder
 	fmt.Fprintln(&output)
 	renderSection(&output, "Actions")
-	for _, action := range readOnlyActions() {
-		fmt.Fprintln(&output, model.renderLine(fmt.Sprintf("  %-14s read-only preview", action)))
+	selected := model.clampedPaletteSelection()
+	for index, action := range paletteActions() {
+		cursor := " "
+		if index == selected {
+			cursor = ">"
+		}
+		fmt.Fprintln(&output, model.renderLine(fmt.Sprintf("%s %-14s %s", cursor, action.label, action.status)))
 	}
-	fmt.Fprintln(&output, dashboardStyles.help.Render(model.renderLine("  esc/q/p close")))
+	fmt.Fprintln(&output, dashboardStyles.help.Render(model.renderLine("  enter activate | esc/q/p close")))
 	return output.String()
 }
 
-func readOnlyActions() []string {
-	return []string{
-		"Start task",
-		"Run worker",
-		"Merge task",
-		"Cleanup task",
-		"Refresh state",
+type paletteAction struct {
+	label   string
+	status  string
+	enabled bool
+}
+
+func paletteActions() []paletteAction {
+	return []paletteAction{
+		{label: "Start task", status: "read-only preview"},
+		{label: "Run worker", status: "read-only preview"},
+		{label: "Merge task", status: "read-only preview"},
+		{label: "Cleanup task", status: "read-only preview"},
+		{label: "Refresh state", status: "enabled", enabled: true},
 	}
+}
+
+func (model *Model) movePaletteSelection(delta int) {
+	actionCount := len(paletteActions())
+	if actionCount == 0 {
+		model.paletteSelected = 0
+		return
+	}
+	model.paletteSelected = (model.paletteSelected + delta + actionCount) % actionCount
+}
+
+func (model Model) clampedPaletteSelection() int {
+	actionCount := len(paletteActions())
+	if actionCount == 0 {
+		return 0
+	}
+	return clampInt(model.paletteSelected, 0, actionCount-1)
 }
 
 func (model Model) refreshCmd() tea.Cmd {
