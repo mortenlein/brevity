@@ -5,6 +5,8 @@ import (
 	"io"
 	"strings"
 	"unicode/utf8"
+
+	"github.com/charmbracelet/lipgloss"
 )
 
 const defaultTerminalWidth = 100
@@ -71,9 +73,13 @@ func runeCount(value string) int {
 	return utf8.RuneCountInString(value)
 }
 
+func lipglossWidth(value string) int {
+	return lipgloss.Width(value)
+}
+
 func padRight(value string, width int) string {
 	value = truncateValue(value, width)
-	padding := width - runeCount(value)
+	padding := width - lipglossWidth(value)
 	if padding <= 0 {
 		return value
 	}

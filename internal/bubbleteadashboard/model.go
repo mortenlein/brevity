@@ -205,8 +205,22 @@ func (model Model) View() string {
 
 func (model Model) renderHeader() string {
 	width := model.contentWidth()
-	title := truncateValue(fmt.Sprintf("Brevity Runtime Dashboard [read-only] [source: %s]",
-		fallback(model.source, "unknown")), width-4)
+	warnings := model.warningCounts()
+	titleText := fmt.Sprintf("Brevity Runtime Dashboard [read-only] [source: %s]",
+		fallback(model.source, "unknown"),
+	)
+	metaText := fmt.Sprintf(" | operator status: providers=%d tasks=%d cleanup=%d",
+		warnings.provider,
+		warnings.task,
+		warnings.cleanup,
+	)
+	if !model.hasState {
+		metaText = " | operator status: loading"
+	}
+	title := truncateValue(titleText, width)
+	if lipglossWidth(titleText)+lipglossWidth(metaText) <= width {
+		title = titleText + metaText
+	}
 	return fmt.Sprintf(
 		"%s\n%s\n",
 		dashboardStyles.title.Render(title),
@@ -220,9 +234,9 @@ func renderSection(output *strings.Builder, title string) {
 
 func renderWarningCount(count int) string {
 	if count > 0 {
-		return " " + warningMarker()
+		return " " + statusBadge(fmt.Sprintf("warn %d", count), "warning")
 	}
-	return ""
+	return " " + statusBadge("ok", "success")
 }
 
 func renderWarningText(text string) string {
@@ -230,6 +244,42 @@ func renderWarningText(text string) string {
 		return ""
 	}
 	return " " + dashboardStyles.warning.Render(text)
+}
+
+type dashboardWarningCounts struct {
+	provider int
+	task     int
+	cleanup  int
+}
+
+func (model Model) warningCounts() dashboardWarningCounts {
+	if !model.hasState {
+		return dashboardWarningCounts{}
+	}
+	state := model.state
+	counts := dashboardWarningCounts{
+		provider: state.Providers.Summary.Degraded + state.Providers.Summary.Unavailable,
+		task:     state.TaskCounts.Blocked + state.TaskCounts.Stale + state.TaskCounts.ProviderGated + state.TaskCounts.Review,
+	}
+	if state.Cleanup != nil && state.Cleanup.Summary != nil {
+		counts.cleanup = state.Cleanup.Summary.TotalCandidates
+	}
+	return counts
+}
+
+func kindBadge(kind string) string {
+	switch kind {
+	case string(dashboard.SelectionProvider):
+		return statusBadge("provider", "accent")
+	case string(dashboard.SelectionTask):
+		return statusBadge("task", "")
+	case string(dashboard.SelectionCleanup):
+		return statusBadge("cleanup", "warning")
+	case string(dashboard.SelectionAction):
+		return statusBadge("action", "")
+	default:
+		return statusBadge(kind, "")
+	}
 }
 
 func (model Model) selectedRow(text string) string {
@@ -241,12 +291,10 @@ func (model Model) unselectedRow(text string) string {
 }
 
 func (model Model) renderRow(selected bool, kind string, label string, warning string) string {
+	badge := kindBadge(kind)
 	prefix := fmt.Sprintf("%s %-8s ", rowMarker(selected), kind)
-	warningWidth := 0
-	if warning != "" {
-		warningWidth = 2
-	}
-	line := prefix + truncateValue(label, model.contentWidth()-len(prefix)-warningWidth) + warning
+	suffix := warning + " " + badge
+	line := prefix + truncateValue(label, model.contentWidth()-lipglossWidth(prefix)-lipglossWidth(suffix)) + suffix
 	if selected {
 		return model.selectedRow(line)
 	}
@@ -275,13 +323,13 @@ func (model Model) renderSummary() string {
 	renderSection(&output, "Runtime Summary")
 	fmt.Fprintf(&output, "  repo: %s\n", model.renderInlinePath(fallback(state.RepoRoot, "(unknown)"), len("  repo: ")))
 	fmt.Fprintf(&output, "%s\n", model.renderLine(fmt.Sprintf("  generated: %s", fallback(state.GeneratedAt, "(unknown)"))))
-	fmt.Fprintf(&output, "%s\n", model.renderLine(fmt.Sprintf("  providers: %d total, %d degraded, %d unavailable%s",
+	fmt.Fprintf(&output, "%s\n", model.renderLine(fmt.Sprintf("  providers: %d total, %d degraded, %d unavailable %s",
 		state.Providers.Summary.Total,
 		state.Providers.Summary.Degraded,
 		state.Providers.Summary.Unavailable,
 		renderWarningCount(state.Providers.Summary.Degraded+state.Providers.Summary.Unavailable),
 	)))
-	fmt.Fprintf(&output, "%s\n", model.renderLine(fmt.Sprintf("  tasks: %d tracked, %d runnable, %d blocked, %d stale, %d provider-gated, %d review%s",
+	fmt.Fprintf(&output, "%s\n", model.renderLine(fmt.Sprintf("  tasks: %d tracked, %d runnable, %d blocked, %d stale, %d provider-gated, %d review %s",
 		state.TaskCounts.Tracked,
 		state.TaskCounts.Runnable,
 		state.TaskCounts.Blocked,
@@ -292,7 +340,7 @@ func (model Model) renderSummary() string {
 	)))
 	if state.Cleanup != nil && state.Cleanup.Summary != nil {
 		summary := state.Cleanup.Summary
-		fmt.Fprintf(&output, "%s\n", model.renderLine(fmt.Sprintf("  cleanup: %d candidates, %d require inspection%s",
+		fmt.Fprintf(&output, "%s\n", model.renderLine(fmt.Sprintf("  cleanup: %d candidates, %d require inspection %s",
 			summary.TotalCandidates,
 			summary.RequiresInspectionCount,
 			renderWarningCount(summary.TotalCandidates),
@@ -366,7 +414,7 @@ func (model Model) renderTwoPaneListAndDetails() string {
 	window := model.selectableListWindowForRows(len(items), selection.SelectedIndex, listRows)
 
 	var left strings.Builder
-	renderSection(&left, "Selectable List")
+	fmt.Fprintln(&left, paneTitle("Selectable List"))
 	if len(items) == 0 {
 		fmt.Fprintln(&left, "  (none)")
 	} else {
@@ -380,7 +428,7 @@ func (model Model) renderTwoPaneListAndDetails() string {
 	}
 
 	var right strings.Builder
-	renderSection(&right, "Details Pane")
+	fmt.Fprintln(&right, paneTitle("Details Pane"))
 	var details strings.Builder
 	if selection.ShowDetails {
 		rightModel.renderDetails(&details, items, selection.SelectedIndex)
@@ -628,13 +676,14 @@ func clampInt(value int, minimum int, maximum int) int {
 func (model Model) renderFooter() string {
 	width := model.contentWidth()
 	help := truncateValue("  q quit | j/k or arrows move | d/enter details | r refresh | ? help", width)
-	refresh := truncateValue(fmt.Sprintf("  refresh: every %s | last success: %s | source: %s",
+	refresh := truncateValue(fmt.Sprintf("  refresh: every %s | last success: %s | source: %s | read-only",
 		model.refreshInterval,
 		fallbackRefresh(model.lastRefresh),
 		fallback(model.source, "unknown")), width)
 	return fmt.Sprintf(
-		"\n%s\n%s\n%s\n",
+		"\n%s\n%s\n%s\n%s\n",
 		sectionTitle("Footer"),
+		dashboardStyles.rule.Render(strings.Repeat("-", width)),
 		dashboardStyles.footer.Render(help),
 		dashboardStyles.footer.Render(refresh),
 	)
@@ -698,7 +747,10 @@ func itemWarning(item dashboard.SelectionItem) string {
 	case dashboard.SelectionProvider:
 		status := strings.ToLower(strings.TrimSpace(item.ProviderHealth.Status))
 		if status == "degraded" || status == "capacity-degraded" || status == "unavailable" || status == "down" || status == "offline" {
-			return renderWarningText("!")
+			if status == "unavailable" || status == "down" || status == "offline" {
+				return " " + statusBadge("! "+status, "error")
+			}
+			return " " + statusBadge("! "+status, "warning")
 		}
 	case dashboard.SelectionTask:
 		state := strings.ToLower(strings.TrimSpace(item.Task.NormalizedState))
@@ -706,10 +758,17 @@ func itemWarning(item dashboard.SelectionItem) string {
 			state = strings.ToLower(strings.TrimSpace(item.Task.Status))
 		}
 		if state == "blocked" || state == "stale" || state == "provider-gated" || state == "review" || state == "needs-review" {
-			return renderWarningText("!")
+			return " " + statusBadge("! "+state, "warning")
 		}
 	case dashboard.SelectionCleanup:
-		return renderWarningText("!")
+		severity := strings.ToLower(strings.TrimSpace(item.CleanupCandidate.Severity))
+		if severity == "" {
+			severity = "cleanup"
+		}
+		if severity == "error" || severity == "critical" || severity == "destructive" {
+			return " " + statusBadge("! "+severity, "error")
+		}
+		return " " + statusBadge("! "+severity, "warning")
 	}
 	return ""
 }
