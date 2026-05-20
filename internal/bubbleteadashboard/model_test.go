@@ -542,6 +542,57 @@ func TestModelViewLayoutSnapshotsByWidth(t *testing.T) {
 	}
 }
 
+func TestModelViewRenderInvariantsAcrossWidthsSourcesAndModes(t *testing.T) {
+	widths := []struct {
+		name        string
+		width       int
+		wantTwoPane bool
+	}{
+		{name: "narrow", width: 48},
+		{name: "medium", width: 82},
+		{name: "wide", width: 120, wantTwoPane: true},
+	}
+	sources := []string{"native", "powershell"}
+	modes := []struct {
+		name        string
+		showDetails bool
+		showHelp    bool
+		wantDetails string
+	}{
+		{name: "collapsed-details", wantDetails: "select a row, then press d for details"},
+		{name: "expanded-details", showDetails: true, wantDetails: "type:"},
+		{name: "help-visible", showDetails: true, showHelp: true, wantDetails: "type:"},
+	}
+
+	for _, width := range widths {
+		for _, source := range sources {
+			for _, mode := range modes {
+				t.Run(width.name+"/"+source+"/"+mode.name, func(t *testing.T) {
+					model := NewModelWithSource(&fakeClient{}, time.Second, source)
+					model.state = bubbleStateWithLongWarningLabels()
+					model.hasState = true
+					model.width = width.width
+					model.height = 34
+					model.lastRefresh = "2026-05-19T10:00:00Z"
+					model.selection.SelectedIndex = 1
+					model.selection.ShowDetails = mode.showDetails
+					model.selection.ShowHelp = mode.showHelp
+
+					output := plainView(model.View())
+
+					assertRenderInvariants(t, output, width.width, source, width.wantTwoPane)
+					if !strings.Contains(output, mode.wantDetails) {
+						t.Fatalf("view missing details mode marker %q:\n%s", mode.wantDetails, output)
+					}
+					if mode.showHelp && !strings.Contains(output, "Help") {
+						t.Fatalf("help-visible view missing help section:\n%s", output)
+					}
+				})
+			}
+		}
+	}
+}
+
 func TestSelectableRowWarningSuffixesByKind(t *testing.T) {
 	tests := []struct {
 		name          string
@@ -1533,5 +1584,35 @@ func assertLinesWithinWidth(t *testing.T, output string, width int) {
 		if visibleWidth(line) > width {
 			t.Fatalf("line %d visible width = %d, want <= %d:\n%s", index+1, visibleWidth(line), width, output)
 		}
+	}
+}
+
+func assertRenderInvariants(t *testing.T, output string, width int, source string, wantTwoPane bool) {
+	t.Helper()
+	assertLinesWithinWidth(t, output, width)
+
+	for _, want := range []string{
+		">",
+		"!",
+		"!3",
+		source,
+		"read-only",
+		"q",
+		"j/k",
+		"d",
+		"r",
+		"? help",
+	} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("render invariant missing %q:\n%s", want, output)
+		}
+	}
+
+	hasTwoPane := strings.Contains(output, paneSeparator+"Details Pane")
+	if hasTwoPane != wantTwoPane {
+		t.Fatalf("two-pane separator = %t, want %t:\n%s", hasTwoPane, wantTwoPane, output)
+	}
+	if !wantTwoPane && strings.Contains(output, paneSeparator+"Details Pane") {
+		t.Fatalf("single-column view rendered two-pane separator:\n%s", output)
 	}
 }
