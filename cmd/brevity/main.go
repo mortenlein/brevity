@@ -366,7 +366,7 @@ func runWithContextOptions(ctx context.Context, stdout io.Writer, client runtime
 			if options.refresh <= 0 {
 				options.refresh = 5 * time.Second
 			}
-			return bubbleteadashboard.Run(ctx, os.Stdin, stdout, client, options.refresh)
+			return bubbleteadashboard.RunWithSource(ctx, os.Stdin, stdout, client, options.refresh, options.jsonSource)
 		}
 		if options.watch {
 			if options.refresh <= 0 {

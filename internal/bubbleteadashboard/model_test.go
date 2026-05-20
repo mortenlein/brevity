@@ -95,6 +95,96 @@ func TestModelRefreshMessageUpdatesState(t *testing.T) {
 	}
 }
 
+func TestModelViewRendersOperatorSections(t *testing.T) {
+	model := NewModelWithSource(&fakeClient{}, time.Second, "native")
+	model.state = bubbleState()
+	model.hasState = true
+	model.lastRefresh = "2026-05-19T10:00:00Z"
+
+	output := model.View()
+	for _, want := range []string{
+		"Brevity Runtime Dashboard [read-only] [source: native]",
+		"Runtime Summary",
+		"Selectable List",
+		"> provider codex: degraded !",
+		"Details Pane",
+		"details hidden; press d or enter",
+		"Footer",
+		"q quit | j/k or arrows move | d/enter details | r refresh | ? help",
+		"refresh: every 1s | last success: 2026-05-19T10:00:00Z | source: native",
+	} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("view missing %q:\n%s", want, output)
+		}
+	}
+}
+
+func TestModelViewRendersDetailsAndHelp(t *testing.T) {
+	model := NewModelWithSource(&fakeClient{}, time.Second, "powershell")
+	model.state = bubbleState()
+	model.hasState = true
+
+	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("d")})
+	model = updated.(Model)
+	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("?")})
+	model = updated.(Model)
+
+	output := model.View()
+	for _, want := range []string{
+		"type: provider",
+		"name: codex",
+		"status: degraded !",
+		"guidance: provider is degraded",
+		"Help",
+		"? help",
+	} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("view missing %q:\n%s", want, output)
+		}
+	}
+}
+
+func TestModelViewRendersTaskCleanupAndActionDetails(t *testing.T) {
+	tests := []struct {
+		name     string
+		selected int
+		want     []string
+	}{
+		{
+			name:     "task",
+			selected: 1,
+			want:     []string{"type: task", "slug: task-one", "state: blocked", "branch: task/task-one"},
+		},
+		{
+			name:     "cleanup",
+			selected: 2,
+			want:     []string{"type: cleanup candidate", "id: orphan-branch:task-old", "severity/category: warning / requires-inspection"},
+		},
+		{
+			name:     "action",
+			selected: 3,
+			want:     []string{"type: suggested action", "action: Inspect state.", "display-only; no command is executed"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			model := NewModelWithSource(&fakeClient{}, time.Second, "native")
+			model.state = bubbleState()
+			model.hasState = true
+			model.selection.SelectedIndex = tt.selected
+			model.selection.ShowDetails = true
+
+			output := model.View()
+			for _, want := range tt.want {
+				if !strings.Contains(output, want) {
+					t.Fatalf("view missing %q:\n%s", want, output)
+				}
+			}
+		})
+	}
+}
+
 func TestModelRefreshCommandReadsRuntimeState(t *testing.T) {
 	client := &fakeClient{
 		output: []byte(`{"schema":"brevity.runtime-state.v1","repoRoot":"C:\\repo","taskCounts":{"tracked":2}}`),
@@ -122,13 +212,20 @@ func bubbleState() contracts.RuntimeState {
 		Schema:   contracts.RuntimeStateSchema,
 		RepoRoot: `C:\repo`,
 		Providers: contracts.Providers{
-			Summary: contracts.ProviderSummary{Total: 1},
+			Summary: contracts.ProviderSummary{Total: 1, Degraded: 1},
 			Health: map[string]contracts.ProviderHealth{
-				"codex": {Status: "ok"},
+				"codex": {Status: "degraded", Note: "capacity limited"},
 			},
 		},
+		TaskCounts: contracts.TaskCounts{Tracked: 1, Blocked: 1},
 		Tasks: []contracts.TaskSummary{
-			{Slug: "task-one", Status: "ready"},
+			{Slug: "task-one", Status: "blocked", Branch: "task/task-one"},
+		},
+		Cleanup: &contracts.Cleanup{
+			Summary: &contracts.CleanupSummary{TotalCandidates: 1, RequiresInspectionCount: 1},
+			OrphanedTaskBranches: []contracts.CleanupCandidate{
+				{ID: "orphan-branch:task-old", Severity: "warning", Category: "requires-inspection", Branch: "task/old"},
+			},
 		},
 		SuggestedNextActions: []string{"Inspect state."},
 	}
