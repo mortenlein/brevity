@@ -35,7 +35,7 @@ Runtime Signals
 Selected Detail
   select a row, then press d for details
 
-q quit | j/k move | d details | p action | r refresh | ? help | native | read-only
+j/k r p d q quit ? help | native | read-only
 `,
 		},
 		{
@@ -62,7 +62,7 @@ Runtime Signals
 Selected Detail
   select a row, then press d for details
 
-q quit | j/k move | d details | p action | r refresh | ? help | native | read-only
+j/k r p d q quit ? help | native | read-only
 `,
 		},
 		{
@@ -85,7 +85,7 @@ Runtime Signals
   PowerShell backend is authoritative. This dashboard is read-only.
   Refresh to re-read state.
 
-q quit | j/k move | d details | p action | r refresh | ? help | native | read-only
+j/k r p d q quit ? help | native | read-only
 `,
 		},
 		{
@@ -112,7 +112,7 @@ Runtime Signals
 Warnings
   ! polling error  runtime unavailable
 
-q quit | j/k move | d details | p action | r refresh | ? help | native | read-only
+j/k r p d q quit ? help | native | read-only
 `,
 		},
 		{
@@ -147,7 +147,7 @@ Actions
   Cleanup task      read-only preview
 > Refresh state     enter refreshes state
 
-q quit | j/k move | d details | p action | r refresh | ? help | native | read-only
+j/k r p d q quit ? help | native | read-only
 `,
 		},
 	}

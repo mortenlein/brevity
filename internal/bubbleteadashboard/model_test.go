@@ -448,8 +448,8 @@ func TestModelViewRendersOperatorSections(t *testing.T) {
 		"> prov  codex    degraded !",
 		"Selected Detail",
 		"select a row, then press d for details",
-		"q quit | j/k move | d details | p action | r refresh | ? help",
-		"native | read-only | 1s refresh",
+		"up/down or j/k move | r refresh | p actions | d details | q quit | ? help",
+		"native | read-only",
 	} {
 		if !strings.Contains(output, want) {
 			t.Fatalf("view missing %q:\n%s", want, output)
@@ -486,7 +486,7 @@ func TestModelViewRendersIntentionalEmptyRuntimeSignals(t *testing.T) {
 	if len(lines) != model.height {
 		t.Fatalf("empty state rows = %d, want terminal height %d:\n%s", len(lines), model.height, output)
 	}
-	if !strings.Contains(lines[len(lines)-1], "q quit | j/k move | d details | p action | r refresh | ? help") {
+	if !strings.Contains(lines[len(lines)-1], "j/k r p d q quit ? help") {
 		t.Fatalf("footer was not anchored on final row:\n%s", output)
 	}
 	assertLinesWithinWidth(t, output, model.width)
@@ -807,7 +807,7 @@ func TestModelViewUsesTwoPaneLayoutAtWideWidth(t *testing.T) {
 	if !strings.Contains(output, "Runtime Signals") || !strings.Contains(output, paneSeparator+"Selected Detail") {
 		t.Fatalf("wide view missing side-by-side pane headings:\n%s", output)
 	}
-	if !strings.Contains(output, "q quit | j/k move | d details") {
+	if !strings.Contains(output, "up/down or j/k move | r refresh | p actions") {
 		t.Fatalf("wide view missing footer controls:\n%s", output)
 	}
 }
@@ -1148,9 +1148,9 @@ func TestWidePaneLayoutRendersDetailsAndHelpInRightPane(t *testing.T) {
 	for _, want := range []string{
 		paneSeparator + "Selected Detail",
 		paneSeparator + "  type:",
-		paneSeparator + "  q quit",
+		paneSeparator + "  p actions",
 		paneSeparator + "Help",
-		"q quit | j/k move | d details",
+		"up/down or j/k move | r refresh | p actions",
 	} {
 		if !strings.Contains(output, want) {
 			t.Fatalf("wide pane view missing %q:\n%s", want, output)
@@ -1995,7 +1995,7 @@ func TestDetailsTruncateAtSmallHeight(t *testing.T) {
 	if !strings.Contains(output, "... details truncated") {
 		t.Fatalf("small-height details missing truncation indicator:\n%s", output)
 	}
-	if !strings.Contains(output, "q quit | j/k move | d details") {
+	if !strings.Contains(output, "up/down or j/k move | r refresh | p actions") {
 		t.Fatalf("small-height view missing footer controls:\n%s", output)
 	}
 	if !strings.Contains(output, "> clean inspect  orphan-branch:task-old") {
@@ -2044,7 +2044,7 @@ func TestFooterPinsToBottomWhenHeightAllows(t *testing.T) {
 	if len(lines) != model.height {
 		t.Fatalf("rendered rows = %d, want terminal height %d:\n%s", len(lines), model.height, output)
 	}
-	if !strings.Contains(lines[len(lines)-1], "q quit | j/k move | d details | p action | r refresh | ? help") {
+	if !strings.Contains(lines[len(lines)-1], "j/k r p d q quit ? help") {
 		t.Fatalf("footer was not anchored on final row:\n%s", output)
 	}
 	if lines[len(lines)-2] != "" {
@@ -2080,7 +2080,7 @@ func TestHelpRendersAtSmallHeight(t *testing.T) {
 	if !strings.Contains(output, "Help") || !strings.Contains(output, "? help") {
 		t.Fatalf("small-height help missing compact help text:\n%s", output)
 	}
-	if !strings.Contains(output, "q quit | j/k move | d details") {
+	if !strings.Contains(output, "up/down or j/k move | r refresh | p actions") {
 		t.Fatalf("small-height help view missing footer controls:\n%s", output)
 	}
 	if !strings.Contains(output, "> prov  codex") {

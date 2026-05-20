@@ -476,7 +476,7 @@ func renderRowBody(primary string, meaning string, width int) string {
 	}
 
 	primaryWidth := visibleWidth(primary)
-	columnWidth := clampInt(primaryWidth, 7, 18)
+	columnWidth := clampInt(primaryWidth, 7, 16)
 	if width < columnWidth+2+1 {
 		return truncateValuePreservingWarning(primary+" "+meaning, width)
 	}
@@ -542,6 +542,10 @@ func detail(output io.Writer, label string, format string, args ...any) {
 
 func detailText(output io.Writer, label string, value string) {
 	fmt.Fprintln(output, detailLineWithWidth(label, value, detailLabelWidth))
+}
+
+func detailBreak(output io.Writer) {
+	fmt.Fprintln(output)
 }
 
 func (model Model) renderSummary() string {
@@ -902,8 +906,8 @@ func (model Model) fixedRowsWithoutDetailsOrHelp() int {
 func (model Model) renderHelp(maxRows int) string {
 	var output strings.Builder
 	for _, line := range []string{
-		"  q quit   p actions   r refresh",
-		"  j/k move d details",
+		"  up/down or j/k move   r refresh",
+		"  p actions   d details   q quit",
 		"  ? help",
 	} {
 		fmt.Fprintln(&output, dashboardStyles.help.Render(line))
@@ -943,7 +947,7 @@ func (model Model) renderFooter() string {
 	width := model.contentWidth()
 	source := fallback(model.source, "unknown")
 	footer := statusLine(width,
-		statusSegment{text: "q quit | j/k move | d details | p action | r refresh | ? help", compact: "q j/k d p r ? help", priority: 0},
+		statusSegment{text: "up/down or j/k move | r refresh | p actions | d details | q quit | ? help", compact: "j/k r p d q quit ? help", priority: 0},
 		statusSegment{text: source, priority: 1},
 		statusSegment{text: "read-only", priority: 1},
 		statusSegment{text: fmt.Sprintf("%s refresh", model.refreshInterval), compact: fmt.Sprintf("%s refresh", model.refreshInterval), priority: 2},
@@ -1144,6 +1148,7 @@ func (model Model) renderDetails(output io.Writer, items []dashboard.SelectionIt
 		model.detailText(output, "provider", fallback(item.ProviderName, "(unknown)"))
 		model.detailText(output, "reason", fallback(health.Note, "(none)"))
 		model.detailText(output, "action", providerGuidance(health))
+		detailBreak(output)
 		model.detailText(output, "updated", fallback(health.UpdatedAt, "(unknown)"))
 		model.detailText(output, "type", "provider")
 	case dashboard.SelectionTask:
@@ -1152,6 +1157,7 @@ func (model Model) renderDetails(output io.Writer, items []dashboard.SelectionIt
 		model.detailText(output, "task", fallback(task.Slug, "(unknown)"))
 		model.detailText(output, "action", taskGuidance(task))
 		model.detailText(output, "provider", fmt.Sprintf("%s / %s", fallback(taskProvider(task), "(unknown)"), fallback(taskProfile(task), "(unknown)")))
+		detailBreak(output)
 		model.detailText(output, "branch", fallback(task.Branch, "(unknown)"))
 		model.detailPath(output, "worktree", fallback(taskWorktreePath(task), "(unknown)"))
 		model.detailText(output, "worktree exists", optionalTaskBool(task.WorktreeExists, task.Worktree))
@@ -1165,12 +1171,14 @@ func (model Model) renderDetails(output io.Writer, items []dashboard.SelectionIt
 	case dashboard.SelectionActivity:
 		model.detailText(output, "activity", fallback(item.Label, "(none)"))
 		model.detailText(output, "guidance", "display-only runtime activity signal")
+		detailBreak(output)
 		model.detailText(output, "type", "run/activity")
 	case dashboard.SelectionCleanup:
 		candidate := item.CleanupCandidate
 		model.detailText(output, "risk", fmt.Sprintf("%s / %s%s", fallback(candidate.Severity, "(unknown)"), fallback(candidate.Category, "(unknown)"), itemWarning(item)))
 		model.detailPath(output, "path", fallback(candidate.Path, "(none)"))
 		model.detailText(output, "action", cleanupGuidance(candidate))
+		detailBreak(output)
 		model.detailText(output, "id", fallback(candidate.ID, "(unknown)"))
 		model.detailText(output, "branch", fallback(candidate.Branch, "(none)"))
 		detail(output, "dirty", "%t", candidate.Dirty)
@@ -1182,6 +1190,7 @@ func (model Model) renderDetails(output io.Writer, items []dashboard.SelectionIt
 	case dashboard.SelectionAction:
 		model.detailText(output, "action", fallback(item.ActionText, "(none)"))
 		model.detailText(output, "guidance", "display-only; no command is executed from this dashboard")
+		detailBreak(output)
 		model.detailText(output, "type", "suggested action")
 	}
 }
