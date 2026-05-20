@@ -9,6 +9,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/mortenlein/brevity/internal/contracts"
+	"github.com/mortenlein/brevity/internal/dashboard"
 )
 
 type fakeClient struct {
@@ -115,6 +116,54 @@ func TestTruncateValue(t *testing.T) {
 	got := truncateValue("abcdefghijklmnopqrstuvwxyz", 12)
 	if got != "abcdefghi..." {
 		t.Fatalf("truncateValue = %q, want %q", got, "abcdefghi...")
+	}
+}
+
+func TestTruncateValueUsesVisibleWidthForANSI(t *testing.T) {
+	styled := ansiStyle("abcdefghijklmnopqrstuvwxyz")
+
+	got := truncateValue(styled, 12)
+	plain := plainView(got)
+
+	if plain != "abcdefghi..." {
+		t.Fatalf("truncateValue plain text = %q, want %q", plain, "abcdefghi...")
+	}
+	if !strings.Contains(got, "\x1b[") {
+		t.Fatalf("truncateValue dropped styling escape sequences: %q", got)
+	}
+	if visibleWidth(got) != 12 {
+		t.Fatalf("truncateValue visible width = %d, want 12: %q", visibleWidth(got), plain)
+	}
+}
+
+func TestStyledWarningMarkerSurvivesProtectedTruncation(t *testing.T) {
+	value := "provider-with-a-very-long-name: unavailable " + ansiStyle("!")
+
+	got := truncateValuePreservingWarning(value, 24)
+	plain := plainView(got)
+
+	if !strings.HasSuffix(plain, " !") {
+		t.Fatalf("styled warning marker was not preserved at line end: %q", plain)
+	}
+	if !strings.Contains(plain, "...") {
+		t.Fatalf("styled warning truncation did not ellipsize base text: %q", plain)
+	}
+	if visibleWidth(got) > 24 {
+		t.Fatalf("styled warning visible width = %d, want <= 24: %q", visibleWidth(got), plain)
+	}
+}
+
+func TestStyledCompactWarningCountSurvivesProtectedTruncation(t *testing.T) {
+	value := "alerts-with-a-very-long-prefix " + ansiStyle("!12")
+
+	got := truncateValuePreservingWarning(value, 18)
+	plain := plainView(got)
+
+	if !strings.HasSuffix(plain, " !12") {
+		t.Fatalf("styled compact warning count was not preserved at line end: %q", plain)
+	}
+	if visibleWidth(got) > 18 {
+		t.Fatalf("styled compact warning visible width = %d, want <= 18: %q", visibleWidth(got), plain)
 	}
 }
 
@@ -237,6 +286,68 @@ func TestHeaderReadableAtNarrowWidth(t *testing.T) {
 	}
 	if strings.Contains(output, "...") {
 		t.Fatalf("narrow header should prefer compact text over clipping:\n%s", output)
+	}
+}
+
+func TestStyledHeaderFooterAndSummaryUseVisibleWidth(t *testing.T) {
+	model := NewModelWithSource(&fakeClient{}, time.Second, "powershell")
+	model.state = bubbleState()
+	model.hasState = true
+	model.width = 45
+	model.lastRefresh = "2026-05-19T10:00:00Z"
+
+	header := statusLine(model.width,
+		statusSegment{text: ansiStyle("Brevity Runtime Dashboard"), compact: ansiStyle("Brevity Runtime"), priority: 2},
+		statusSegment{text: "powershell", priority: 0},
+		statusSegment{text: "read-only", priority: 0},
+		statusSegment{text: "alerts " + ansiStyle("!3") + " p:1 t:1 c:1", compact: ansiStyle("!3") + " p:1 t:1 c:1", priority: 0},
+	)
+	footer := statusLine(model.width,
+		statusSegment{text: ansiStyle("q quit | j/k move | d details | r refresh | ? help"), compact: ansiStyle("q | j/k | d | r | ? help"), priority: 0},
+		statusSegment{text: "powershell", priority: 1},
+		statusSegment{text: "read-only", priority: 1},
+		statusSegment{text: "1s refresh", priority: 2},
+	)
+	summaryLine := model.renderLine("  providers  " + ansiStyle("provider-with-a-long-warning-state") + " " + ansiStyle("!1"))
+
+	for name, output := range map[string]string{
+		"header":  header,
+		"footer":  footer,
+		"summary": summaryLine,
+	} {
+		if !strings.Contains(output, "\x1b[") {
+			t.Fatalf("%s output is not styled: %q", name, output)
+		}
+		if visibleWidth(strings.TrimSuffix(output, "\n")) > model.width {
+			t.Fatalf("%s visible width = %d, want <= %d:\n%s", name, visibleWidth(strings.TrimSuffix(output, "\n")), model.width, plainView(output))
+		}
+	}
+	if !strings.Contains(plainView(header), "!3") {
+		t.Fatalf("styled header dropped compact warning count:\n%s", plainView(header))
+	}
+	if !strings.Contains(plainView(footer), "q") || !strings.Contains(plainView(footer), "read-only") {
+		t.Fatalf("styled footer dropped protected status text:\n%s", plainView(footer))
+	}
+	if !strings.HasSuffix(plainView(summaryLine), " !1") {
+		t.Fatalf("styled summary line dropped compact warning count: %q", plainView(summaryLine))
+	}
+}
+
+func TestStyledSelectedAndWarningRowsPreserveMarkers(t *testing.T) {
+	model := NewModelWithSource(&fakeClient{}, time.Second, "native")
+	model.width = 30
+
+	selected := model.renderRow(true, string(dashboard.SelectionTask), ansiStyle("task-with-a-long-styled-label"), "")
+	warning := model.renderRow(false, string(dashboard.SelectionTask), ansiStyle("task-with-a-long-styled-label"), " "+ansiStyle("!"))
+
+	if !strings.HasPrefix(plainView(selected), ">") {
+		t.Fatalf("styled selected row dropped selection marker: %q", plainView(selected))
+	}
+	if !strings.HasSuffix(plainView(warning), " !") {
+		t.Fatalf("styled warning row dropped warning marker: %q", plainView(warning))
+	}
+	if visibleWidth(selected) > model.width || visibleWidth(warning) > model.width {
+		t.Fatalf("styled row exceeded width:\nselected %d %q\nwarning %d %q", visibleWidth(selected), plainView(selected), visibleWidth(warning), plainView(warning))
 	}
 }
 
@@ -1241,6 +1352,10 @@ func bubbleStateWithLongWarningLabels() contracts.RuntimeState {
 }
 
 var ansiPattern = regexp.MustCompile(`\x1b\[[0-9;]*m`)
+
+func ansiStyle(value string) string {
+	return "\x1b[33m" + value + "\x1b[0m"
+}
 
 func plainView(output string) string {
 	return ansiPattern.ReplaceAllString(output, "")

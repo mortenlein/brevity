@@ -46,10 +46,10 @@ func truncateValue(value string, width int) string {
 	if width <= 3 {
 		return strings.Repeat(".", width)
 	}
-	if runeCount(value) <= width {
+	if visibleWidth(value) <= width {
 		return value
 	}
-	return string([]rune(value)[:width-3]) + "..."
+	return truncateVisible(value, width-3) + "..."
 }
 
 type statusSegment struct {
@@ -67,14 +67,14 @@ func statusLine(width int, segments ...statusSegment) string {
 		active[index].text = strings.TrimSpace(active[index].text)
 		active[index].compact = strings.TrimSpace(active[index].compact)
 	}
-	if line := joinStatusSegments(active, false); runeCount(line) <= width {
+	if line := joinStatusSegments(active, false); visibleWidth(line) <= width {
 		return line
 	}
 	active, line, ok := dropOptionalStatusSegments(active, width, false)
 	if ok {
 		return line
 	}
-	if line := joinStatusSegments(active, true); runeCount(line) <= width {
+	if line := joinStatusSegments(active, true); visibleWidth(line) <= width {
 		return line
 	}
 	if line, ok := dropStatusSegmentsToFit(active, width, true); ok {
@@ -91,7 +91,7 @@ func dropOptionalStatusSegments(segments []statusSegment, width int, compact boo
 			return active, "", false
 		}
 		active = append(active[:dropIndex], active[dropIndex+1:]...)
-		if line := joinStatusSegments(active, compact); runeCount(line) <= width {
+		if line := joinStatusSegments(active, compact); visibleWidth(line) <= width {
 			return active, line, true
 		}
 	}
@@ -103,7 +103,7 @@ func dropStatusSegmentsToFit(segments []statusSegment, width int, compact bool) 
 	for len(active) > 1 {
 		dropIndex := lowestPriorityIndex(active)
 		active = append(active[:dropIndex], active[dropIndex+1:]...)
-		if line := joinStatusSegments(active, compact); runeCount(line) <= width {
+		if line := joinStatusSegments(active, compact); visibleWidth(line) <= width {
 			return line, true
 		}
 	}
@@ -139,7 +139,7 @@ func truncatePath(value string, width int) string {
 	if width <= 0 {
 		return ""
 	}
-	if runeCount(value) <= width {
+	if visibleWidth(value) <= width {
 		return value
 	}
 	if width <= 3 {
@@ -153,12 +153,59 @@ func truncatePath(value string, width int) string {
 	return "..." + string(runes[len(runes)-suffixWidth:])
 }
 
-func runeCount(value string) int {
-	return utf8.RuneCountInString(value)
+func visibleWidth(value string) int {
+	return lipgloss.Width(value)
 }
 
 func lipglossWidth(value string) int {
-	return lipgloss.Width(value)
+	return visibleWidth(value)
+}
+
+func truncateVisible(value string, width int) string {
+	if width <= 0 {
+		return ""
+	}
+	var output strings.Builder
+	visible := 0
+	escaped := false
+	for index := 0; index < len(value); {
+		if value[index] == '\x1b' {
+			sequenceEnd := ansiSequenceEnd(value, index)
+			if sequenceEnd > index {
+				output.WriteString(value[index:sequenceEnd])
+				index = sequenceEnd
+				escaped = true
+				continue
+			}
+		}
+		r, size := utf8.DecodeRuneInString(value[index:])
+		if r == utf8.RuneError && size == 0 {
+			break
+		}
+		nextWidth := visibleWidth(string(r))
+		if visible+nextWidth > width {
+			break
+		}
+		output.WriteRune(r)
+		visible += nextWidth
+		index += size
+	}
+	if escaped {
+		output.WriteString("\x1b[0m")
+	}
+	return output.String()
+}
+
+func ansiSequenceEnd(value string, start int) int {
+	if start+2 > len(value) || value[start] != '\x1b' || value[start+1] != '[' {
+		return -1
+	}
+	for index := start + 2; index < len(value); index++ {
+		if value[index] >= 0x40 && value[index] <= 0x7e {
+			return index + 1
+		}
+	}
+	return -1
 }
 
 func padRight(value string, width int) string {
@@ -217,19 +264,40 @@ func truncateLogPathTokens(value string, width int) string {
 }
 
 func truncateValuePreservingWarning(value string, width int) string {
-	if strings.HasSuffix(value, " !") && width > len(" !") {
-		base := strings.TrimSuffix(value, " !")
-		return truncateValue(base, width-len(" !")) + " !"
-	}
 	fields := strings.Fields(value)
 	if len(fields) > 0 {
 		last := fields[len(fields)-1]
-		if strings.HasPrefix(last, "!") && len(last) > 1 && width > len(last)+1 {
+		lastPlain := stripANSI(last)
+		if lastPlain == "!" && width > visibleWidth(last)+1 {
 			base := strings.TrimRight(strings.TrimSuffix(value, last), " \t")
-			return truncateValue(base, width-len(last)-1) + " " + last
+			return truncateValue(base, width-visibleWidth(last)-1) + " " + last
+		}
+		if strings.HasPrefix(lastPlain, "!") && len(lastPlain) > 1 && width > visibleWidth(last)+1 {
+			base := strings.TrimRight(strings.TrimSuffix(value, last), " \t")
+			return truncateValue(base, width-visibleWidth(last)-1) + " " + last
 		}
 	}
 	return truncateValue(value, width)
+}
+
+func stripANSI(value string) string {
+	var output strings.Builder
+	for index := 0; index < len(value); {
+		if value[index] == '\x1b' {
+			sequenceEnd := ansiSequenceEnd(value, index)
+			if sequenceEnd > index {
+				index = sequenceEnd
+				continue
+			}
+		}
+		r, size := utf8.DecodeRuneInString(value[index:])
+		if r == utf8.RuneError && size == 0 {
+			break
+		}
+		output.WriteRune(r)
+		index += size
+	}
+	return output.String()
 }
 
 func (model Model) renderStringList(output io.Writer, label string, values []string) {

@@ -472,7 +472,7 @@ func (model Model) renderTwoPaneListAndDetails() string {
 
 func (model Model) paneWidths() (int, int) {
 	width := model.contentWidth()
-	separatorWidth := runeCount(paneSeparator)
+	separatorWidth := visibleWidth(paneSeparator)
 	available := width - separatorWidth
 	leftWidth := available * 42 / 100
 	if leftWidth < 36 {
