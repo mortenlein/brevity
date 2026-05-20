@@ -675,6 +675,157 @@ func TestCleanupDetailWarningsStayReadable(t *testing.T) {
 	}
 }
 
+func TestTwoPaneDetailTruncationPreservesWarningMarkers(t *testing.T) {
+	tests := []struct {
+		name     string
+		state    contracts.RuntimeState
+		selected int
+		label    string
+		value    string
+	}{
+		{
+			name:  "unavailable provider",
+			state: bubbleStateWithProvider("codex", "unavailable"),
+			label: "status",
+			value: "unavailable !",
+		},
+		{
+			name:  "failed task",
+			state: bubbleStateWithTaskState("failed"),
+			label: "state",
+			value: "failed !",
+		},
+		{
+			name:  "stale task",
+			state: bubbleStateWithTaskState("stale"),
+			label: "state",
+			value: "stale !",
+		},
+		{
+			name:  "blocked task",
+			state: bubbleStateWithTaskState("blocked"),
+			label: "state",
+			value: "blocked !",
+		},
+		{
+			name:  "cleanup warning",
+			state: bubbleStateWithCleanupCandidate("warning", "destructive-if-removed"),
+			label: "severity/category",
+			value: "warning / destructive-if-removed !",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			output := detailPaneViewWithSize(tt.state, tt.selected, twoPaneWidthThreshold, 24)
+
+			if !containsDetail(output, tt.label, tt.value) {
+				t.Fatalf("two-pane detail truncation hid warning marker or context %q=%q:\n%s", tt.label, tt.value, output)
+			}
+			assertLinesWithinWidth(t, output, twoPaneWidthThreshold)
+		})
+	}
+}
+
+func TestNarrowWidthTruncationPreservesSelectionAndWarnings(t *testing.T) {
+	model := NewModelWithSource(&fakeClient{}, time.Second, "native")
+	model.state = bubbleStateWithLongWarningLabels()
+	model.hasState = true
+	model.width = 36
+	model.selection.SelectedIndex = 1
+	model.selection.ShowDetails = true
+
+	output := plainView(model.View())
+
+	for _, want := range []string{
+		"> task",
+		"!",
+		"...",
+		"state:",
+		"provider... !",
+	} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("narrow output missing intentional marker %q:\n%s", want, output)
+		}
+	}
+	if strings.Contains(output, "....") {
+		t.Fatalf("narrow output has awkward truncation marker:\n%s", output)
+	}
+	assertLinesWithinWidth(t, output, model.width)
+}
+
+func TestCleanupDetailTruncationPreservesDestructiveContextBeforeCommands(t *testing.T) {
+	destructive := true
+	removable := false
+	state := bubbleStateWithCleanupCandidate("warning", "destructive-if-removed-with-a-very-long-tail")
+	state.Cleanup.OrphanedTaskBranches[0].DestructiveIfUnmerged = &destructive
+	state.Cleanup.OrphanedTaskBranches[0].RemovableByExecute = &removable
+	state.Cleanup.OrphanedTaskBranches[0].SuggestedCommands = []string{
+		`.\brevity.ps1 task cleanup cleanup-one --force`,
+		`git branch --delete task/cleanup-one`,
+	}
+
+	output := detailPaneViewWithSize(state, 0, 52, 40)
+
+	for _, want := range []string{
+		"warning / destructive-if... !",
+		"destructive if unmerged: true",
+		`suggested commands:`,
+		`- .\brevity.ps1 task cleanup cleanup-one --force`,
+	} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("cleanup detail truncation missing %q:\n%s", want, output)
+		}
+	}
+	assertLinesWithinWidth(t, output, 52)
+}
+
+func TestCleanupDetailTruncatesLongSuggestedCommandClearly(t *testing.T) {
+	state := bubbleStateWithCleanupCandidate("warning", "destructive-if-removed")
+	state.Cleanup.OrphanedTaskBranches[0].SuggestedCommands = []string{
+		`.\brevity.ps1 task cleanup cleanup-one --force --with-an-extra-long-operator-note`,
+	}
+
+	output := detailPaneViewWithSize(state, 0, 42, 40)
+
+	if !strings.Contains(output, `- .\brevity.ps1 task cleanup cleanu...`) {
+		t.Fatalf("long suggested command was not clearly ellipsized:\n%s", output)
+	}
+	if !strings.Contains(output, "warning / dest... !") {
+		t.Fatalf("long command output lost destructive warning context:\n%s", output)
+	}
+	assertLinesWithinWidth(t, output, 42)
+}
+
+func TestHeaderFooterTruncationParityKeepsWarningSourceReadOnly(t *testing.T) {
+	model := NewModelWithSource(&fakeClient{}, time.Second, "native")
+	model.state = bubbleState()
+	model.hasState = true
+	model.width = 48
+	model.lastRefresh = "2026-05-19T10:00:00Z"
+
+	header := plainView(model.renderHeader())
+	footer := plainView(model.renderFooter())
+
+	for _, want := range []string{"native", "read-only", "p:1 t:1 c:1"} {
+		if !strings.Contains(header, want) {
+			t.Fatalf("narrow header dropped priority segment %q:\n%s", want, header)
+		}
+	}
+	for _, want := range []string{"q", "j/k", "d", "r", "? help", "native", "read-only"} {
+		if !strings.Contains(footer, want) {
+			t.Fatalf("narrow footer dropped priority segment %q:\n%s", want, footer)
+		}
+	}
+	for _, dropped := range []string{"Brevity Runtime Dashboard", "last 2026-05-19T10:00:00Z", "1s refresh"} {
+		if strings.Contains(header, dropped) || strings.Contains(footer, dropped) {
+			t.Fatalf("narrow chrome kept lower-priority metadata %q:\nheader: %s\nfooter: %s", dropped, header, footer)
+		}
+	}
+	assertLinesWithinWidth(t, header, model.width)
+	assertLinesWithinWidth(t, footer, model.width)
+}
+
 func TestDetailsPaneSelectionAndCollapsedTextStayIntentional(t *testing.T) {
 	model := NewModelWithSource(&fakeClient{}, time.Second, "native")
 	model.state = bubbleState()
@@ -955,6 +1106,30 @@ func bubbleStateWithManyTasks(taskCount int) contracts.RuntimeState {
 	return state
 }
 
+func bubbleStateWithLongWarningLabels() contracts.RuntimeState {
+	state := bubbleState()
+	state.Providers.Health = map[string]contracts.ProviderHealth{
+		"codex-provider-with-a-long-display-name": {Status: "unavailable"},
+	}
+	state.Tasks = []contracts.TaskSummary{
+		{
+			Slug:            "task-with-a-long-label-that-must-truncate",
+			NormalizedState: "provider-gated",
+			Branch:          "task/task-with-a-long-label-that-must-truncate",
+		},
+	}
+	state.Cleanup.OrphanedTaskBranches = []contracts.CleanupCandidate{
+		{
+			ID:       "cleanup-candidate-with-long-id",
+			Severity: "warning",
+			Category: "destructive-if-removed-with-extra-context",
+			Branch:   "task/cleanup-candidate-with-long-id",
+		},
+	}
+	state.SuggestedNextActions = []string{"Review native orphaned task cleanup findings before cleanup."}
+	return state
+}
+
 var ansiPattern = regexp.MustCompile(`\x1b\[[0-9;]*m`)
 
 func plainView(output string) string {
@@ -962,15 +1137,30 @@ func plainView(output string) string {
 }
 
 func containsDetail(output string, label string, value string) bool {
-	pattern := regexp.MustCompile(`(?m)^\s+` + regexp.QuoteMeta(label) + `:\s+` + regexp.QuoteMeta(value))
+	pattern := regexp.MustCompile(`(?m)\s+` + regexp.QuoteMeta(label) + `:\s+` + regexp.QuoteMeta(value))
 	return pattern.FindStringIndex(output) != nil
 }
 
 func detailPaneView(state contracts.RuntimeState, selected int) string {
+	return detailPaneViewWithSize(state, selected, defaultTerminalWidth, 0)
+}
+
+func detailPaneViewWithSize(state contracts.RuntimeState, selected int, width int, height int) string {
 	model := NewModelWithSource(&fakeClient{}, time.Second, "native")
 	model.state = state
 	model.hasState = true
+	model.width = width
+	model.height = height
 	model.selection.SelectedIndex = selected
 	model.selection.ShowDetails = true
 	return plainView(model.View())
+}
+
+func assertLinesWithinWidth(t *testing.T, output string, width int) {
+	t.Helper()
+	for index, line := range strings.Split(output, "\n") {
+		if len([]rune(line)) > width {
+			t.Fatalf("line %d width = %d, want <= %d:\n%s", index+1, len([]rune(line)), width, output)
+		}
+	}
 }

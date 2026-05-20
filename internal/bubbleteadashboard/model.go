@@ -748,7 +748,7 @@ func warningSuffix(count int) string {
 }
 
 func warningMarkerSuffix(severity string) string {
-	return " " + statusBadge("!", severity)
+	return " !"
 }
 
 func itemWarning(item dashboard.SelectionItem) string {

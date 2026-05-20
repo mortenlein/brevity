@@ -213,6 +213,14 @@ func truncateLogPathTokens(value string, width int) string {
 	if changed {
 		value = strings.Join(parts, " ")
 	}
+	return truncateValuePreservingWarning(value, width)
+}
+
+func truncateValuePreservingWarning(value string, width int) string {
+	if strings.HasSuffix(value, " !") && width > len(" !") {
+		base := strings.TrimSuffix(value, " !")
+		return truncateValue(base, width-len(" !")) + " !"
+	}
 	return truncateValue(value, width)
 }
 
