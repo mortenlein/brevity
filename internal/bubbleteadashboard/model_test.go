@@ -1002,6 +1002,80 @@ func TestWidePaneLayoutExpandsListAndDetailsContent(t *testing.T) {
 	assertLinesWithinWidth(t, output, model.width)
 }
 
+func TestLongActionDetailWrapsInsteadOfPrematureEllipsis(t *testing.T) {
+	state := bubbleState()
+	state.SuggestedNextActions = []string{"Native Go runtime reader is experimental and display-only; no command is executed from the dashboard."}
+	model := NewModelWithSource(&fakeClient{}, time.Second, "native")
+	model.state = state
+	model.hasState = true
+	model.width = 72
+	model.height = 34
+	model.selection.SelectedIndex = 3
+	model.selection.ShowDetails = true
+
+	output := plainView(model.View())
+
+	for _, want := range []string{
+		"action:              Native Go runtime reader is experimental and",
+		"                     display-only; no command is executed from the",
+		"guidance:            display-only; no command is executed from this",
+		"                     dashboard",
+	} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("wrapped action detail missing %q:\n%s", want, output)
+		}
+	}
+	if strings.Contains(output, "action:             Native Go runtime reader is experimental and...") {
+		t.Fatalf("long action detail was prematurely ellipsized:\n%s", output)
+	}
+	assertLinesWithinWidth(t, output, model.width)
+}
+
+func TestWrappedDetailsRespectHeightAndPinnedFooter(t *testing.T) {
+	state := bubbleState()
+	state.SuggestedNextActions = []string{"Review every provider gate, stale worker run, cleanup candidate, missing context file, and latest log path before making any manual change."}
+	model := NewModelWithSource(&fakeClient{}, time.Second, "native")
+	model.state = state
+	model.hasState = true
+	model.width = 70
+	model.height = 24
+	model.selection.SelectedIndex = 3
+	model.selection.ShowDetails = true
+
+	output := plainView(model.View())
+	lines := strings.Split(strings.TrimSuffix(output, "\n"), "\n")
+
+	if len(lines) != model.height {
+		t.Fatalf("wrapped detail rows = %d, want terminal height %d:\n%s", len(lines), model.height, output)
+	}
+	if !strings.Contains(output, "... details truncated") {
+		t.Fatalf("wrapped detail pane did not use height truncation:\n%s", output)
+	}
+	if !strings.Contains(lines[len(lines)-1], "q") || !strings.Contains(lines[len(lines)-1], "j/k") || !strings.Contains(lines[len(lines)-1], "d") {
+		t.Fatalf("footer was not pinned after wrapped details:\n%s", output)
+	}
+	assertLinesWithinWidth(t, output, model.width)
+}
+
+func TestWrappedDetailsRemainSafeAtNarrowWidth(t *testing.T) {
+	state := bubbleState()
+	state.SuggestedNextActions = []string{"Review native runtime dashboard guidance before cleanup because this long action should stay readable without crossing terminal width."}
+	model := NewModelWithSource(&fakeClient{}, time.Second, "native")
+	model.state = state
+	model.hasState = true
+	model.width = 38
+	model.height = 32
+	model.selection.SelectedIndex = 3
+	model.selection.ShowDetails = true
+
+	output := plainView(model.View())
+
+	if !strings.Contains(output, "action:") || !strings.Contains(output, "guidance:") {
+		t.Fatalf("narrow wrapped detail output dropped key labels:\n%s", output)
+	}
+	assertLinesWithinWidth(t, output, model.width)
+}
+
 func TestPaneWidthsExpandWithWideTerminals(t *testing.T) {
 	model := NewModelWithSource(&fakeClient{}, time.Second, "native")
 

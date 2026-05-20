@@ -240,8 +240,30 @@ func padRight(value string, width int) string {
 }
 
 func (model Model) detailText(output io.Writer, label string, value string) {
+	if shouldWrapDetailValue(label) {
+		model.detailWrappedText(output, label, value)
+		return
+	}
 	value = model.truncateDetailValue(label, value)
 	fmt.Fprintln(output, detailLineWithWidth(label, value, detailLabelWidth))
+}
+
+func (model Model) detailWrappedText(output io.Writer, label string, value string) {
+	width := model.contentWidth() - detailPrefixWidth(label)
+	if width <= 8 {
+		value = model.truncateDetailValue(label, value)
+		fmt.Fprintln(output, detailLineWithWidth(label, value, detailLabelWidth))
+		return
+	}
+	lines := wrapDetailValue(value, width)
+	if len(lines) == 0 {
+		lines = []string{""}
+	}
+	fmt.Fprintln(output, detailLineWithWidth(label, lines[0], detailLabelWidth))
+	continuationPrefix := strings.Repeat(" ", detailPrefixWidth(label))
+	for _, line := range lines[1:] {
+		fmt.Fprintln(output, continuationPrefix+dashboardStyles.detailValue.Render(line))
+	}
 }
 
 func (model Model) detailPath(output io.Writer, label string, value string) {
@@ -254,6 +276,56 @@ func (model Model) renderInlinePath(value string, prefixWidth int) string {
 
 func (model Model) truncateDetailValue(label string, value string) string {
 	return truncateLogPathTokens(value, model.contentWidth()-detailPrefixWidth(label))
+}
+
+func shouldWrapDetailValue(label string) bool {
+	switch strings.ToLower(strings.TrimSpace(label)) {
+	case "action", "guidance", "note", "warning", "warnings", "error", "errors", "description":
+		return true
+	default:
+		return false
+	}
+}
+
+func wrapDetailValue(value string, width int) []string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return []string{""}
+	}
+	if width <= 0 {
+		return []string{""}
+	}
+	words := strings.Fields(value)
+	if len(words) == 0 {
+		return []string{truncateValue(value, width)}
+	}
+	lines := make([]string, 0, 2)
+	current := ""
+	for _, word := range words {
+		if visibleWidth(word) > width {
+			if current != "" {
+				lines = append(lines, current)
+				current = ""
+			}
+			lines = append(lines, truncateValue(word, width))
+			continue
+		}
+		if current == "" {
+			current = word
+			continue
+		}
+		candidate := current + " " + word
+		if visibleWidth(candidate) <= width {
+			current = candidate
+			continue
+		}
+		lines = append(lines, current)
+		current = word
+	}
+	if current != "" {
+		lines = append(lines, current)
+	}
+	return lines
 }
 
 func detailPrefixWidth(label string) int {

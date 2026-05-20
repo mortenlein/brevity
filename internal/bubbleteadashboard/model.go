@@ -682,7 +682,11 @@ func (model Model) visibleSelectableRows() int {
 }
 
 func (model Model) visibleDetailsRows(visibleListRows int) int {
-	return model.remainingRowsAfterList(visibleListRows, model.minimumHelpRows())
+	rows := model.remainingRowsAfterList(visibleListRows, model.minimumHelpRows())
+	if model.height > 0 && rows > 1 {
+		rows--
+	}
+	return rows
 }
 
 func (model Model) visibleHelpRows(visibleListRows int, visibleDetailsRows int) int {
