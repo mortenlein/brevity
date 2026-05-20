@@ -742,9 +742,13 @@ func fallback(value string, fallbackValue string) string {
 
 func warningSuffix(count int) string {
 	if count > 0 {
-		return " " + warningMarker()
+		return warningMarkerSuffix("warning")
 	}
 	return ""
+}
+
+func warningMarkerSuffix(severity string) string {
+	return " " + statusBadge("!", severity)
 }
 
 func itemWarning(item dashboard.SelectionItem) string {
@@ -753,9 +757,9 @@ func itemWarning(item dashboard.SelectionItem) string {
 		status := strings.ToLower(strings.TrimSpace(item.ProviderHealth.Status))
 		if status == "degraded" || status == "capacity-degraded" || status == "unavailable" || status == "down" || status == "offline" {
 			if status == "unavailable" || status == "down" || status == "offline" {
-				return " " + statusBadge("! "+status, "error")
+				return warningMarkerSuffix("error")
 			}
-			return " " + statusBadge("! "+status, "warning")
+			return warningMarkerSuffix("warning")
 		}
 	case dashboard.SelectionTask:
 		state := strings.ToLower(strings.TrimSpace(item.Task.NormalizedState))
@@ -763,7 +767,7 @@ func itemWarning(item dashboard.SelectionItem) string {
 			state = strings.ToLower(strings.TrimSpace(item.Task.Status))
 		}
 		if state == "blocked" || state == "stale" || state == "provider-gated" || state == "review" || state == "needs-review" {
-			return " " + statusBadge("! "+state, "warning")
+			return warningMarkerSuffix("warning")
 		}
 	case dashboard.SelectionCleanup:
 		severity := strings.ToLower(strings.TrimSpace(item.CleanupCandidate.Severity))
@@ -771,9 +775,9 @@ func itemWarning(item dashboard.SelectionItem) string {
 			severity = "cleanup"
 		}
 		if severity == "error" || severity == "critical" || severity == "destructive" {
-			return " " + statusBadge("! "+severity, "error")
+			return warningMarkerSuffix("error")
 		}
-		return " " + statusBadge("! "+severity, "warning")
+		return warningMarkerSuffix("warning")
 	}
 	return ""
 }

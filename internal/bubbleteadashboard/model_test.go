@@ -272,6 +272,56 @@ func TestModelViewUsesTwoPaneLayoutAtWideWidth(t *testing.T) {
 	}
 }
 
+func TestModelViewLayoutSnapshotsByWidth(t *testing.T) {
+	tests := []struct {
+		name        string
+		width       int
+		wantTwoPane bool
+	}{
+		{name: "narrow", width: 48},
+		{name: "medium", width: 82},
+		{name: "wide", width: 120, wantTwoPane: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			model := NewModelWithSource(&fakeClient{}, time.Second, "native")
+			model.state = bubbleState()
+			model.hasState = true
+			model.width = tt.width
+			model.height = 28
+			model.lastRefresh = "2026-05-19T10:00:00Z"
+
+			output := plainView(model.View())
+			for _, want := range []string{
+				"native",
+				"read-only",
+				"alerts p:1 t:1 c:1",
+				"> prov  codex: degraded !",
+				"q",
+				"j/k",
+				"d",
+				"r",
+				"? help",
+			} {
+				if !strings.Contains(output, want) {
+					t.Fatalf("%s snapshot missing %q:\n%s", tt.name, want, output)
+				}
+			}
+			if tt.width >= 82 && !strings.Contains(output, "Brevity Runtime") {
+				t.Fatalf("%s snapshot missing dashboard title:\n%s", tt.name, output)
+			}
+			if strings.Contains(output, "degraded ! degraded") {
+				t.Fatalf("%s snapshot duplicated provider warning wording:\n%s", tt.name, output)
+			}
+			hasTwoPane := strings.Contains(output, paneSeparator+"Details Pane")
+			if hasTwoPane != tt.wantTwoPane {
+				t.Fatalf("%s two-pane separator = %t, want %t:\n%s", tt.name, hasTwoPane, tt.wantTwoPane, output)
+			}
+		})
+	}
+}
+
 func TestWidePaneLayoutKeepsSelectedItemVisible(t *testing.T) {
 	model := NewModelWithSource(&fakeClient{}, time.Second, "native")
 	model.state = bubbleStateWithManyTasks(30)
