@@ -27,7 +27,7 @@ func (model Model) contentWidth() int {
 }
 
 func (model Model) renderLine(value string) string {
-	return truncateValue(value, model.contentWidth())
+	return truncateValuePreservingWarning(value, model.contentWidth())
 }
 
 func (model Model) withContentWidth(width int) Model {
@@ -220,6 +220,14 @@ func truncateValuePreservingWarning(value string, width int) string {
 	if strings.HasSuffix(value, " !") && width > len(" !") {
 		base := strings.TrimSuffix(value, " !")
 		return truncateValue(base, width-len(" !")) + " !"
+	}
+	fields := strings.Fields(value)
+	if len(fields) > 0 {
+		last := fields[len(fields)-1]
+		if strings.HasPrefix(last, "!") && len(last) > 1 && width > len(last)+1 {
+			base := strings.TrimRight(strings.TrimSuffix(value, last), " \t")
+			return truncateValue(base, width-len(last)-1) + " " + last
+		}
 	}
 	return truncateValue(value, width)
 }

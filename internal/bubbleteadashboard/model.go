@@ -211,7 +211,7 @@ func (model Model) renderHeader() string {
 		statusSegment{text: "Brevity Runtime Dashboard", compact: "Brevity Runtime", priority: 2},
 		statusSegment{text: source, priority: 0},
 		statusSegment{text: "read-only", priority: 0},
-		statusSegment{text: fmt.Sprintf("alerts p:%d t:%d c:%d", warnings.provider, warnings.task, warnings.cleanup), compact: fmt.Sprintf("p:%d t:%d c:%d", warnings.provider, warnings.task, warnings.cleanup), priority: 0},
+		statusSegment{text: fmt.Sprintf("alerts !%d p:%d t:%d c:%d", warnings.total(), warnings.provider, warnings.task, warnings.cleanup), compact: fmt.Sprintf("!%d p:%d t:%d c:%d", warnings.total(), warnings.provider, warnings.task, warnings.cleanup), priority: 0},
 	)
 	if !model.hasState {
 		statusText = statusLine(width,
@@ -230,9 +230,9 @@ func renderSection(output *strings.Builder, title string) {
 
 func renderWarningCount(count int) string {
 	if count > 0 {
-		return " " + statusBadge(fmt.Sprintf("!%d", count), "warning")
+		return fmt.Sprintf(" !%d", count)
 	}
-	return " " + statusBadge("ok", "success")
+	return " ok"
 }
 
 func renderWarningText(text string) string {
@@ -246,6 +246,10 @@ type dashboardWarningCounts struct {
 	provider int
 	task     int
 	cleanup  int
+}
+
+func (counts dashboardWarningCounts) total() int {
+	return counts.provider + counts.task + counts.cleanup
 }
 
 func (model Model) warningCounts() dashboardWarningCounts {
