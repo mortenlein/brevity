@@ -1,6 +1,7 @@
 package bubbleteadashboard
 
 import (
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -90,7 +91,7 @@ func TestModelRefreshMessageUpdatesState(t *testing.T) {
 	if model.lastRefresh != "2026-05-19T10:00:00Z" {
 		t.Fatalf("lastRefresh = %q", model.lastRefresh)
 	}
-	if !strings.Contains(model.View(), "Brevity Runtime Dashboard") {
+	if !strings.Contains(plainView(model.View()), "Brevity Runtime Dashboard") {
 		t.Fatalf("view missing title:\n%s", model.View())
 	}
 }
@@ -101,7 +102,7 @@ func TestModelViewRendersOperatorSections(t *testing.T) {
 	model.hasState = true
 	model.lastRefresh = "2026-05-19T10:00:00Z"
 
-	output := model.View()
+	output := plainView(model.View())
 	for _, want := range []string{
 		"Brevity Runtime Dashboard [read-only] [source: native]",
 		"Runtime Summary",
@@ -129,7 +130,7 @@ func TestModelViewRendersDetailsAndHelp(t *testing.T) {
 	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("?")})
 	model = updated.(Model)
 
-	output := model.View()
+	output := plainView(model.View())
 	for _, want := range []string{
 		"type: provider",
 		"name: codex",
@@ -175,7 +176,7 @@ func TestModelViewRendersTaskCleanupAndActionDetails(t *testing.T) {
 			model.selection.SelectedIndex = tt.selected
 			model.selection.ShowDetails = true
 
-			output := model.View()
+			output := plainView(model.View())
 			for _, want := range tt.want {
 				if !strings.Contains(output, want) {
 					t.Fatalf("view missing %q:\n%s", want, output)
@@ -229,4 +230,10 @@ func bubbleState() contracts.RuntimeState {
 		},
 		SuggestedNextActions: []string{"Inspect state."},
 	}
+}
+
+var ansiPattern = regexp.MustCompile(`\x1b\[[0-9;]*m`)
+
+func plainView(output string) string {
+	return ansiPattern.ReplaceAllString(output, "")
 }
