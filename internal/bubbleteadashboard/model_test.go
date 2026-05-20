@@ -181,6 +181,80 @@ func TestModelViewReadableAtNarrowWidth(t *testing.T) {
 	}
 }
 
+func TestModelViewUsesSingleColumnBelowTwoPaneThreshold(t *testing.T) {
+	model := NewModelWithSource(&fakeClient{}, time.Second, "native")
+	model.state = bubbleState()
+	model.hasState = true
+	model.width = twoPaneWidthThreshold - 1
+
+	output := plainView(model.View())
+
+	if !strings.Contains(output, "Selectable List\n") {
+		t.Fatalf("narrow view missing single-column list section:\n%s", output)
+	}
+	if strings.Contains(output, "Selectable List") && strings.Contains(output, paneSeparator+"Details Pane") {
+		t.Fatalf("narrow view appears to use pane separator:\n%s", output)
+	}
+}
+
+func TestModelViewUsesTwoPaneLayoutAtWideWidth(t *testing.T) {
+	model := NewModelWithSource(&fakeClient{}, time.Second, "native")
+	model.state = bubbleState()
+	model.hasState = true
+	model.width = twoPaneWidthThreshold
+
+	output := plainView(model.View())
+
+	if !strings.Contains(output, "Selectable List") || !strings.Contains(output, paneSeparator+"Details Pane") {
+		t.Fatalf("wide view missing side-by-side pane headings:\n%s", output)
+	}
+	if !strings.Contains(output, "Footer") {
+		t.Fatalf("wide view missing footer:\n%s", output)
+	}
+}
+
+func TestWidePaneLayoutKeepsSelectedItemVisible(t *testing.T) {
+	model := NewModelWithSource(&fakeClient{}, time.Second, "native")
+	model.state = bubbleStateWithManyTasks(30)
+	model.hasState = true
+	model.width = 120
+	model.height = 18
+	model.selection.SelectedIndex = 11
+
+	output := plainView(model.View())
+
+	if !strings.Contains(output, "> task     task-11") {
+		t.Fatalf("wide pane layout missing selected item:\n%s", output)
+	}
+	if !strings.Contains(output, "showing") {
+		t.Fatalf("wide pane layout missing scroll indicator:\n%s", output)
+	}
+}
+
+func TestWidePaneLayoutRendersDetailsAndHelpInRightPane(t *testing.T) {
+	model := NewModelWithSource(&fakeClient{}, time.Second, "native")
+	model.state = bubbleState()
+	model.hasState = true
+	model.width = 120
+	model.height = 32
+	model.selection.ShowDetails = true
+	model.selection.ShowHelp = true
+
+	output := plainView(model.View())
+
+	for _, want := range []string{
+		paneSeparator + "Details Pane",
+		paneSeparator + "  type: provider",
+		paneSeparator + "Help",
+		paneSeparator + "  q quit",
+		"Footer",
+	} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("wide pane view missing %q:\n%s", want, output)
+		}
+	}
+}
+
 func TestModelViewShortensLongPaths(t *testing.T) {
 	model := NewModelWithSource(&fakeClient{}, time.Second, "native")
 	model.state = bubbleStateWithLongPaths()

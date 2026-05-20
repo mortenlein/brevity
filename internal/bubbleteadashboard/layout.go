@@ -9,6 +9,8 @@ import (
 
 const defaultTerminalWidth = 100
 const minimumTerminalWidth = 24
+const twoPaneWidthThreshold = 110
+const paneSeparator = " | "
 
 func (model Model) contentWidth() int {
 	if model.width <= 0 {
@@ -22,6 +24,15 @@ func (model Model) contentWidth() int {
 
 func (model Model) renderLine(value string) string {
 	return truncateValue(value, model.contentWidth())
+}
+
+func (model Model) withContentWidth(width int) Model {
+	model.width = width
+	return model
+}
+
+func (model Model) usesTwoPaneLayout() bool {
+	return model.contentWidth() >= twoPaneWidthThreshold
 }
 
 func truncateValue(value string, width int) string {
@@ -58,6 +69,15 @@ func truncatePath(value string, width int) string {
 
 func runeCount(value string) int {
 	return utf8.RuneCountInString(value)
+}
+
+func padRight(value string, width int) string {
+	value = truncateValue(value, width)
+	padding := width - runeCount(value)
+	if padding <= 0 {
+		return value
+	}
+	return value + strings.Repeat(" ", padding)
 }
 
 func (model Model) detailText(output io.Writer, label string, value string) {

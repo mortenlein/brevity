@@ -304,6 +304,13 @@ func (model Model) renderSummary() string {
 }
 
 func (model Model) renderListAndDetails() string {
+	if model.usesTwoPaneLayout() {
+		return model.renderTwoPaneListAndDetails()
+	}
+	return model.renderSingleColumnListAndDetails()
+}
+
+func (model Model) renderSingleColumnListAndDetails() string {
 	items := dashboard.SelectableItems(model.state)
 	selection := model.selection
 	selection.Clamp(len(items))
@@ -343,6 +350,122 @@ func (model Model) renderListAndDetails() string {
 	return output.String()
 }
 
+func (model Model) renderTwoPaneListAndDetails() string {
+	items := dashboard.SelectableItems(model.state)
+	selection := model.selection
+	selection.Clamp(len(items))
+
+	leftWidth, rightWidth := model.paneWidths()
+	leftModel := model.withContentWidth(leftWidth)
+	rightModel := model.withContentWidth(rightWidth)
+	paneRows := model.visibleTwoPaneRows()
+	listRows := paneRows - 2
+	if listRows < minimumVisibleListRows {
+		listRows = minimumVisibleListRows
+	}
+	window := model.selectableListWindowForRows(len(items), selection.SelectedIndex, listRows)
+
+	var left strings.Builder
+	renderSection(&left, "Selectable List")
+	if len(items) == 0 {
+		fmt.Fprintln(&left, "  (none)")
+	} else {
+		if window.truncated {
+			fmt.Fprintf(&left, "  showing %d-%d of %d\n", window.start+1, window.end, len(items))
+		}
+		for index := window.start; index < window.end; index++ {
+			item := items[index]
+			fmt.Fprintln(&left, leftModel.renderRow(index == selection.SelectedIndex, string(item.Kind), item.Label, itemWarning(item)))
+		}
+	}
+
+	var right strings.Builder
+	renderSection(&right, "Details Pane")
+	var details strings.Builder
+	if selection.ShowDetails {
+		rightModel.renderDetails(&details, items, selection.SelectedIndex)
+	} else {
+		fmt.Fprintln(&details, "  details hidden; press d or enter")
+	}
+	detailsRows := paneRows - 2
+	if selection.ShowHelp {
+		detailsRows -= 2 + fullHelpRows
+	}
+	if detailsRows < 1 {
+		detailsRows = 1
+	}
+	right.WriteString(truncateRows(details.String(), detailsRows, detailTruncatedIndicator, rightWidth))
+	if selection.ShowHelp {
+		fmt.Fprintln(&right)
+		renderSection(&right, "Help")
+		helpRows := paneRows - 2 - detailsRows - 2
+		if helpRows < 1 {
+			helpRows = 1
+		}
+		right.WriteString(rightModel.renderHelp(helpRows))
+	}
+
+	return "\n" + joinPaneLines(left.String(), right.String(), leftWidth, rightWidth)
+}
+
+func (model Model) paneWidths() (int, int) {
+	width := model.contentWidth()
+	separatorWidth := runeCount(paneSeparator)
+	available := width - separatorWidth
+	leftWidth := available * 42 / 100
+	if leftWidth < 36 {
+		leftWidth = 36
+	}
+	if leftWidth > 52 {
+		leftWidth = 52
+	}
+	rightWidth := available - leftWidth
+	if rightWidth < 36 {
+		rightWidth = 36
+		leftWidth = available - rightWidth
+	}
+	return leftWidth, rightWidth
+}
+
+func (model Model) visibleTwoPaneRows() int {
+	if model.height <= 0 {
+		return maxInt
+	}
+	rows := model.height
+	rows -= 2 // header
+	rows -= 6 // runtime summary
+	if model.lastError != nil {
+		rows -= 3
+	}
+	rows -= 4 // footer
+	if rows < minimumVisibleListRows+2 {
+		return minimumVisibleListRows + 2
+	}
+	return rows
+}
+
+func joinPaneLines(left string, right string, leftWidth int, rightWidth int) string {
+	leftLines := strings.Split(strings.TrimSuffix(left, "\n"), "\n")
+	rightLines := strings.Split(strings.TrimSuffix(right, "\n"), "\n")
+	lineCount := len(leftLines)
+	if len(rightLines) > lineCount {
+		lineCount = len(rightLines)
+	}
+	var output strings.Builder
+	for index := 0; index < lineCount; index++ {
+		leftLine := ""
+		if index < len(leftLines) {
+			leftLine = leftLines[index]
+		}
+		rightLine := ""
+		if index < len(rightLines) {
+			rightLine = rightLines[index]
+		}
+		fmt.Fprintf(&output, "%s%s%s\n", padRight(leftLine, leftWidth), paneSeparator, truncateValue(rightLine, rightWidth))
+	}
+	return output.String()
+}
+
 type listWindow struct {
 	start     int
 	end       int
@@ -350,11 +473,14 @@ type listWindow struct {
 }
 
 func (model Model) selectableListWindow(itemCount int, selected int) listWindow {
+	return model.selectableListWindowForRows(itemCount, selected, model.visibleSelectableRows())
+}
+
+func (model Model) selectableListWindowForRows(itemCount int, selected int, visibleRows int) listWindow {
 	if itemCount <= 0 {
 		return listWindow{}
 	}
 	selected = clampInt(selected, 0, itemCount-1)
-	visibleRows := model.visibleSelectableRows()
 	if visibleRows >= itemCount {
 		return listWindow{start: 0, end: itemCount}
 	}
