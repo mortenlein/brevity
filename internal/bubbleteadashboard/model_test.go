@@ -1449,6 +1449,44 @@ func TestDetailsRenderFullyAtNormalHeight(t *testing.T) {
 	}
 }
 
+func TestFooterPinsToBottomWhenHeightAllows(t *testing.T) {
+	model := NewModelWithSource(&fakeClient{}, time.Second, "native")
+	model.state = bubbleState()
+	model.hasState = true
+	model.width = 82
+	model.height = 34
+	model.lastRefresh = "2026-05-19T10:00:00Z"
+
+	output := plainView(model.View())
+	lines := strings.Split(strings.TrimSuffix(output, "\n"), "\n")
+
+	if len(lines) != model.height {
+		t.Fatalf("rendered rows = %d, want terminal height %d:\n%s", len(lines), model.height, output)
+	}
+	if !strings.Contains(lines[len(lines)-1], "q quit | j/k move | d details | r refresh | ? help") {
+		t.Fatalf("footer was not anchored on final row:\n%s", output)
+	}
+	if lines[len(lines)-2] != "" {
+		t.Fatalf("expected quiet padding row above pinned footer, got %q:\n%s", lines[len(lines)-2], output)
+	}
+}
+
+func TestLoadingFooterPinsToBottomWhenHeightAllows(t *testing.T) {
+	model := NewModelWithSource(&fakeClient{}, time.Second, "native")
+	model.width = 72
+	model.height = 18
+
+	output := plainView(model.View())
+	lines := strings.Split(strings.TrimSuffix(output, "\n"), "\n")
+
+	if len(lines) != model.height {
+		t.Fatalf("loading rendered rows = %d, want terminal height %d:\n%s", len(lines), model.height, output)
+	}
+	if !strings.Contains(lines[len(lines)-1], "q quit | j/k move | d details") {
+		t.Fatalf("loading footer was not anchored on final row:\n%s", output)
+	}
+}
+
 func TestHelpRendersAtSmallHeight(t *testing.T) {
 	model := NewModelWithSource(&fakeClient{}, time.Second, "native")
 	model.state = bubbleStateWithManyTasks(8)

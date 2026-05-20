@@ -39,6 +39,14 @@ func (model Model) usesTwoPaneLayout() bool {
 	return model.contentWidth() >= twoPaneWidthThreshold
 }
 
+func renderedRows(value string) int {
+	value = strings.TrimSuffix(value, "\n")
+	if value == "" {
+		return 0
+	}
+	return strings.Count(value, "\n") + 1
+}
+
 func truncateValue(value string, width int) string {
 	if width <= 0 {
 		return ""

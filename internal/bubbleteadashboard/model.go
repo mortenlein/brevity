@@ -186,15 +186,17 @@ func (model Model) View() string {
 		return model.renderLoadingView()
 	}
 
-	output := model.renderHeader()
-	output += model.renderSummary()
-	output += model.renderListAndDetails()
+	var output strings.Builder
+	output.WriteString(model.renderHeader())
+	output.WriteString(model.renderSummary())
+	output.WriteString(model.renderListAndDetails())
 	if model.lastError != nil {
-		output += "\n" + sectionTitle("Warnings") + "\n"
-		output += model.renderRuntimeErrorLine()
+		output.WriteString("\n")
+		output.WriteString(sectionTitle("Warnings"))
+		output.WriteString("\n")
+		output.WriteString(model.renderRuntimeErrorLine())
 	}
-	output += model.renderFooter()
-	return output
+	return model.renderWithPinnedFooter(output.String())
 }
 
 func (model Model) renderLoadingView() string {
@@ -210,8 +212,19 @@ func (model Model) renderLoadingView() string {
 		renderSection(&output, "Warnings")
 		output.WriteString(model.renderRuntimeErrorLine())
 	}
-	output.WriteString(model.renderFooter())
-	return output.String()
+	return model.renderWithPinnedFooter(output.String())
+}
+
+func (model Model) renderWithPinnedFooter(body string) string {
+	footer := model.renderFooter()
+	if model.height <= 0 {
+		return body + footer
+	}
+	paddingRows := model.height - renderedRows(body) - renderedRows(footer)
+	if paddingRows > 0 {
+		body += strings.Repeat("\n", paddingRows)
+	}
+	return body + footer
 }
 
 func (model Model) renderRuntimeErrorLine() string {
