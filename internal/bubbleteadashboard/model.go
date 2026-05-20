@@ -307,7 +307,8 @@ func (model Model) renderWithPinnedFooter(body string) string {
 }
 
 func (model Model) renderRuntimeErrorLine() string {
-	return model.renderLine(fmt.Sprintf("  %s polling error  %v", warningMarker(), model.lastError)) + "\n"
+	message := dashboardStyles.error.Render(fmt.Sprintf("polling error  %v", model.lastError))
+	return model.renderLine(fmt.Sprintf("  %s %s", warningMarker(), message)) + "\n"
 }
 
 func (model Model) renderHeader() string {
@@ -553,8 +554,8 @@ func (model Model) renderSummary() string {
 	var output strings.Builder
 	fmt.Fprintln(&output)
 	renderSection(&output, "Runtime Summary")
-	fmt.Fprintf(&output, "  repo      %s\n", model.renderInlinePath(fallback(state.RepoRoot, "(unknown)"), len("  repo      ")))
-	fmt.Fprintf(&output, "%s\n", model.renderLine("  generated "+fallback(state.GeneratedAt, "(unknown)")))
+	fmt.Fprintf(&output, "  repo      %s\n", dashboardStyles.detailPrimary.Render(model.renderInlinePath(fallback(state.RepoRoot, "(unknown)"), len("  repo      "))))
+	fmt.Fprintf(&output, "%s\n", model.renderLine("  generated "+dashboardStyles.headerMeta.Render(fallback(state.GeneratedAt, "(unknown)"))))
 	fmt.Fprintf(&output, "%s\n", model.renderLine(fmt.Sprintf("  status    %s | %d runnable | %s%s",
 		providerStatusSummary(state.Providers.Summary),
 		state.TaskCounts.Runnable,
@@ -907,8 +908,8 @@ func (model Model) renderHelp(maxRows int) string {
 	var output strings.Builder
 	for _, line := range []string{
 		"  up/down or j/k move   r refresh",
-		"  p actions   d details   q quit",
-		"  ? help",
+		"  p actions   d details   ? help",
+		"  q quit   esc closes actions",
 	} {
 		fmt.Fprintln(&output, dashboardStyles.help.Render(line))
 	}
@@ -965,7 +966,7 @@ func (model Model) renderActionPalette(usedRows ...int) string {
 		fmt.Fprintln(&output, model.renderPaletteActionRow(action, index == selected))
 	}
 	if model.shouldRenderActionPaletteHelp(usedRows...) {
-		fmt.Fprintln(&output, dashboardStyles.help.Render(model.renderLine("  esc closes | p toggles")))
+		fmt.Fprintln(&output, dashboardStyles.help.Render(model.renderLine("  enter runs Refresh only | esc closes | p toggles")))
 	}
 	return output.String()
 }
@@ -993,7 +994,9 @@ func (model Model) renderPaletteActionRow(action paletteAction, selected bool) s
 	}
 	status := action.status
 	if !action.enabled {
-		status = dashboardStyles.muted.Render(status)
+		status = dashboardStyles.disabledAction.Render(status)
+	} else {
+		status = dashboardStyles.enabledAction.Render(status)
 	}
 
 	width := model.contentWidth()

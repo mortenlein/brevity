@@ -3,37 +3,42 @@ package bubbleteadashboard
 import "github.com/charmbracelet/lipgloss"
 
 var dashboardStyles = struct {
-	title       lipgloss.Style
-	headerMeta  lipgloss.Style
-	rule        lipgloss.Style
-	section     lipgloss.Style
-	paneTitle   lipgloss.Style
-	selectedRow lipgloss.Style
-	badge       lipgloss.Style
-	success     lipgloss.Style
-	warning     lipgloss.Style
-	error       lipgloss.Style
-	muted       lipgloss.Style
-	footer      lipgloss.Style
-	detailLabel lipgloss.Style
-	detailValue lipgloss.Style
-	help        lipgloss.Style
+	title          lipgloss.Style
+	headerMeta     lipgloss.Style
+	rule           lipgloss.Style
+	section        lipgloss.Style
+	paneTitle      lipgloss.Style
+	selectedRow    lipgloss.Style
+	badge          lipgloss.Style
+	success        lipgloss.Style
+	warning        lipgloss.Style
+	error          lipgloss.Style
+	muted          lipgloss.Style
+	footer         lipgloss.Style
+	detailLabel    lipgloss.Style
+	detailValue    lipgloss.Style
+	detailPrimary  lipgloss.Style
+	enabledAction  lipgloss.Style
+	disabledAction lipgloss.Style
+	help           lipgloss.Style
 }{
 	title: lipgloss.NewStyle().
 		Bold(true).
 		Foreground(lipgloss.Color("15")),
 	headerMeta: lipgloss.NewStyle().
-		Foreground(lipgloss.Color("7")),
+		Foreground(lipgloss.Color("8")),
 	rule: lipgloss.NewStyle().
 		Foreground(lipgloss.Color("8")),
 	section: lipgloss.NewStyle().
+		Bold(true).
 		Foreground(lipgloss.Color("7")),
 	paneTitle: lipgloss.NewStyle().
+		Bold(true).
 		Foreground(lipgloss.Color("7")),
 	selectedRow: lipgloss.NewStyle().
 		Bold(true).
 		Foreground(lipgloss.Color("15")).
-		Background(lipgloss.Color("236")),
+		Background(lipgloss.Color("235")),
 	badge: lipgloss.NewStyle().
 		Foreground(lipgloss.Color("7")),
 	success: lipgloss.NewStyle().
@@ -47,10 +52,16 @@ var dashboardStyles = struct {
 	muted: lipgloss.NewStyle().
 		Foreground(lipgloss.Color("8")),
 	footer: lipgloss.NewStyle().
-		Foreground(lipgloss.Color("7")),
+		Foreground(lipgloss.Color("8")),
 	detailLabel: lipgloss.NewStyle().
 		Foreground(lipgloss.Color("8")),
 	detailValue: lipgloss.NewStyle(),
+	detailPrimary: lipgloss.NewStyle().
+		Foreground(lipgloss.Color("15")),
+	enabledAction: lipgloss.NewStyle().
+		Foreground(lipgloss.Color("10")),
+	disabledAction: lipgloss.NewStyle().
+		Foreground(lipgloss.Color("8")),
 	help: lipgloss.NewStyle().
 		Foreground(lipgloss.Color("8")),
 }
@@ -68,18 +79,22 @@ func warningMarker() string {
 }
 
 func statusBadge(text string, severity string) string {
-	style := dashboardStyles.badge
+	return severityStyle(dashboardStyles.badge, severity).Render(text)
+}
+
+func severityStyle(base lipgloss.Style, severity string) lipgloss.Style {
 	switch severity {
 	case "success":
-		style = style.Foreground(lipgloss.Color("10"))
+		return base.Foreground(lipgloss.Color("10"))
 	case "warning":
-		style = style.Foreground(lipgloss.Color("11"))
+		return base.Foreground(lipgloss.Color("11"))
 	case "error":
-		style = style.Foreground(lipgloss.Color("9"))
+		return base.Foreground(lipgloss.Color("9"))
 	case "accent":
-		style = style.Foreground(lipgloss.Color("12"))
+		return base.Foreground(lipgloss.Color("12"))
+	default:
+		return base
 	}
-	return style.Render(text)
 }
 
 func detailLine(label string, value string) string {
@@ -90,5 +105,14 @@ func detailLineWithWidth(label string, value string, width int) string {
 	if width < len(label) {
 		width = len(label)
 	}
-	return "  " + dashboardStyles.detailLabel.Render(padRight(label+":", width+1)) + " " + dashboardStyles.detailValue.Render(value)
+	return "  " + dashboardStyles.detailLabel.Render(padRight(label+":", width+1)) + " " + detailValueStyle(label).Render(value)
+}
+
+func detailValueStyle(label string) lipgloss.Style {
+	switch label {
+	case "status", "state", "risk", "action", "activity", "task", "provider":
+		return dashboardStyles.detailPrimary
+	default:
+		return dashboardStyles.detailValue
+	}
 }

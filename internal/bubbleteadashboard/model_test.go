@@ -103,7 +103,7 @@ func TestActionPaletteOpensWithShortcut(t *testing.T) {
 		"Merge task        read-only preview",
 		"Cleanup task      read-only preview",
 		"Refresh state     enter refreshes state",
-		"esc closes | p toggles",
+		"enter runs Refresh only | esc closes | p toggles",
 	} {
 		if !strings.Contains(output, want) {
 			t.Fatalf("palette output missing %q:\n%s", want, output)
@@ -253,13 +253,13 @@ func TestActionPaletteHelperOnlyRendersWhenSpaceAllows(t *testing.T) {
 	model.height = 24
 
 	output := plainView(model.View())
-	if strings.Contains(output, "esc closes | p toggles") {
+	if strings.Contains(output, "enter runs Refresh only") {
 		t.Fatalf("height-constrained palette rendered helper:\n%s", output)
 	}
 
 	model.height = 30
 	output = plainView(model.View())
-	if !strings.Contains(output, "esc closes | p toggles") {
+	if !strings.Contains(output, "enter runs Refresh only | esc closes | p toggles") {
 		t.Fatalf("roomy palette omitted helper:\n%s", output)
 	}
 }
@@ -1374,6 +1374,48 @@ func TestModelViewRendersTaskCleanupAndActionDetails(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestActivitySignalRowsHaveStableRenderAndDetailsScaffold(t *testing.T) {
+	model := NewModelWithSource(&fakeClient{}, time.Second, "native")
+	model.width = 64
+	items := []dashboard.SelectionItem{
+		{Kind: dashboard.SelectionActivity, Label: "run-20260520: display-only worker status"},
+	}
+
+	row := plainView(model.renderRow(true, string(items[0].Kind), items[0].Label, ""))
+	if !strings.Contains(row, "> run   run-20260520") || !strings.Contains(row, "display-only worker status") {
+		t.Fatalf("activity row scaffold is not readable:\n%s", row)
+	}
+	assertLinesWithinWidth(t, row, model.width)
+
+	var details strings.Builder
+	model.renderDetails(&details, items, 0)
+	output := plainView(details.String())
+	for _, detail := range []struct {
+		label string
+		value string
+	}{
+		{"activity", "run-20260520: display-only worker status"},
+		{"guidance", "display-only runtime activity signal"},
+		{"type", "run/activity"},
+	} {
+		if !containsDetail(output, detail.label, detail.value) {
+			t.Fatalf("activity detail missing %q=%q:\n%s", detail.label, detail.value, output)
+		}
+	}
+}
+
+func TestNoActivitySignalsLeavesVisibleDashboardUnchanged(t *testing.T) {
+	model := NewModelWithSource(&fakeClient{}, time.Second, "native")
+	model.state = bubbleState()
+	model.hasState = true
+	model.width = 82
+
+	output := plainView(model.View())
+	if strings.Contains(output, "run/activity") || strings.Contains(output, "display-only runtime activity signal") {
+		t.Fatalf("dashboard invented visible activity rows:\n%s", output)
 	}
 }
 
