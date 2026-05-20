@@ -18,6 +18,9 @@ import (
 
 const defaultRefreshInterval = 5 * time.Second
 const minimumVisibleListRows = 1
+const fullHelpRows = 5
+const detailTruncatedIndicator = "  ... details truncated"
+const helpTruncatedIndicator = "  ... help truncated"
 
 type refreshMsg struct {
 	state contracts.RuntimeState
@@ -305,6 +308,8 @@ func (model Model) renderListAndDetails() string {
 	selection := model.selection
 	selection.Clamp(len(items))
 	window := model.selectableListWindow(len(items), selection.SelectedIndex)
+	detailsRows := model.visibleDetailsRows(window.end - window.start)
+	helpRows := model.visibleHelpRows(window.end-window.start, detailsRows)
 
 	var output strings.Builder
 	fmt.Fprintln(&output)
@@ -323,19 +328,17 @@ func (model Model) renderListAndDetails() string {
 
 	fmt.Fprintln(&output)
 	renderSection(&output, "Details Pane")
+	var details strings.Builder
 	if selection.ShowDetails {
-		model.renderDetails(&output, items, selection.SelectedIndex)
+		model.renderDetails(&details, items, selection.SelectedIndex)
 	} else {
-		fmt.Fprintln(&output, "  details hidden; press d or enter")
+		fmt.Fprintln(&details, "  details hidden; press d or enter")
 	}
+	output.WriteString(truncateRows(details.String(), detailsRows, detailTruncatedIndicator, model.contentWidth()))
 	if selection.ShowHelp {
 		fmt.Fprintln(&output)
 		renderSection(&output, "Help")
-		fmt.Fprintln(&output, dashboardStyles.help.Render("  q quit"))
-		fmt.Fprintln(&output, dashboardStyles.help.Render("  j/k or arrows move"))
-		fmt.Fprintln(&output, dashboardStyles.help.Render("  d/enter details"))
-		fmt.Fprintln(&output, dashboardStyles.help.Render("  r refresh"))
-		fmt.Fprintln(&output, dashboardStyles.help.Render("  ? help"))
+		output.WriteString(model.renderHelp(helpRows))
 	}
 	return output.String()
 }
@@ -392,6 +395,96 @@ func (model Model) visibleSelectableRows() int {
 		return minimumVisibleListRows
 	}
 	return visibleRows
+}
+
+func (model Model) visibleDetailsRows(visibleListRows int) int {
+	return model.remainingRowsAfterList(visibleListRows, model.minimumHelpRows())
+}
+
+func (model Model) visibleHelpRows(visibleListRows int, visibleDetailsRows int) int {
+	if !model.selection.ShowHelp {
+		return 0
+	}
+	return model.remainingRowsAfterListAndDetails(visibleListRows, visibleDetailsRows)
+}
+
+func (model Model) minimumHelpRows() int {
+	if model.selection.ShowHelp {
+		return fullHelpRows
+	}
+	return 0
+}
+
+func (model Model) remainingRowsAfterList(visibleListRows int, reservedHelpRows int) int {
+	if model.height <= 0 {
+		return maxInt
+	}
+	remaining := model.height - model.fixedRowsWithoutDetailsOrHelp() - visibleListRows
+	if model.selection.ShowHelp {
+		remaining -= 2 // help spacing and section title
+		remaining -= reservedHelpRows
+	}
+	if remaining < 1 {
+		return 1
+	}
+	return remaining
+}
+
+func (model Model) remainingRowsAfterListAndDetails(visibleListRows int, visibleDetailsRows int) int {
+	if model.height <= 0 {
+		return maxInt
+	}
+	remaining := model.height - model.fixedRowsWithoutDetailsOrHelp() - visibleListRows - visibleDetailsRows
+	if model.selection.ShowHelp {
+		remaining -= 2 // help spacing and section title
+	}
+	if remaining < 1 {
+		return 1
+	}
+	return remaining
+}
+
+func (model Model) fixedRowsWithoutDetailsOrHelp() int {
+	rows := 0
+	rows += 2 // header
+	rows += 6 // runtime summary
+	rows += 2 // selectable list spacing and title
+	rows += 2 // details pane spacing and title
+	if model.lastError != nil {
+		rows += 3
+	}
+	rows += 4 // footer
+	return rows
+}
+
+func (model Model) renderHelp(maxRows int) string {
+	var output strings.Builder
+	for _, line := range []string{
+		"  q quit",
+		"  j/k or arrows move",
+		"  d/enter details",
+		"  r refresh",
+		"  ? help",
+	} {
+		fmt.Fprintln(&output, dashboardStyles.help.Render(line))
+	}
+	return truncateRows(output.String(), maxRows, helpTruncatedIndicator, model.contentWidth())
+}
+
+func truncateRows(value string, maxRows int, indicator string, width int) string {
+	if maxRows <= 0 {
+		return ""
+	}
+	lines := strings.Split(strings.TrimSuffix(value, "\n"), "\n")
+	if len(lines) <= maxRows {
+		return value
+	}
+	if maxRows == 1 {
+		return truncateValue(indicator, width) + "\n"
+	}
+	kept := append([]string{}, lines[:maxRows-1]...)
+	kept = append(kept, truncateValue(indicator, width))
+	return strings.Join(kept, "\n") + "\n"
 }
 
 const maxInt = int(^uint(0) >> 1)

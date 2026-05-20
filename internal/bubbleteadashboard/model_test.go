@@ -337,6 +337,71 @@ func TestSelectableListScrollIndicatorAppearsWhenTruncated(t *testing.T) {
 	}
 }
 
+func TestDetailsTruncateAtSmallHeight(t *testing.T) {
+	model := NewModelWithSource(&fakeClient{}, time.Second, "native")
+	model.state = bubbleState()
+	model.hasState = true
+	model.height = 19
+	model.selection.SelectedIndex = 2
+	model.selection.ShowDetails = true
+
+	output := plainView(model.View())
+
+	if !strings.Contains(output, "... details truncated") {
+		t.Fatalf("small-height details missing truncation indicator:\n%s", output)
+	}
+	if !strings.Contains(output, "Footer") {
+		t.Fatalf("small-height view missing footer:\n%s", output)
+	}
+	if !strings.Contains(output, "> cleanup  requires-inspection: orphan-branch:task-old") {
+		t.Fatalf("small-height view missing selected list row:\n%s", output)
+	}
+}
+
+func TestDetailsRenderFullyAtNormalHeight(t *testing.T) {
+	model := NewModelWithSource(&fakeClient{}, time.Second, "native")
+	model.state = bubbleState()
+	model.hasState = true
+	model.height = 40
+	model.selection.SelectedIndex = 2
+	model.selection.ShowDetails = true
+
+	output := plainView(model.View())
+
+	if strings.Contains(output, "... details truncated") {
+		t.Fatalf("normal-height details were truncated:\n%s", output)
+	}
+	for _, want := range []string{
+		"type: cleanup candidate",
+		"dirty reasons: (none)",
+		"suggested commands: (none)",
+	} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("normal-height details missing %q:\n%s", want, output)
+		}
+	}
+}
+
+func TestHelpTruncatesAtSmallHeight(t *testing.T) {
+	model := NewModelWithSource(&fakeClient{}, time.Second, "native")
+	model.state = bubbleStateWithManyTasks(8)
+	model.hasState = true
+	model.height = 20
+	model.selection.ShowHelp = true
+
+	output := plainView(model.View())
+
+	if !strings.Contains(output, "... help truncated") {
+		t.Fatalf("small-height help missing truncation indicator:\n%s", output)
+	}
+	if !strings.Contains(output, "Footer") {
+		t.Fatalf("small-height help view missing footer:\n%s", output)
+	}
+	if !strings.Contains(output, "> provider codex") {
+		t.Fatalf("small-height help view missing selected row:\n%s", output)
+	}
+}
+
 func TestModelRefreshCommandReadsRuntimeState(t *testing.T) {
 	client := &fakeClient{
 		output: []byte(`{"schema":"brevity.runtime-state.v1","repoRoot":"C:\\repo","taskCounts":{"tracked":2}}`),
