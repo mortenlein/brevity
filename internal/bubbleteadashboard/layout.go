@@ -12,7 +12,7 @@ import (
 const defaultTerminalWidth = 100
 const minimumTerminalWidth = 24
 const twoPaneWidthThreshold = 110
-const paneSeparator = " | "
+const paneSeparator = "  |  "
 
 func (model Model) contentWidth() int {
 	if model.width <= 0 {

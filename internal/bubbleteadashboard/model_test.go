@@ -142,15 +142,16 @@ func TestModelViewRendersOperatorSections(t *testing.T) {
 
 	output := plainView(model.View())
 	for _, want := range []string{
-		"Brevity Runtime Dashboard [read-only] [source: native]",
+		"Brevity Runtime Dashboard",
+		"mode: read-only | source: native | alerts: providers 1, tasks 1, cleanup 1",
 		"Runtime Summary",
 		"Selectable List",
-		"> provider codex: degraded !",
+		"> prov  codex: degraded !",
 		"Details Pane",
 		"details hidden; press d or enter",
-		"Footer",
-		"q quit | j/k or arrows move | d/enter details | r refresh | ? help",
-		"refresh: every 1s | last success: 2026-05-19T10:00:00Z | source: native",
+		"Controls",
+		"keys: q quit | j/k move | d details | r refresh | ? help",
+		"refresh 1s | last 2026-05-19T10:00:00Z | source native",
 	} {
 		if !strings.Contains(output, want) {
 			t.Fatalf("view missing %q:\n%s", want, output)
@@ -208,8 +209,8 @@ func TestModelViewUsesTwoPaneLayoutAtWideWidth(t *testing.T) {
 	if !strings.Contains(output, "Selectable List") || !strings.Contains(output, paneSeparator+"Details Pane") {
 		t.Fatalf("wide view missing side-by-side pane headings:\n%s", output)
 	}
-	if !strings.Contains(output, "Footer") {
-		t.Fatalf("wide view missing footer:\n%s", output)
+	if !strings.Contains(output, "Controls") {
+		t.Fatalf("wide view missing controls:\n%s", output)
 	}
 }
 
@@ -223,7 +224,7 @@ func TestWidePaneLayoutKeepsSelectedItemVisible(t *testing.T) {
 
 	output := plainView(model.View())
 
-	if !strings.Contains(output, "> task     task-11") {
+	if !strings.Contains(output, "> task  task-11") {
 		t.Fatalf("wide pane layout missing selected item:\n%s", output)
 	}
 	if !strings.Contains(output, "showing") {
@@ -247,7 +248,7 @@ func TestWidePaneLayoutRendersDetailsAndHelpInRightPane(t *testing.T) {
 		paneSeparator + "  type: provider",
 		paneSeparator + "Help",
 		paneSeparator + "  q quit",
-		"Footer",
+		"Controls",
 	} {
 		if !strings.Contains(output, want) {
 			t.Fatalf("wide pane view missing %q:\n%s", want, output)
@@ -348,10 +349,10 @@ func TestSelectableListKeepsSelectedItemVisible(t *testing.T) {
 
 	output := plainView(model.View())
 
-	if !strings.Contains(output, "> task     task-11") {
+	if !strings.Contains(output, "> task  task-11") {
 		t.Fatalf("selected item is not visible:\n%s", output)
 	}
-	if !strings.Contains(output, "showing 8-12 of 33") {
+	if !strings.Contains(output, "showing 9-12 of 33") {
 		t.Fatalf("view missing expected scroll indicator:\n%s", output)
 	}
 }
@@ -363,7 +364,7 @@ func TestSelectableListWindowMovesAsSelectionChanges(t *testing.T) {
 	model.height = 23
 
 	before := plainView(model.View())
-	if !strings.Contains(before, "showing 1-5 of 33") {
+	if !strings.Contains(before, "showing 1-4 of 33") {
 		t.Fatalf("initial window did not start at first item:\n%s", before)
 	}
 
@@ -373,10 +374,10 @@ func TestSelectableListWindowMovesAsSelectionChanges(t *testing.T) {
 	}
 
 	after := plainView(model.View())
-	if !strings.Contains(after, "showing 9-13 of 33") {
+	if !strings.Contains(after, "showing 10-13 of 33") {
 		t.Fatalf("window did not move with selection:\n%s", after)
 	}
-	if !strings.Contains(after, "> task     task-12") {
+	if !strings.Contains(after, "> task  task-12") {
 		t.Fatalf("selected item is not visible after movement:\n%s", after)
 	}
 }
@@ -393,7 +394,7 @@ func TestSelectableListSmallHeightDoesNotPanic(t *testing.T) {
 	if !strings.Contains(output, "showing 6-6 of 11") {
 		t.Fatalf("small-height view missing one-row window indicator:\n%s", output)
 	}
-	if !strings.Contains(output, "> task     task-05") {
+	if !strings.Contains(output, "> task  task-05") {
 		t.Fatalf("small-height view missing selected row:\n%s", output)
 	}
 }
@@ -406,7 +407,7 @@ func TestSelectableListScrollIndicatorAppearsWhenTruncated(t *testing.T) {
 
 	output := plainView(model.View())
 
-	if !strings.Contains(output, "showing 1-4 of 23") {
+	if !strings.Contains(output, "showing 1-3 of 23") {
 		t.Fatalf("view missing scroll indicator:\n%s", output)
 	}
 }
@@ -424,10 +425,10 @@ func TestDetailsTruncateAtSmallHeight(t *testing.T) {
 	if !strings.Contains(output, "... details truncated") {
 		t.Fatalf("small-height details missing truncation indicator:\n%s", output)
 	}
-	if !strings.Contains(output, "Footer") {
-		t.Fatalf("small-height view missing footer:\n%s", output)
+	if !strings.Contains(output, "Controls") {
+		t.Fatalf("small-height view missing controls:\n%s", output)
 	}
-	if !strings.Contains(output, "> cleanup  requires-inspection: orphan-branch:task-old") {
+	if !strings.Contains(output, "> clean requires-inspection: orphan-branch:task-old") {
 		t.Fatalf("small-height view missing selected list row:\n%s", output)
 	}
 }
@@ -468,10 +469,10 @@ func TestHelpTruncatesAtSmallHeight(t *testing.T) {
 	if !strings.Contains(output, "... help truncated") {
 		t.Fatalf("small-height help missing truncation indicator:\n%s", output)
 	}
-	if !strings.Contains(output, "Footer") {
-		t.Fatalf("small-height help view missing footer:\n%s", output)
+	if !strings.Contains(output, "Controls") {
+		t.Fatalf("small-height help view missing controls:\n%s", output)
 	}
-	if !strings.Contains(output, "> provider codex") {
+	if !strings.Contains(output, "> prov  codex") {
 		t.Fatalf("small-height help view missing selected row:\n%s", output)
 	}
 }

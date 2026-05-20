@@ -206,25 +206,18 @@ func (model Model) View() string {
 func (model Model) renderHeader() string {
 	width := model.contentWidth()
 	warnings := model.warningCounts()
-	titleText := fmt.Sprintf("Brevity Runtime Dashboard [read-only] [source: %s]",
-		fallback(model.source, "unknown"),
-	)
-	metaText := fmt.Sprintf(" | operator status: providers=%d tasks=%d cleanup=%d",
-		warnings.provider,
-		warnings.task,
-		warnings.cleanup,
-	)
+	titleText := "Brevity Runtime Dashboard"
+	metaText := fmt.Sprintf("mode: read-only | source: %s | alerts: providers %d, tasks %d, cleanup %d",
+		fallback(model.source, "unknown"), warnings.provider, warnings.task, warnings.cleanup)
 	if !model.hasState {
-		metaText = " | operator status: loading"
-	}
-	title := truncateValue(titleText, width)
-	if lipglossWidth(titleText)+lipglossWidth(metaText) <= width {
-		title = titleText + metaText
+		metaText = fmt.Sprintf("mode: read-only | source: %s | loading runtime state",
+			fallback(model.source, "unknown"))
 	}
 	return fmt.Sprintf(
-		"%s\n%s\n",
-		dashboardStyles.title.Render(title),
-		dashboardStyles.rule.Render(strings.Repeat("=", width)),
+		"%s\n%s\n%s\n",
+		dashboardStyles.title.Render(truncateValue(titleText, width)),
+		dashboardStyles.headerMeta.Render(truncateValue(metaText, width)),
+		dashboardStyles.rule.Render(strings.Repeat("-", width)),
 	)
 }
 
@@ -270,15 +263,30 @@ func (model Model) warningCounts() dashboardWarningCounts {
 func kindBadge(kind string) string {
 	switch kind {
 	case string(dashboard.SelectionProvider):
-		return statusBadge("provider", "accent")
+		return statusBadge("prov", "accent")
 	case string(dashboard.SelectionTask):
 		return statusBadge("task", "")
 	case string(dashboard.SelectionCleanup):
-		return statusBadge("cleanup", "warning")
+		return statusBadge("clean", "warning")
 	case string(dashboard.SelectionAction):
-		return statusBadge("action", "")
+		return statusBadge("next", "")
 	default:
 		return statusBadge(kind, "")
+	}
+}
+
+func kindLabel(kind string) string {
+	switch kind {
+	case string(dashboard.SelectionProvider):
+		return "prov"
+	case string(dashboard.SelectionTask):
+		return "task"
+	case string(dashboard.SelectionCleanup):
+		return "clean"
+	case string(dashboard.SelectionAction):
+		return "next"
+	default:
+		return kind
 	}
 }
 
@@ -292,7 +300,7 @@ func (model Model) unselectedRow(text string) string {
 
 func (model Model) renderRow(selected bool, kind string, label string, warning string) string {
 	badge := kindBadge(kind)
-	prefix := fmt.Sprintf("%s %-8s ", rowMarker(selected), kind)
+	prefix := fmt.Sprintf("%s %-5s ", rowMarker(selected), kindLabel(kind))
 	suffix := warning + " " + badge
 	line := prefix + truncateValue(label, model.contentWidth()-lipglossWidth(prefix)-lipglossWidth(suffix)) + suffix
 	if selected {
@@ -323,13 +331,13 @@ func (model Model) renderSummary() string {
 	renderSection(&output, "Runtime Summary")
 	fmt.Fprintf(&output, "  repo: %s\n", model.renderInlinePath(fallback(state.RepoRoot, "(unknown)"), len("  repo: ")))
 	fmt.Fprintf(&output, "%s\n", model.renderLine(fmt.Sprintf("  generated: %s", fallback(state.GeneratedAt, "(unknown)"))))
-	fmt.Fprintf(&output, "%s\n", model.renderLine(fmt.Sprintf("  providers: %d total, %d degraded, %d unavailable %s",
+	fmt.Fprintf(&output, "%s\n", model.renderLine(fmt.Sprintf("  providers: %d total, %d degraded, %d unavailable%s",
 		state.Providers.Summary.Total,
 		state.Providers.Summary.Degraded,
 		state.Providers.Summary.Unavailable,
 		renderWarningCount(state.Providers.Summary.Degraded+state.Providers.Summary.Unavailable),
 	)))
-	fmt.Fprintf(&output, "%s\n", model.renderLine(fmt.Sprintf("  tasks: %d tracked, %d runnable, %d blocked, %d stale, %d provider-gated, %d review %s",
+	fmt.Fprintf(&output, "%s\n", model.renderLine(fmt.Sprintf("  tasks: %d tracked, %d runnable, %d blocked, %d stale, %d provider-gated, %d review%s",
 		state.TaskCounts.Tracked,
 		state.TaskCounts.Runnable,
 		state.TaskCounts.Blocked,
@@ -340,7 +348,7 @@ func (model Model) renderSummary() string {
 	)))
 	if state.Cleanup != nil && state.Cleanup.Summary != nil {
 		summary := state.Cleanup.Summary
-		fmt.Fprintf(&output, "%s\n", model.renderLine(fmt.Sprintf("  cleanup: %d candidates, %d require inspection %s",
+		fmt.Fprintf(&output, "%s\n", model.renderLine(fmt.Sprintf("  cleanup: %d candidates, %d require inspection%s",
 			summary.TotalCandidates,
 			summary.RequiresInspectionCount,
 			renderWarningCount(summary.TotalCandidates),
@@ -480,7 +488,7 @@ func (model Model) visibleTwoPaneRows() int {
 		return maxInt
 	}
 	rows := model.height
-	rows -= 2 // header
+	rows -= 3 // header
 	rows -= 6 // runtime summary
 	if model.lastError != nil {
 		rows -= 3
@@ -552,7 +560,7 @@ func (model Model) visibleSelectableRows() int {
 		return maxInt
 	}
 	reservedRows := 0
-	reservedRows += 2 // header
+	reservedRows += 3 // header
 	reservedRows += 6 // runtime summary
 	reservedRows += 2 // selectable list spacing and title
 	reservedRows += 4 // details pane, collapsed or minimum visible details
@@ -620,7 +628,7 @@ func (model Model) remainingRowsAfterListAndDetails(visibleListRows int, visible
 
 func (model Model) fixedRowsWithoutDetailsOrHelp() int {
 	rows := 0
-	rows += 2 // header
+	rows += 3 // header
 	rows += 6 // runtime summary
 	rows += 2 // selectable list spacing and title
 	rows += 2 // details pane spacing and title
@@ -634,10 +642,9 @@ func (model Model) fixedRowsWithoutDetailsOrHelp() int {
 func (model Model) renderHelp(maxRows int) string {
 	var output strings.Builder
 	for _, line := range []string{
-		"  q quit",
+		"  q quit | r refresh",
 		"  j/k or arrows move",
 		"  d/enter details",
-		"  r refresh",
 		"  ? help",
 	} {
 		fmt.Fprintln(&output, dashboardStyles.help.Render(line))
@@ -675,14 +682,14 @@ func clampInt(value int, minimum int, maximum int) int {
 
 func (model Model) renderFooter() string {
 	width := model.contentWidth()
-	help := truncateValue("  q quit | j/k or arrows move | d/enter details | r refresh | ? help", width)
-	refresh := truncateValue(fmt.Sprintf("  refresh: every %s | last success: %s | source: %s | read-only",
+	help := truncateValue("  keys: q quit | j/k move | d details | r refresh | ? help", width)
+	refresh := truncateValue(fmt.Sprintf("  refresh %s | last %s | source %s | read-only",
 		model.refreshInterval,
 		fallbackRefresh(model.lastRefresh),
 		fallback(model.source, "unknown")), width)
 	return fmt.Sprintf(
 		"\n%s\n%s\n%s\n%s\n",
-		sectionTitle("Footer"),
+		sectionTitle("Controls"),
 		dashboardStyles.rule.Render(strings.Repeat("-", width)),
 		dashboardStyles.footer.Render(help),
 		dashboardStyles.footer.Render(refresh),

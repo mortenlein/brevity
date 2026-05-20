@@ -21,11 +21,9 @@ var dashboardStyles = struct {
 }{
 	title: lipgloss.NewStyle().
 		Bold(true).
-		Foreground(lipgloss.Color("15")).
-		Background(lipgloss.Color("5")),
+		Foreground(lipgloss.Color("15")),
 	headerMeta: lipgloss.NewStyle().
-		Foreground(lipgloss.Color("7")).
-		Background(lipgloss.Color("236")),
+		Foreground(lipgloss.Color("7")),
 	rule: lipgloss.NewStyle().
 		Foreground(lipgloss.Color("8")),
 	section: lipgloss.NewStyle().
@@ -33,8 +31,7 @@ var dashboardStyles = struct {
 		Foreground(lipgloss.Color("5")),
 	paneTitle: lipgloss.NewStyle().
 		Bold(true).
-		Foreground(lipgloss.Color("15")).
-		Background(lipgloss.Color("5")),
+		Foreground(lipgloss.Color("13")),
 	selectedRow: lipgloss.NewStyle().
 		Bold(true).
 		Foreground(lipgloss.Color("15")).
@@ -54,8 +51,7 @@ var dashboardStyles = struct {
 	muted: lipgloss.NewStyle().
 		Foreground(lipgloss.Color("8")),
 	footer: lipgloss.NewStyle().
-		Foreground(lipgloss.Color("7")).
-		Background(lipgloss.Color("236")),
+		Foreground(lipgloss.Color("7")),
 	detailLabel: lipgloss.NewStyle().
 		Bold(true).
 		Foreground(lipgloss.Color("5")),
