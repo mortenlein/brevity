@@ -414,6 +414,8 @@ func kindBadge(kind string) string {
 		return statusBadge("prov", "accent")
 	case string(dashboard.SelectionTask):
 		return statusBadge("task", "")
+	case string(dashboard.SelectionActivity):
+		return statusBadge("run", "")
 	case string(dashboard.SelectionCleanup):
 		return statusBadge("clean", "warning")
 	case string(dashboard.SelectionAction):
@@ -429,6 +431,8 @@ func kindLabel(kind string) string {
 		return "prov"
 	case string(dashboard.SelectionTask):
 		return "task"
+	case string(dashboard.SelectionActivity):
+		return "run"
 	case string(dashboard.SelectionCleanup):
 		return "clean"
 	case string(dashboard.SelectionAction):
@@ -1158,6 +1162,10 @@ func (model Model) renderDetails(output io.Writer, items []dashboard.SelectionIt
 			model.detailText(output, "context", "(unknown)")
 		}
 		model.detailText(output, "type", "task")
+	case dashboard.SelectionActivity:
+		model.detailText(output, "activity", fallback(item.Label, "(none)"))
+		model.detailText(output, "guidance", "display-only runtime activity signal")
+		model.detailText(output, "type", "run/activity")
 	case dashboard.SelectionCleanup:
 		candidate := item.CleanupCandidate
 		model.detailText(output, "risk", fmt.Sprintf("%s / %s%s", fallback(candidate.Severity, "(unknown)"), fallback(candidate.Category, "(unknown)"), itemWarning(item)))

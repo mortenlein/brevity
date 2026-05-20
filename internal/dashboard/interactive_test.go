@@ -47,6 +47,36 @@ func TestSelectableItemsIncludesProviderTaskCleanupAndAction(t *testing.T) {
 	}
 }
 
+func TestSelectableSignalGroupsKeepRuntimeCategoriesInOrder(t *testing.T) {
+	state := interactiveState()
+
+	groups := SelectableSignalGroups(state)
+
+	if len(groups) != 5 {
+		t.Fatalf("len(groups) = %d, want 5: %#v", len(groups), groups)
+	}
+	wantCategories := []SignalCategory{
+		SignalCategoryProvider,
+		SignalCategoryTask,
+		SignalCategoryActivity,
+		SignalCategoryCleanup,
+		SignalCategoryAction,
+	}
+	for index, want := range wantCategories {
+		if groups[index].Category != want {
+			t.Fatalf("groups[%d].Category = %q, want %q", index, groups[index].Category, want)
+		}
+	}
+	if len(groups[2].Items) != 0 {
+		t.Fatalf("activity group items = %d, want empty until runtime activity exists", len(groups[2].Items))
+	}
+
+	items := SelectableItems(state)
+	if items[0].Kind != SelectionProvider || items[1].Kind != SelectionTask || items[2].Kind != SelectionCleanup || items[3].Kind != SelectionAction {
+		t.Fatalf("flattened selectable item order changed: %#v", items)
+	}
+}
+
 func TestRenderInteractiveDetailsForCleanupCandidate(t *testing.T) {
 	state := interactiveState()
 	model := InteractiveModel{SelectedIndex: 2, ShowDetails: true}

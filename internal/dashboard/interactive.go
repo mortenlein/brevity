@@ -15,9 +15,25 @@ type SelectionKind string
 const (
 	SelectionProvider SelectionKind = "provider"
 	SelectionTask     SelectionKind = "task"
+	SelectionActivity SelectionKind = "activity"
 	SelectionCleanup  SelectionKind = "cleanup"
 	SelectionAction   SelectionKind = "action"
 )
+
+type SignalCategory string
+
+const (
+	SignalCategoryProvider SignalCategory = "provider"
+	SignalCategoryTask     SignalCategory = "task"
+	SignalCategoryActivity SignalCategory = "activity"
+	SignalCategoryCleanup  SignalCategory = "cleanup"
+	SignalCategoryAction   SignalCategory = "next-action"
+)
+
+type SignalGroup struct {
+	Category SignalCategory
+	Items    []SelectionItem
+}
 
 type SelectionItem struct {
 	Kind             SelectionKind
@@ -71,7 +87,26 @@ func (model *InteractiveModel) ToggleHelp() {
 }
 
 func SelectableItems(state contracts.RuntimeState) []SelectionItem {
+	groups := SelectableSignalGroups(state)
 	items := make([]SelectionItem, 0)
+	for _, group := range groups {
+		items = append(items, group.Items...)
+	}
+	return items
+}
+
+func SelectableSignalGroups(state contracts.RuntimeState) []SignalGroup {
+	return []SignalGroup{
+		{Category: SignalCategoryProvider, Items: providerSignalItems(state)},
+		{Category: SignalCategoryTask, Items: taskSignalItems(state)},
+		{Category: SignalCategoryActivity, Items: activitySignalItems(state)},
+		{Category: SignalCategoryCleanup, Items: cleanupSignalItems(state)},
+		{Category: SignalCategoryAction, Items: actionSignalItems(state)},
+	}
+}
+
+func providerSignalItems(state contracts.RuntimeState) []SelectionItem {
+	items := make([]SelectionItem, 0, len(state.Providers.Health))
 	for _, name := range sortedProviderNames(state.Providers.Health) {
 		health := state.Providers.Health[name]
 		items = append(items, SelectionItem{
@@ -81,6 +116,11 @@ func SelectableItems(state contracts.RuntimeState) []SelectionItem {
 			ProviderHealth: health,
 		})
 	}
+	return items
+}
+
+func taskSignalItems(state contracts.RuntimeState) []SelectionItem {
+	items := make([]SelectionItem, 0, len(state.Tasks))
 	for _, task := range state.Tasks {
 		label := fallback(task.Slug, "(unknown task)")
 		if task.NormalizedState != "" {
@@ -90,6 +130,15 @@ func SelectableItems(state contracts.RuntimeState) []SelectionItem {
 		}
 		items = append(items, SelectionItem{Kind: SelectionTask, Label: label, Task: task})
 	}
+	return items
+}
+
+func activitySignalItems(_ contracts.RuntimeState) []SelectionItem {
+	return nil
+}
+
+func cleanupSignalItems(state contracts.RuntimeState) []SelectionItem {
+	items := make([]SelectionItem, 0)
 	if state.Cleanup != nil {
 		for _, candidate := range state.Cleanup.OrphanedTaskWorktrees {
 			items = append(items, SelectionItem{
@@ -106,6 +155,11 @@ func SelectableItems(state contracts.RuntimeState) []SelectionItem {
 			})
 		}
 	}
+	return items
+}
+
+func actionSignalItems(state contracts.RuntimeState) []SelectionItem {
+	items := make([]SelectionItem, 0, len(state.SuggestedNextActions))
 	for _, action := range state.SuggestedNextActions {
 		action = strings.TrimSpace(action)
 		if action == "" {
