@@ -183,24 +183,39 @@ func (model Model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 func (model Model) View() string {
 	if !model.hasState {
-		output := model.renderHeader()
-		output += "\n" + sectionTitle("Runtime Summary") + "\n"
-		output += "  Loading runtime state...\n"
-		if model.lastError != nil {
-			output += fmt.Sprintf("  %s polling error: %v\n", warningMarker(), model.lastError)
-		}
-		output += model.renderFooter()
-		return output
+		return model.renderLoadingView()
 	}
 
 	output := model.renderHeader()
 	output += model.renderSummary()
 	output += model.renderListAndDetails()
 	if model.lastError != nil {
-		output += fmt.Sprintf("\n%s\n  %s polling error: %v\n", sectionTitle("Warnings"), warningMarker(), model.lastError)
+		output += "\n" + sectionTitle("Warnings") + "\n"
+		output += model.renderRuntimeErrorLine()
 	}
 	output += model.renderFooter()
 	return output
+}
+
+func (model Model) renderLoadingView() string {
+	var output strings.Builder
+	output.WriteString(model.renderHeader())
+	output.WriteString("\n")
+	renderSection(&output, "Runtime Summary")
+	output.WriteString(model.renderLine("  status     Loading runtime state") + "\n")
+	output.WriteString(model.renderLine("  source     "+fallback(model.source, "unknown")+" / read-only") + "\n")
+	output.WriteString(model.renderLine("  authority  PowerShell runtime state") + "\n")
+	if model.lastError != nil {
+		output.WriteString("\n")
+		renderSection(&output, "Warnings")
+		output.WriteString(model.renderRuntimeErrorLine())
+	}
+	output.WriteString(model.renderFooter())
+	return output.String()
+}
+
+func (model Model) renderRuntimeErrorLine() string {
+	return model.renderLine(fmt.Sprintf("  %s polling error  %v", warningMarker(), model.lastError)) + "\n"
 }
 
 func (model Model) renderHeader() string {
