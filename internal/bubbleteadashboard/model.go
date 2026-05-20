@@ -22,6 +22,8 @@ const ultraSmallHeightThreshold = 3
 const fullHelpRows = 5
 const detailTruncatedIndicator = "  ... details truncated"
 const helpTruncatedIndicator = "  ... help truncated"
+const runtimeSignalsTitle = "Runtime Signals"
+const selectedDetailTitle = "Selected Detail"
 
 type refreshMsg struct {
 	state contracts.RuntimeState
@@ -577,7 +579,7 @@ func (model Model) renderSingleColumnListAndDetails() string {
 
 	var output strings.Builder
 	fmt.Fprintln(&output)
-	renderSection(&output, "Selectable List")
+	renderSection(&output, runtimeSignalsTitle)
 	if len(items) == 0 {
 		fmt.Fprintln(&output, "  no runtime items")
 	} else {
@@ -591,7 +593,7 @@ func (model Model) renderSingleColumnListAndDetails() string {
 	}
 
 	fmt.Fprintln(&output)
-	renderSection(&output, "Details Pane")
+	renderSection(&output, selectedDetailTitle)
 	var details strings.Builder
 	if selection.ShowDetails {
 		model.renderDetails(&details, items, selection.SelectedIndex)
@@ -623,7 +625,7 @@ func (model Model) renderTwoPaneListAndDetails() string {
 	window := model.selectableListWindowForRows(len(items), selection.SelectedIndex, listRows)
 
 	var left strings.Builder
-	fmt.Fprintln(&left, paneTitle("Selectable List"))
+	fmt.Fprintln(&left, paneTitle(runtimeSignalsTitle))
 	if len(items) == 0 {
 		fmt.Fprintln(&left, "  no runtime items")
 	} else {
@@ -637,7 +639,7 @@ func (model Model) renderTwoPaneListAndDetails() string {
 	}
 
 	var right strings.Builder
-	fmt.Fprintln(&right, paneTitle("Details Pane"))
+	fmt.Fprintln(&right, paneTitle(selectedDetailTitle))
 	var details strings.Builder
 	if selection.ShowDetails {
 		rightModel.renderDetails(&details, items, selection.SelectedIndex)

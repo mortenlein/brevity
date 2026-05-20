@@ -424,9 +424,9 @@ func TestModelViewRendersOperatorSections(t *testing.T) {
 		"Brevity Runtime Dashboard",
 		"native | read-only | alerts !3 p:1 t:1 c:1",
 		"Runtime Summary",
-		"Selectable List",
+		"Runtime Signals",
 		"> prov  codex    degraded !",
-		"Details Pane",
+		"Selected Detail",
 		"select a row, then press d for details",
 		"q quit | j/k move | d details | p action | r refresh | ? help",
 		"native | read-only | 1s refresh",
@@ -493,7 +493,7 @@ func TestUnicodeTwoPaneSeparatorAndFooterStayWithinWidth(t *testing.T) {
 
 	output := plainView(model.View())
 
-	if !strings.Contains(output, "Selectable List") || !strings.Contains(output, paneSeparator+"Details Pane") {
+	if !strings.Contains(output, "Runtime Signals") || !strings.Contains(output, paneSeparator+"Selected Detail") {
 		t.Fatalf("unicode two-pane output missing pane separator alignment:\n%s", output)
 	}
 	if !strings.Contains(output, "> task") {
@@ -661,10 +661,10 @@ func TestModelViewUsesSingleColumnBelowTwoPaneThreshold(t *testing.T) {
 
 	output := plainView(model.View())
 
-	if !strings.Contains(output, "Selectable List\n") {
+	if !strings.Contains(output, "Runtime Signals\n") {
 		t.Fatalf("narrow view missing single-column list section:\n%s", output)
 	}
-	if strings.Contains(output, "Selectable List") && strings.Contains(output, paneSeparator+"Details Pane") {
+	if strings.Contains(output, "Runtime Signals") && strings.Contains(output, paneSeparator+"Selected Detail") {
 		t.Fatalf("narrow view appears to use pane separator:\n%s", output)
 	}
 }
@@ -677,7 +677,7 @@ func TestModelViewUsesTwoPaneLayoutAtWideWidth(t *testing.T) {
 
 	output := plainView(model.View())
 
-	if !strings.Contains(output, "Selectable List") || !strings.Contains(output, paneSeparator+"Details Pane") {
+	if !strings.Contains(output, "Runtime Signals") || !strings.Contains(output, paneSeparator+"Selected Detail") {
 		t.Fatalf("wide view missing side-by-side pane headings:\n%s", output)
 	}
 	if !strings.Contains(output, "q quit | j/k move | d details") {
@@ -727,7 +727,7 @@ func TestModelViewLayoutSnapshotsByWidth(t *testing.T) {
 			if strings.Contains(output, "degraded ! degraded") {
 				t.Fatalf("%s snapshot duplicated provider warning wording:\n%s", tt.name, output)
 			}
-			hasTwoPane := strings.Contains(output, paneSeparator+"Details Pane")
+			hasTwoPane := strings.Contains(output, paneSeparator+"Selected Detail")
 			if hasTwoPane != tt.wantTwoPane {
 				t.Fatalf("%s two-pane separator = %t, want %t:\n%s", tt.name, hasTwoPane, tt.wantTwoPane, output)
 			}
@@ -991,7 +991,7 @@ func TestWidePaneLayoutRendersDetailsAndHelpInRightPane(t *testing.T) {
 	output := plainView(model.View())
 
 	for _, want := range []string{
-		paneSeparator + "Details Pane",
+		paneSeparator + "Selected Detail",
 		paneSeparator + "  type:",
 		paneSeparator + "  q quit",
 		paneSeparator + "Help",
@@ -1717,7 +1717,7 @@ func TestSelectableListSmallHeightDoesNotPanic(t *testing.T) {
 			t.Fatalf("ultra-small-height view missing %q:\n%s", want, output)
 		}
 	}
-	for _, clipped := range []string{"Selectable List", "Details Pane", "showing 6-6 of 11", "> task  task-05"} {
+	for _, clipped := range []string{"Runtime Signals", "Selected Detail", "showing 6-6 of 11", "> task  task-05"} {
 		if strings.Contains(output, clipped) {
 			t.Fatalf("ultra-small-height view rendered normal layout fragment %q:\n%s", clipped, output)
 		}
@@ -1758,7 +1758,7 @@ func TestUltraSmallHeightLoadingAndErrorViewsStayMinimal(t *testing.T) {
 					t.Fatalf("ultra-small-height view missing %q:\n%s", want, output)
 				}
 			}
-			for _, clipped := range []string{"Runtime Summary", "Selectable List", "Details Pane", "Warnings"} {
+			for _, clipped := range []string{"Runtime Summary", "Runtime Signals", "Selected Detail", "Warnings"} {
 				if strings.Contains(output, clipped) {
 					t.Fatalf("ultra-small-height view rendered normal layout fragment %q:\n%s", clipped, output)
 				}
@@ -2137,11 +2137,11 @@ func assertRenderInvariants(t *testing.T, output string, width int, source strin
 		}
 	}
 
-	hasTwoPane := strings.Contains(output, paneSeparator+"Details Pane")
+	hasTwoPane := strings.Contains(output, paneSeparator+"Selected Detail")
 	if hasTwoPane != wantTwoPane {
 		t.Fatalf("two-pane separator = %t, want %t:\n%s", hasTwoPane, wantTwoPane, output)
 	}
-	if !wantTwoPane && strings.Contains(output, paneSeparator+"Details Pane") {
+	if !wantTwoPane && strings.Contains(output, paneSeparator+"Selected Detail") {
 		t.Fatalf("single-column view rendered two-pane separator:\n%s", output)
 	}
 }
