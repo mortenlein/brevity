@@ -405,13 +405,82 @@ func (model Model) unselectedRow(text string) string {
 }
 
 func (model Model) renderRow(selected bool, kind string, label string, warning string) string {
+	primary, meaning := rowPrimaryAndMeaning(kind, label)
 	prefix := fmt.Sprintf("%s %-5s ", rowMarker(selected), kindLabel(kind))
 	suffix := warning
-	line := prefix + truncateValue(label, model.contentWidth()-lipglossWidth(prefix)-lipglossWidth(suffix)) + suffix
+	available := model.contentWidth() - lipglossWidth(prefix) - lipglossWidth(suffix)
+	line := prefix + renderRowBody(primary, meaning, available) + suffix
 	if selected {
 		return model.selectedRow(line)
 	}
 	return model.unselectedRow(line)
+}
+
+func renderRowBody(primary string, meaning string, width int) string {
+	primary = strings.TrimSpace(primary)
+	meaning = strings.TrimSpace(meaning)
+	if width <= 0 {
+		return ""
+	}
+	if meaning == "" {
+		return truncateValue(primary, width)
+	}
+	if width < 18 {
+		return truncateValuePreservingWarning(primary+" "+meaning, width)
+	}
+
+	primaryWidth := visibleWidth(primary)
+	columnWidth := clampInt(primaryWidth, 7, 18)
+	if width < columnWidth+2+1 {
+		return truncateValuePreservingWarning(primary+" "+meaning, width)
+	}
+	meaningWidth := width - columnWidth - 2
+	return padRight(primary, columnWidth) + "  " + truncateValuePreservingWarning(meaning, meaningWidth)
+}
+
+func rowPrimaryAndMeaning(kind string, label string) (string, string) {
+	primary, meaning, ok := strings.Cut(strings.TrimSpace(label), ": ")
+	if !ok {
+		primary = strings.TrimSpace(label)
+	}
+	switch kind {
+	case string(dashboard.SelectionCleanup):
+		return cleanupSignal(primary), meaning
+	case string(dashboard.SelectionAction):
+		fields := strings.Fields(label)
+		if len(fields) == 0 {
+			return "(none)", ""
+		}
+		signal := strings.ToLower(fields[0])
+		if !startsWithLetter(signal) {
+			return "note", strings.TrimSpace(label)
+		}
+		return signal, strings.Join(fields[1:], " ")
+	default:
+		return primary, meaning
+	}
+}
+
+func startsWithLetter(value string) bool {
+	for _, r := range value {
+		return r >= 'A' && r <= 'Z' || r >= 'a' && r <= 'z'
+	}
+	return false
+}
+
+func cleanupSignal(category string) string {
+	switch strings.ToLower(strings.TrimSpace(category)) {
+	case "requires-inspection", "inspect", "needs-inspection":
+		return "inspect"
+	case "orphan-worktree", "orphaned-worktree":
+		return "worktree"
+	case "orphan-branch", "orphaned-branch":
+		return "branch"
+	case "destructive-if-removed", "destructive-if-unmerged":
+		return "destruct"
+	default:
+		return fallback(category, "cleanup")
+	}
 }
 
 func rowMarker(selected bool) string {
@@ -928,7 +997,7 @@ func warningSuffix(count int) string {
 }
 
 func warningMarkerSuffix(severity string) string {
-	return " !"
+	return " " + warningMarker()
 }
 
 func itemWarning(item dashboard.SelectionItem) string {

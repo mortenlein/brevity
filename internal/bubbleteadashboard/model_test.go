@@ -425,7 +425,7 @@ func TestModelViewRendersOperatorSections(t *testing.T) {
 		"native | read-only | alerts !3 p:1 t:1 c:1",
 		"Runtime Summary",
 		"Selectable List",
-		"> prov  codex: degraded !",
+		"> prov  codex    degraded !",
 		"Details Pane",
 		"select a row, then press d for details",
 		"q quit | j/k move | d details | p action | r refresh | ? help",
@@ -626,6 +626,33 @@ func TestStyledSelectedAndWarningRowsPreserveMarkers(t *testing.T) {
 	}
 }
 
+func TestSelectableRowsRenderTypeSignals(t *testing.T) {
+	model := NewModelWithSource(&fakeClient{}, time.Second, "native")
+	model.width = 72
+
+	tests := []struct {
+		name  string
+		kind  dashboard.SelectionKind
+		label string
+		want  string
+	}{
+		{name: "provider", kind: dashboard.SelectionProvider, label: "codex: degraded", want: "> prov  codex    degraded"},
+		{name: "cleanup", kind: dashboard.SelectionCleanup, label: "requires-inspection: orphan-worktree:task-old", want: "> clean inspect  orphan-worktree:task-old"},
+		{name: "next action", kind: dashboard.SelectionAction, label: "Review native orphaned task cleanup findings", want: "> next  review   native orphaned task cleanup findings"},
+		{name: "path next action", kind: dashboard.SelectionAction, label: `.brevity\runs.jsonl is absent`, want: `> next  note     .brevity\runs.jsonl is absent`},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			output := plainView(model.renderRow(true, string(tt.kind), tt.label, ""))
+			if !strings.Contains(output, tt.want) {
+				t.Fatalf("row missing type signal %q:\n%s", tt.want, output)
+			}
+			assertLinesWithinWidth(t, output, model.width)
+		})
+	}
+}
+
 func TestModelViewUsesSingleColumnBelowTwoPaneThreshold(t *testing.T) {
 	model := NewModelWithSource(&fakeClient{}, time.Second, "native")
 	model.state = bubbleState()
@@ -683,7 +710,7 @@ func TestModelViewLayoutSnapshotsByWidth(t *testing.T) {
 				"native",
 				"read-only",
 				"alerts !3 p:1 t:1 c:1",
-				"> prov  codex: degraded !",
+				"> prov  codex    degraded !",
 				"q",
 				"j/k",
 				"d",
@@ -858,7 +885,7 @@ func TestSelectableRowWarningSuffixesByKind(t *testing.T) {
 		{
 			name:    "degraded provider",
 			state:   bubbleStateWithProvider("codex", "degraded"),
-			wantRow: "> prov  codex: degraded !",
+			wantRow: "> prov  codex    degraded !",
 			duplicateText: []string{
 				"degraded ! degraded",
 			},
@@ -866,7 +893,7 @@ func TestSelectableRowWarningSuffixesByKind(t *testing.T) {
 		{
 			name:    "unavailable provider",
 			state:   bubbleStateWithProvider("codex", "unavailable"),
-			wantRow: "> prov  codex: unavailable !",
+			wantRow: "> prov  codex    unavailable !",
 			duplicateText: []string{
 				"unavailable ! unavailable",
 			},
@@ -874,7 +901,7 @@ func TestSelectableRowWarningSuffixesByKind(t *testing.T) {
 		{
 			name:    "blocked task",
 			state:   bubbleStateWithTaskState("blocked"),
-			wantRow: "> task  task-one: blocked !",
+			wantRow: "> task  task-one  blocked !",
 			duplicateText: []string{
 				"blocked ! blocked",
 			},
@@ -882,7 +909,7 @@ func TestSelectableRowWarningSuffixesByKind(t *testing.T) {
 		{
 			name:    "stale task",
 			state:   bubbleStateWithTaskState("stale"),
-			wantRow: "> task  task-one: stale !",
+			wantRow: "> task  task-one  stale !",
 			duplicateText: []string{
 				"stale ! stale",
 			},
@@ -890,7 +917,7 @@ func TestSelectableRowWarningSuffixesByKind(t *testing.T) {
 		{
 			name:    "failed task",
 			state:   bubbleStateWithTaskState("failed"),
-			wantRow: "> task  task-one: failed !",
+			wantRow: "> task  task-one  failed !",
 			duplicateText: []string{
 				"failed ! failed",
 			},
@@ -898,7 +925,7 @@ func TestSelectableRowWarningSuffixesByKind(t *testing.T) {
 		{
 			name:    "provider-gated task",
 			state:   bubbleStateWithTaskState("provider-gated"),
-			wantRow: "> task  task-one: provider-gated !",
+			wantRow: "> task  task-one  provider-gated !",
 			duplicateText: []string{
 				"provider-gated ! provider-gated",
 			},
@@ -906,7 +933,7 @@ func TestSelectableRowWarningSuffixesByKind(t *testing.T) {
 		{
 			name:    "warning cleanup candidate",
 			state:   bubbleStateWithCleanupCandidate("warning", "requires-inspection"),
-			wantRow: "> clean requires-inspection: cleanup-one !",
+			wantRow: "> clean inspect  cleanup-one !",
 			duplicateText: []string{
 				"warning ! warning",
 				"requires-inspection ! requires-inspection",
@@ -988,7 +1015,7 @@ func TestWidePaneLayoutExpandsListAndDetailsContent(t *testing.T) {
 	output := plainView(model.View())
 
 	for _, want := range []string{
-		"> next  Review gated tasks with branch freshness and latest run context",
+		"> next  review   gated tasks with branch freshness and latest run context",
 		"action:              Review gated tasks with branch freshness and latest run context",
 		"guidance:            display-only; no command is executed from this dashboard",
 	} {
@@ -1784,7 +1811,7 @@ func TestDetailsTruncateAtSmallHeight(t *testing.T) {
 	if !strings.Contains(output, "q quit | j/k move | d details") {
 		t.Fatalf("small-height view missing footer controls:\n%s", output)
 	}
-	if !strings.Contains(output, "> clean requires-inspection: orphan-branch:task-old") {
+	if !strings.Contains(output, "> clean inspect  orphan-branch:task-old") {
 		t.Fatalf("small-height view missing selected list row:\n%s", output)
 	}
 }
