@@ -577,9 +577,6 @@ func (model Model) paneWidths() (int, int) {
 	if leftWidth < 36 {
 		leftWidth = 36
 	}
-	if leftWidth > 52 {
-		leftWidth = 52
-	}
 	rightWidth := available - leftWidth
 	if rightWidth < 36 {
 		rightWidth = 36

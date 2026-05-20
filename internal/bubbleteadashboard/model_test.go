@@ -976,6 +976,51 @@ func TestWidePaneLayoutRendersDetailsAndHelpInRightPane(t *testing.T) {
 	}
 }
 
+func TestWidePaneLayoutExpandsListAndDetailsContent(t *testing.T) {
+	model := NewModelWithSource(&fakeClient{}, time.Second, "native")
+	model.state = bubbleStateWithWideLayoutText()
+	model.hasState = true
+	model.width = 180
+	model.height = 30
+	model.selection.SelectedIndex = 3
+	model.selection.ShowDetails = true
+
+	output := plainView(model.View())
+
+	for _, want := range []string{
+		"> next  Review gated tasks with branch freshness and latest run context",
+		"action:              Review gated tasks with branch freshness and latest run context",
+		"guidance:            display-only; no command is executed from this dashboard",
+	} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("wide pane output missing expanded content %q:\n%s", want, output)
+		}
+	}
+	if strings.Contains(output, "...") {
+		t.Fatalf("wide pane output truncated despite available width:\n%s", output)
+	}
+	assertLinesWithinWidth(t, output, model.width)
+}
+
+func TestPaneWidthsExpandWithWideTerminals(t *testing.T) {
+	model := NewModelWithSource(&fakeClient{}, time.Second, "native")
+
+	model.width = twoPaneWidthThreshold
+	leftAtThreshold, rightAtThreshold := model.paneWidths()
+	model.width = 180
+	leftWide, rightWide := model.paneWidths()
+
+	if leftAtThreshold < 36 || rightAtThreshold < 36 {
+		t.Fatalf("threshold pane widths = %d/%d, want both minimums preserved", leftAtThreshold, rightAtThreshold)
+	}
+	if leftWide <= leftAtThreshold || rightWide <= rightAtThreshold {
+		t.Fatalf("wide pane widths = %d/%d, threshold = %d/%d; want both panes to expand", leftWide, rightWide, leftAtThreshold, rightAtThreshold)
+	}
+	if leftWide+visibleWidth(paneSeparator)+rightWide != model.width {
+		t.Fatalf("wide pane widths do not use full terminal width: %d + %d + %d != %d", leftWide, visibleWidth(paneSeparator), rightWide, model.width)
+	}
+}
+
 func TestModelViewShortensLongPaths(t *testing.T) {
 	model := NewModelWithSource(&fakeClient{}, time.Second, "native")
 	model.state = bubbleStateWithLongPaths()
@@ -1862,6 +1907,12 @@ func bubbleStateWithLongWarningLabels() contracts.RuntimeState {
 		},
 	}
 	state.SuggestedNextActions = []string{"Review native orphaned task cleanup findings before cleanup."}
+	return state
+}
+
+func bubbleStateWithWideLayoutText() contracts.RuntimeState {
+	state := bubbleState()
+	state.SuggestedNextActions = []string{"Review gated tasks with branch freshness and latest run context"}
 	return state
 }
 
