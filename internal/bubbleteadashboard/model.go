@@ -206,19 +206,13 @@ func (model Model) View() string {
 func (model Model) renderHeader() string {
 	width := model.contentWidth()
 	warnings := model.warningCounts()
-	titleText := "Brevity Runtime Dashboard"
-	metaText := fmt.Sprintf("mode: read-only | source: %s | alerts: providers %d, tasks %d, cleanup %d",
+	statusText := fmt.Sprintf("Brevity Runtime Dashboard | %s | read-only | alerts p:%d t:%d c:%d",
 		fallback(model.source, "unknown"), warnings.provider, warnings.task, warnings.cleanup)
 	if !model.hasState {
-		metaText = fmt.Sprintf("mode: read-only | source: %s | loading runtime state",
+		statusText = fmt.Sprintf("Brevity Runtime Dashboard | %s | read-only | loading",
 			fallback(model.source, "unknown"))
 	}
-	return fmt.Sprintf(
-		"%s\n%s\n%s\n",
-		dashboardStyles.title.Render(truncateValue(titleText, width)),
-		dashboardStyles.headerMeta.Render(truncateValue(metaText, width)),
-		dashboardStyles.rule.Render(strings.Repeat("-", width)),
-	)
+	return dashboardStyles.title.Render(truncateValue(statusText, width)) + "\n"
 }
 
 func renderSection(output *strings.Builder, title string) {
@@ -227,7 +221,7 @@ func renderSection(output *strings.Builder, title string) {
 
 func renderWarningCount(count int) string {
 	if count > 0 {
-		return " " + statusBadge(fmt.Sprintf("warn %d", count), "warning")
+		return " " + statusBadge(fmt.Sprintf("!%d", count), "warning")
 	}
 	return " " + statusBadge("ok", "success")
 }
@@ -299,9 +293,8 @@ func (model Model) unselectedRow(text string) string {
 }
 
 func (model Model) renderRow(selected bool, kind string, label string, warning string) string {
-	badge := kindBadge(kind)
 	prefix := fmt.Sprintf("%s %-5s ", rowMarker(selected), kindLabel(kind))
-	suffix := warning + " " + badge
+	suffix := warning
 	line := prefix + truncateValue(label, model.contentWidth()-lipglossWidth(prefix)-lipglossWidth(suffix)) + suffix
 	if selected {
 		return model.selectedRow(line)
@@ -317,11 +310,11 @@ func rowMarker(selected bool) string {
 }
 
 func detail(output io.Writer, label string, format string, args ...any) {
-	fmt.Fprintln(output, detailLine(label, fmt.Sprintf(format, args...)))
+	fmt.Fprintln(output, detailLineWithWidth(label, fmt.Sprintf(format, args...), detailLabelWidth))
 }
 
 func detailText(output io.Writer, label string, value string) {
-	fmt.Fprintln(output, detailLine(label, value))
+	fmt.Fprintln(output, detailLineWithWidth(label, value, detailLabelWidth))
 }
 
 func (model Model) renderSummary() string {
@@ -329,15 +322,15 @@ func (model Model) renderSummary() string {
 	var output strings.Builder
 	fmt.Fprintln(&output)
 	renderSection(&output, "Runtime Summary")
-	fmt.Fprintf(&output, "  repo: %s\n", model.renderInlinePath(fallback(state.RepoRoot, "(unknown)"), len("  repo: ")))
-	fmt.Fprintf(&output, "%s\n", model.renderLine(fmt.Sprintf("  generated: %s", fallback(state.GeneratedAt, "(unknown)"))))
-	fmt.Fprintf(&output, "%s\n", model.renderLine(fmt.Sprintf("  providers: %d total, %d degraded, %d unavailable%s",
+	fmt.Fprintf(&output, "  repo       %s\n", model.renderInlinePath(fallback(state.RepoRoot, "(unknown)"), len("  repo       ")))
+	fmt.Fprintf(&output, "%s\n", model.renderLine(fmt.Sprintf("  generated  %s", fallback(state.GeneratedAt, "(unknown)"))))
+	fmt.Fprintf(&output, "%s\n", model.renderLine(fmt.Sprintf("  providers  %d total, %d degraded, %d unavailable%s",
 		state.Providers.Summary.Total,
 		state.Providers.Summary.Degraded,
 		state.Providers.Summary.Unavailable,
 		renderWarningCount(state.Providers.Summary.Degraded+state.Providers.Summary.Unavailable),
 	)))
-	fmt.Fprintf(&output, "%s\n", model.renderLine(fmt.Sprintf("  tasks: %d tracked, %d runnable, %d blocked, %d stale, %d provider-gated, %d review%s",
+	fmt.Fprintf(&output, "%s\n", model.renderLine(fmt.Sprintf("  tasks      %d tracked, %d runnable, %d blocked, %d stale, %d gated, %d review%s",
 		state.TaskCounts.Tracked,
 		state.TaskCounts.Runnable,
 		state.TaskCounts.Blocked,
@@ -348,13 +341,13 @@ func (model Model) renderSummary() string {
 	)))
 	if state.Cleanup != nil && state.Cleanup.Summary != nil {
 		summary := state.Cleanup.Summary
-		fmt.Fprintf(&output, "%s\n", model.renderLine(fmt.Sprintf("  cleanup: %d candidates, %d require inspection%s",
+		fmt.Fprintf(&output, "%s\n", model.renderLine(fmt.Sprintf("  cleanup    %d candidates, %d inspect%s",
 			summary.TotalCandidates,
 			summary.RequiresInspectionCount,
 			renderWarningCount(summary.TotalCandidates),
 		)))
 	} else {
-		fmt.Fprintln(&output, "  cleanup: no candidates reported")
+		fmt.Fprintln(&output, "  cleanup    none")
 	}
 	return output.String()
 }
@@ -378,7 +371,7 @@ func (model Model) renderSingleColumnListAndDetails() string {
 	fmt.Fprintln(&output)
 	renderSection(&output, "Selectable List")
 	if len(items) == 0 {
-		fmt.Fprintln(&output, "  (none)")
+		fmt.Fprintln(&output, "  no runtime items")
 	} else {
 		if window.truncated {
 			fmt.Fprintf(&output, "  showing %d-%d of %d\n", window.start+1, window.end, len(items))
@@ -395,7 +388,7 @@ func (model Model) renderSingleColumnListAndDetails() string {
 	if selection.ShowDetails {
 		model.renderDetails(&details, items, selection.SelectedIndex)
 	} else {
-		fmt.Fprintln(&details, "  details hidden; press d or enter")
+		fmt.Fprintln(&details, "  select a row, then press d for details")
 	}
 	output.WriteString(truncateRows(details.String(), detailsRows, detailTruncatedIndicator, model.contentWidth()))
 	if selection.ShowHelp {
@@ -424,7 +417,7 @@ func (model Model) renderTwoPaneListAndDetails() string {
 	var left strings.Builder
 	fmt.Fprintln(&left, paneTitle("Selectable List"))
 	if len(items) == 0 {
-		fmt.Fprintln(&left, "  (none)")
+		fmt.Fprintln(&left, "  no runtime items")
 	} else {
 		if window.truncated {
 			fmt.Fprintf(&left, "  showing %d-%d of %d\n", window.start+1, window.end, len(items))
@@ -441,7 +434,7 @@ func (model Model) renderTwoPaneListAndDetails() string {
 	if selection.ShowDetails {
 		rightModel.renderDetails(&details, items, selection.SelectedIndex)
 	} else {
-		fmt.Fprintln(&details, "  details hidden; press d or enter")
+		fmt.Fprintln(&details, "  select a row, then press d for details")
 	}
 	detailsRows := paneRows - 2
 	if selection.ShowHelp {
@@ -488,12 +481,12 @@ func (model Model) visibleTwoPaneRows() int {
 		return maxInt
 	}
 	rows := model.height
-	rows -= 3 // header
+	rows -= 1 // header
 	rows -= 6 // runtime summary
 	if model.lastError != nil {
 		rows -= 3
 	}
-	rows -= 4 // footer
+	rows -= 2 // footer
 	if rows < minimumVisibleListRows+2 {
 		return minimumVisibleListRows + 2
 	}
@@ -560,7 +553,7 @@ func (model Model) visibleSelectableRows() int {
 		return maxInt
 	}
 	reservedRows := 0
-	reservedRows += 3 // header
+	reservedRows += 1 // header
 	reservedRows += 6 // runtime summary
 	reservedRows += 2 // selectable list spacing and title
 	reservedRows += 4 // details pane, collapsed or minimum visible details
@@ -570,7 +563,7 @@ func (model Model) visibleSelectableRows() int {
 	if model.lastError != nil {
 		reservedRows += 3
 	}
-	reservedRows += 4 // footer
+	reservedRows += 2 // footer
 
 	visibleRows := model.height - reservedRows
 	if visibleRows < minimumVisibleListRows {
@@ -628,23 +621,22 @@ func (model Model) remainingRowsAfterListAndDetails(visibleListRows int, visible
 
 func (model Model) fixedRowsWithoutDetailsOrHelp() int {
 	rows := 0
-	rows += 3 // header
+	rows += 1 // header
 	rows += 6 // runtime summary
 	rows += 2 // selectable list spacing and title
 	rows += 2 // details pane spacing and title
 	if model.lastError != nil {
 		rows += 3
 	}
-	rows += 4 // footer
+	rows += 2 // footer
 	return rows
 }
 
 func (model Model) renderHelp(maxRows int) string {
 	var output strings.Builder
 	for _, line := range []string{
-		"  q quit | r refresh",
-		"  j/k or arrows move",
-		"  d/enter details",
+		"  q quit   r refresh",
+		"  j/k move d details",
 		"  ? help",
 	} {
 		fmt.Fprintln(&output, dashboardStyles.help.Render(line))
@@ -682,18 +674,11 @@ func clampInt(value int, minimum int, maximum int) int {
 
 func (model Model) renderFooter() string {
 	width := model.contentWidth()
-	help := truncateValue("  keys: q quit | j/k move | d details | r refresh | ? help", width)
-	refresh := truncateValue(fmt.Sprintf("  refresh %s | last %s | source %s | read-only",
+	footer := truncateValue(fmt.Sprintf("q quit | j/k move | d details | r refresh | ? help  |  %s | read-only | %s refresh | last %s",
+		fallback(model.source, "unknown"),
 		model.refreshInterval,
-		fallbackRefresh(model.lastRefresh),
-		fallback(model.source, "unknown")), width)
-	return fmt.Sprintf(
-		"\n%s\n%s\n%s\n%s\n",
-		sectionTitle("Controls"),
-		dashboardStyles.rule.Render(strings.Repeat("-", width)),
-		dashboardStyles.footer.Render(help),
-		dashboardStyles.footer.Render(refresh),
-	)
+		fallbackRefresh(model.lastRefresh)), width)
+	return "\n" + dashboardStyles.footer.Render(footer) + "\n"
 }
 
 func (model Model) refreshCmd() tea.Cmd {
@@ -782,7 +767,7 @@ func itemWarning(item dashboard.SelectionItem) string {
 
 func (model Model) renderDetails(output io.Writer, items []dashboard.SelectionItem, selected int) {
 	if len(items) == 0 {
-		fmt.Fprintln(output, "  no selectable item")
+		fmt.Fprintln(output, "  no details selected")
 		return
 	}
 	if selected < 0 || selected >= len(items) {

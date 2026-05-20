@@ -13,6 +13,7 @@ const defaultTerminalWidth = 100
 const minimumTerminalWidth = 24
 const twoPaneWidthThreshold = 110
 const paneSeparator = "  |  "
+const detailLabelWidth = 19
 
 func (model Model) contentWidth() int {
 	if model.width <= 0 {
@@ -88,11 +89,11 @@ func padRight(value string, width int) string {
 
 func (model Model) detailText(output io.Writer, label string, value string) {
 	value = model.truncateDetailValue(label, value)
-	fmt.Fprintln(output, detailLine(label, value))
+	fmt.Fprintln(output, detailLineWithWidth(label, value, detailLabelWidth))
 }
 
 func (model Model) detailPath(output io.Writer, label string, value string) {
-	fmt.Fprintln(output, detailLine(label, model.renderInlinePath(value, detailPrefixWidth(label))))
+	fmt.Fprintln(output, detailLineWithWidth(label, model.renderInlinePath(value, detailPrefixWidth(label)), detailLabelWidth))
 }
 
 func (model Model) renderInlinePath(value string, prefixWidth int) string {
@@ -104,7 +105,11 @@ func (model Model) truncateDetailValue(label string, value string) string {
 }
 
 func detailPrefixWidth(label string) int {
-	return len("  ") + len(label) + len(": ")
+	width := detailLabelWidth
+	if len(label) > width {
+		width = len(label)
+	}
+	return len("  ") + width + len(": ")
 }
 
 func truncateLogPathTokens(value string, width int) string {
@@ -130,10 +135,10 @@ func truncateLogPathTokens(value string, width int) string {
 
 func (model Model) renderStringList(output io.Writer, label string, values []string) {
 	if len(values) == 0 {
-		fmt.Fprintf(output, "  %s: (none)\n", label)
+		fmt.Fprintln(output, detailLineWithWidth(label, "(none)", detailLabelWidth))
 		return
 	}
-	fmt.Fprintf(output, "  %s:\n", label)
+	fmt.Fprintln(output, detailLineWithWidth(label, "", detailLabelWidth))
 	for _, value := range values {
 		fmt.Fprintf(output, "    - %s\n", truncateLogPathTokens(value, model.contentWidth()-len("    - ")))
 	}

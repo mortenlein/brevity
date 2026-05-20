@@ -143,15 +143,14 @@ func TestModelViewRendersOperatorSections(t *testing.T) {
 	output := plainView(model.View())
 	for _, want := range []string{
 		"Brevity Runtime Dashboard",
-		"mode: read-only | source: native | alerts: providers 1, tasks 1, cleanup 1",
+		"native | read-only | alerts p:1 t:1 c:1",
 		"Runtime Summary",
 		"Selectable List",
 		"> prov  codex: degraded !",
 		"Details Pane",
-		"details hidden; press d or enter",
-		"Controls",
-		"keys: q quit | j/k move | d details | r refresh | ? help",
-		"refresh 1s | last 2026-05-19T10:00:00Z | source native",
+		"select a row, then press d for details",
+		"q quit | j/k move | d details | r refresh | ? help",
+		"native | read-only | 1s refresh",
 	} {
 		if !strings.Contains(output, want) {
 			t.Fatalf("view missing %q:\n%s", want, output)
@@ -209,8 +208,8 @@ func TestModelViewUsesTwoPaneLayoutAtWideWidth(t *testing.T) {
 	if !strings.Contains(output, "Selectable List") || !strings.Contains(output, paneSeparator+"Details Pane") {
 		t.Fatalf("wide view missing side-by-side pane headings:\n%s", output)
 	}
-	if !strings.Contains(output, "Controls") {
-		t.Fatalf("wide view missing controls:\n%s", output)
+	if !strings.Contains(output, "q quit | j/k move | d details") {
+		t.Fatalf("wide view missing footer controls:\n%s", output)
 	}
 }
 
@@ -245,10 +244,10 @@ func TestWidePaneLayoutRendersDetailsAndHelpInRightPane(t *testing.T) {
 
 	for _, want := range []string{
 		paneSeparator + "Details Pane",
-		paneSeparator + "  type: provider",
-		paneSeparator + "Help",
+		paneSeparator + "  type:",
 		paneSeparator + "  q quit",
-		"Controls",
+		paneSeparator + "Help",
+		"q quit | j/k move | d details",
 	} {
 		if !strings.Contains(output, want) {
 			t.Fatalf("wide pane view missing %q:\n%s", want, output)
@@ -266,7 +265,7 @@ func TestModelViewShortensLongPaths(t *testing.T) {
 
 	output := plainView(model.View())
 
-	if !strings.Contains(output, `worktree: ...`) || !strings.Contains(output, `very-long-task-name`) {
+	if !strings.Contains(output, `worktree:`) || !strings.Contains(output, `...rktrees\active\very-long-task-name`) {
 		t.Fatalf("view missing shortened path suffix:\n%s", output)
 	}
 	if strings.Contains(output, `C:\dev\repos\active\brevity\worktrees\active\very-long-task-name`) {
@@ -286,15 +285,24 @@ func TestModelViewRendersDetailsAndHelp(t *testing.T) {
 
 	output := plainView(model.View())
 	for _, want := range []string{
-		"type: provider",
-		"name: codex",
-		"status: degraded !",
-		"guidance: provider is degraded",
 		"Help",
 		"? help",
 	} {
 		if !strings.Contains(output, want) {
 			t.Fatalf("view missing %q:\n%s", want, output)
+		}
+	}
+	for _, detail := range []struct {
+		label string
+		value string
+	}{
+		{"type", "provider"},
+		{"name", "codex"},
+		{"status", "degraded !"},
+		{"guidance", "provider is degraded"},
+	} {
+		if !containsDetail(output, detail.label, detail.value) {
+			t.Fatalf("view missing detail %q=%q:\n%s", detail.label, detail.value, output)
 		}
 	}
 }
@@ -304,21 +312,23 @@ func TestModelViewRendersTaskCleanupAndActionDetails(t *testing.T) {
 		name     string
 		selected int
 		want     []string
+		details  map[string]string
 	}{
 		{
 			name:     "task",
 			selected: 1,
-			want:     []string{"type: task", "slug: task-one", "state: blocked", "branch: task/task-one"},
+			details:  map[string]string{"type": "task", "slug": "task-one", "state": "blocked", "branch": "task/task-one"},
 		},
 		{
 			name:     "cleanup",
 			selected: 2,
-			want:     []string{"type: cleanup candidate", "id: orphan-branch:task-old", "severity/category: warning / requires-inspection"},
+			details:  map[string]string{"type": "cleanup candidate", "id": "orphan-branch:task-old", "severity/category": "warning / requires-inspection"},
 		},
 		{
 			name:     "action",
 			selected: 3,
-			want:     []string{"type: suggested action", "action: Inspect state.", "display-only; no command is executed"},
+			want:     []string{"display-only; no command is executed"},
+			details:  map[string]string{"type": "suggested action", "action": "Inspect state."},
 		},
 	}
 
@@ -334,6 +344,11 @@ func TestModelViewRendersTaskCleanupAndActionDetails(t *testing.T) {
 			for _, want := range tt.want {
 				if !strings.Contains(output, want) {
 					t.Fatalf("view missing %q:\n%s", want, output)
+				}
+			}
+			for label, value := range tt.details {
+				if !containsDetail(output, label, value) {
+					t.Fatalf("view missing detail %q=%q:\n%s", label, value, output)
 				}
 			}
 		})
@@ -352,7 +367,7 @@ func TestSelectableListKeepsSelectedItemVisible(t *testing.T) {
 	if !strings.Contains(output, "> task  task-11") {
 		t.Fatalf("selected item is not visible:\n%s", output)
 	}
-	if !strings.Contains(output, "showing 9-12 of 33") {
+	if !strings.Contains(output, "showing 5-12 of 33") {
 		t.Fatalf("view missing expected scroll indicator:\n%s", output)
 	}
 }
@@ -364,7 +379,7 @@ func TestSelectableListWindowMovesAsSelectionChanges(t *testing.T) {
 	model.height = 23
 
 	before := plainView(model.View())
-	if !strings.Contains(before, "showing 1-4 of 33") {
+	if !strings.Contains(before, "showing 1-8 of 33") {
 		t.Fatalf("initial window did not start at first item:\n%s", before)
 	}
 
@@ -374,7 +389,7 @@ func TestSelectableListWindowMovesAsSelectionChanges(t *testing.T) {
 	}
 
 	after := plainView(model.View())
-	if !strings.Contains(after, "showing 10-13 of 33") {
+	if !strings.Contains(after, "showing 6-13 of 33") {
 		t.Fatalf("window did not move with selection:\n%s", after)
 	}
 	if !strings.Contains(after, "> task  task-12") {
@@ -407,7 +422,7 @@ func TestSelectableListScrollIndicatorAppearsWhenTruncated(t *testing.T) {
 
 	output := plainView(model.View())
 
-	if !strings.Contains(output, "showing 1-3 of 23") {
+	if !strings.Contains(output, "showing 1-7 of 23") {
 		t.Fatalf("view missing scroll indicator:\n%s", output)
 	}
 }
@@ -425,8 +440,8 @@ func TestDetailsTruncateAtSmallHeight(t *testing.T) {
 	if !strings.Contains(output, "... details truncated") {
 		t.Fatalf("small-height details missing truncation indicator:\n%s", output)
 	}
-	if !strings.Contains(output, "Controls") {
-		t.Fatalf("small-height view missing controls:\n%s", output)
+	if !strings.Contains(output, "q quit | j/k move | d details") {
+		t.Fatalf("small-height view missing footer controls:\n%s", output)
 	}
 	if !strings.Contains(output, "> clean requires-inspection: orphan-branch:task-old") {
 		t.Fatalf("small-height view missing selected list row:\n%s", output)
@@ -446,18 +461,21 @@ func TestDetailsRenderFullyAtNormalHeight(t *testing.T) {
 	if strings.Contains(output, "... details truncated") {
 		t.Fatalf("normal-height details were truncated:\n%s", output)
 	}
-	for _, want := range []string{
-		"type: cleanup candidate",
-		"dirty reasons: (none)",
-		"suggested commands: (none)",
+	for _, detail := range []struct {
+		label string
+		value string
+	}{
+		{"type", "cleanup candidate"},
+		{"dirty reasons", "(none)"},
+		{"suggested commands", "(none)"},
 	} {
-		if !strings.Contains(output, want) {
-			t.Fatalf("normal-height details missing %q:\n%s", want, output)
+		if !containsDetail(output, detail.label, detail.value) {
+			t.Fatalf("normal-height details missing %q=%q:\n%s", detail.label, detail.value, output)
 		}
 	}
 }
 
-func TestHelpTruncatesAtSmallHeight(t *testing.T) {
+func TestHelpRendersAtSmallHeight(t *testing.T) {
 	model := NewModelWithSource(&fakeClient{}, time.Second, "native")
 	model.state = bubbleStateWithManyTasks(8)
 	model.hasState = true
@@ -466,11 +484,11 @@ func TestHelpTruncatesAtSmallHeight(t *testing.T) {
 
 	output := plainView(model.View())
 
-	if !strings.Contains(output, "... help truncated") {
-		t.Fatalf("small-height help missing truncation indicator:\n%s", output)
+	if !strings.Contains(output, "Help") || !strings.Contains(output, "? help") {
+		t.Fatalf("small-height help missing compact help text:\n%s", output)
 	}
-	if !strings.Contains(output, "Controls") {
-		t.Fatalf("small-height help view missing controls:\n%s", output)
+	if !strings.Contains(output, "q quit | j/k move | d details") {
+		t.Fatalf("small-height help view missing footer controls:\n%s", output)
 	}
 	if !strings.Contains(output, "> prov  codex") {
 		t.Fatalf("small-height help view missing selected row:\n%s", output)
@@ -553,4 +571,9 @@ var ansiPattern = regexp.MustCompile(`\x1b\[[0-9;]*m`)
 
 func plainView(output string) string {
 	return ansiPattern.ReplaceAllString(output, "")
+}
+
+func containsDetail(output string, label string, value string) bool {
+	pattern := regexp.MustCompile(`(?m)^\s+` + regexp.QuoteMeta(label) + `:\s+` + regexp.QuoteMeta(value))
+	return pattern.FindStringIndex(output) != nil
 }

@@ -27,20 +27,16 @@ var dashboardStyles = struct {
 	rule: lipgloss.NewStyle().
 		Foreground(lipgloss.Color("8")),
 	section: lipgloss.NewStyle().
-		Bold(true).
-		Foreground(lipgloss.Color("5")),
+		Foreground(lipgloss.Color("7")),
 	paneTitle: lipgloss.NewStyle().
-		Bold(true).
-		Foreground(lipgloss.Color("13")),
+		Foreground(lipgloss.Color("7")),
 	selectedRow: lipgloss.NewStyle().
 		Bold(true).
 		Foreground(lipgloss.Color("15")).
-		Background(lipgloss.Color("24")),
+		Background(lipgloss.Color("236")),
 	badge: lipgloss.NewStyle().
-		Foreground(lipgloss.Color("15")).
-		Background(lipgloss.Color("238")),
+		Foreground(lipgloss.Color("7")),
 	success: lipgloss.NewStyle().
-		Bold(true).
 		Foreground(lipgloss.Color("10")),
 	warning: lipgloss.NewStyle().
 		Bold(true).
@@ -53,8 +49,7 @@ var dashboardStyles = struct {
 	footer: lipgloss.NewStyle().
 		Foreground(lipgloss.Color("7")),
 	detailLabel: lipgloss.NewStyle().
-		Bold(true).
-		Foreground(lipgloss.Color("5")),
+		Foreground(lipgloss.Color("8")),
 	detailValue: lipgloss.NewStyle(),
 	help: lipgloss.NewStyle().
 		Foreground(lipgloss.Color("8")),
@@ -76,17 +71,24 @@ func statusBadge(text string, severity string) string {
 	style := dashboardStyles.badge
 	switch severity {
 	case "success":
-		style = style.Foreground(lipgloss.Color("0")).Background(lipgloss.Color("10"))
+		style = style.Foreground(lipgloss.Color("10"))
 	case "warning":
-		style = style.Foreground(lipgloss.Color("0")).Background(lipgloss.Color("11"))
+		style = style.Foreground(lipgloss.Color("11"))
 	case "error":
-		style = style.Foreground(lipgloss.Color("15")).Background(lipgloss.Color("9"))
+		style = style.Foreground(lipgloss.Color("9"))
 	case "accent":
-		style = style.Foreground(lipgloss.Color("15")).Background(lipgloss.Color("5"))
+		style = style.Foreground(lipgloss.Color("12"))
 	}
 	return style.Render(text)
 }
 
 func detailLine(label string, value string) string {
-	return "  " + dashboardStyles.detailLabel.Render(label+":") + " " + dashboardStyles.detailValue.Render(value)
+	return detailLineWithWidth(label, value, len(label))
+}
+
+func detailLineWithWidth(label string, value string, width int) string {
+	if width < len(label) {
+		width = len(label)
+	}
+	return "  " + dashboardStyles.detailLabel.Render(padRight(label+":", width+1)) + " " + dashboardStyles.detailValue.Render(value)
 }
