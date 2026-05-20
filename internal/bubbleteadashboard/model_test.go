@@ -259,7 +259,7 @@ func TestModelRefreshMessageUpdatesState(t *testing.T) {
 	if model.lastRefresh != "2026-05-19T10:00:00Z" {
 		t.Fatalf("lastRefresh = %q", model.lastRefresh)
 	}
-	if !strings.Contains(plainView(model.View()), "Brevity Runtime Dashboard") {
+	if !strings.Contains(plainView(model.View()), "Brevity") {
 		t.Fatalf("view missing title:\n%s", model.View())
 	}
 }
@@ -421,8 +421,7 @@ func TestModelViewRendersOperatorSections(t *testing.T) {
 
 	output := plainView(model.View())
 	for _, want := range []string{
-		"Brevity Runtime Dashboard",
-		"native | read-only | alerts !3 p:1 t:1 c:1",
+		"Brevity | native | read-only | alerts !3 | p:1 t:1 c:1",
 		"Runtime Summary",
 		"Runtime Signals",
 		"> prov  codex    degraded !",
@@ -554,7 +553,7 @@ func TestHeaderReadableAtNarrowWidth(t *testing.T) {
 
 	output := plainView(model.renderHeader())
 
-	for _, want := range []string{"powershell", "read-only", "!3", "p:1 t:1 c:1"} {
+	for _, want := range []string{"Brevity", "powershell", "read-only", "alerts !3"} {
 		if !strings.Contains(output, want) {
 			t.Fatalf("narrow header missing priority text %q:\n%s", want, output)
 		}
@@ -562,6 +561,57 @@ func TestHeaderReadableAtNarrowWidth(t *testing.T) {
 	if strings.Contains(output, "...") {
 		t.Fatalf("narrow header should prefer compact text over clipping:\n%s", output)
 	}
+}
+
+func TestHeaderShowsLoadingAndErrorState(t *testing.T) {
+	tests := []struct {
+		name      string
+		hasState  bool
+		lastError error
+		want      string
+	}{
+		{name: "loading", want: "loading"},
+		{name: "loading error", lastError: errors.New("runtime unavailable"), want: "error"},
+		{name: "state warning", hasState: true, want: "alerts !3"},
+		{name: "state polling error", hasState: true, lastError: errors.New("runtime unavailable"), want: "error !3"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			model := NewModelWithSource(&fakeClient{}, time.Second, "native")
+			model.width = 56
+			model.lastError = tt.lastError
+			if tt.hasState {
+				model.state = bubbleState()
+				model.hasState = true
+			}
+
+			header := plainView(model.renderHeader())
+			for _, want := range []string{"Brevity", "native", "read-only", tt.want} {
+				if !strings.Contains(header, want) {
+					t.Fatalf("header missing %q:\n%s", want, header)
+				}
+			}
+			assertLinesWithinWidth(t, header, model.width)
+		})
+	}
+}
+
+func TestHeaderWideShowsGeneratedContext(t *testing.T) {
+	model := NewModelWithSource(&fakeClient{}, time.Second, "native")
+	model.state = bubbleState()
+	model.state.GeneratedAt = "2026-05-20T11:18:03Z"
+	model.hasState = true
+	model.width = 120
+
+	header := plainView(model.renderHeader())
+
+	for _, want := range []string{"Brevity", "native", "read-only", "alerts !3", "p:1 t:1 c:1", "generated 2026-05-20T11:18:03Z"} {
+		if !strings.Contains(header, want) {
+			t.Fatalf("wide header missing %q:\n%s", want, header)
+		}
+	}
+	assertLinesWithinWidth(t, header, model.width)
 }
 
 func TestStyledHeaderFooterAndSummaryUseVisibleWidth(t *testing.T) {
@@ -709,7 +759,7 @@ func TestModelViewLayoutSnapshotsByWidth(t *testing.T) {
 			for _, want := range []string{
 				"native",
 				"read-only",
-				"alerts !3 p:1 t:1 c:1",
+				"alerts !3",
 				"> prov  codex    degraded !",
 				"q",
 				"j/k",
@@ -721,8 +771,8 @@ func TestModelViewLayoutSnapshotsByWidth(t *testing.T) {
 					t.Fatalf("%s snapshot missing %q:\n%s", tt.name, want, output)
 				}
 			}
-			if tt.width >= 82 && !strings.Contains(output, "Brevity Runtime") {
-				t.Fatalf("%s snapshot missing dashboard title:\n%s", tt.name, output)
+			if tt.width >= 82 && !strings.Contains(output, "p:1 t:1 c:1") {
+				t.Fatalf("%s snapshot missing alert breakdown:\n%s", tt.name, output)
 			}
 			if strings.Contains(output, "degraded ! degraded") {
 				t.Fatalf("%s snapshot duplicated provider warning wording:\n%s", tt.name, output)
@@ -1478,7 +1528,7 @@ func TestHeaderFooterTruncationParityKeepsWarningSourceReadOnly(t *testing.T) {
 	header := plainView(model.renderHeader())
 	footer := plainView(model.renderFooter())
 
-	for _, want := range []string{"native", "read-only", "!3", "p:1 t:1 c:1"} {
+	for _, want := range []string{"Brevity", "native", "read-only", "alerts !3"} {
 		if !strings.Contains(header, want) {
 			t.Fatalf("narrow header dropped priority segment %q:\n%s", want, header)
 		}
@@ -1488,7 +1538,7 @@ func TestHeaderFooterTruncationParityKeepsWarningSourceReadOnly(t *testing.T) {
 			t.Fatalf("narrow footer dropped priority segment %q:\n%s", want, footer)
 		}
 	}
-	for _, dropped := range []string{"Brevity Runtime Dashboard", "last 2026-05-19T10:00:00Z", "1s refresh"} {
+	for _, dropped := range []string{"p:1 t:1 c:1", "last 2026-05-19T10:00:00Z", "1s refresh"} {
 		if strings.Contains(header, dropped) || strings.Contains(footer, dropped) {
 			t.Fatalf("narrow chrome kept lower-priority metadata %q:\nheader: %s\nfooter: %s", dropped, header, footer)
 		}
@@ -1499,13 +1549,13 @@ func TestHeaderFooterTruncationParityKeepsWarningSourceReadOnly(t *testing.T) {
 
 func TestHeaderCompactWarningCountReadableAcrossWidths(t *testing.T) {
 	tests := []struct {
-		name      string
-		width     int
-		wantTitle bool
+		name          string
+		width         int
+		wantBreakdown bool
 	}{
 		{name: "narrow", width: 51},
-		{name: "medium", width: 82, wantTitle: true},
-		{name: "wide", width: 120, wantTitle: true},
+		{name: "medium", width: 82, wantBreakdown: true},
+		{name: "wide", width: 120, wantBreakdown: true},
 	}
 
 	for _, tt := range tests {
@@ -1516,16 +1566,16 @@ func TestHeaderCompactWarningCountReadableAcrossWidths(t *testing.T) {
 			model.width = tt.width
 
 			header := plainView(model.renderHeader())
-			for _, want := range []string{"native", "read-only", "!3", "p:1 t:1 c:1"} {
+			for _, want := range []string{"Brevity", "native", "read-only", "alerts !3"} {
 				if !strings.Contains(header, want) {
 					t.Fatalf("%s header missing %q:\n%s", tt.name, want, header)
 				}
 			}
-			if tt.wantTitle && !strings.Contains(header, "Brevity Runtime") {
-				t.Fatalf("%s header lost richer status title:\n%s", tt.name, header)
+			if tt.wantBreakdown && !strings.Contains(header, "p:1 t:1 c:1") {
+				t.Fatalf("%s header lost alert breakdown:\n%s", tt.name, header)
 			}
-			if !tt.wantTitle && strings.Contains(header, "Brevity Runtime Dashboard") {
-				t.Fatalf("%s header kept lower-priority title before compact warning metadata:\n%s", tt.name, header)
+			if !tt.wantBreakdown && strings.Contains(header, "p:1 t:1 c:1") {
+				t.Fatalf("%s header kept lower-priority breakdown before critical tokens:\n%s", tt.name, header)
 			}
 			for _, duplicate := range []string{"alerts alerts", "warning warning", "!3 !3"} {
 				if strings.Contains(header, duplicate) {

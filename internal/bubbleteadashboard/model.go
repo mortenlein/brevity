@@ -306,23 +306,57 @@ func (model Model) renderRuntimeErrorLine() string {
 
 func (model Model) renderHeader() string {
 	width := model.contentWidth()
-	warnings := model.warningCounts()
-	source := fallback(model.source, "unknown")
-	statusText := statusLine(width,
-		statusSegment{text: "Brevity Runtime Dashboard", compact: "Brevity Runtime", priority: 2},
-		statusSegment{text: source, priority: 0},
-		statusSegment{text: "read-only", priority: 0},
-		statusSegment{text: fmt.Sprintf("alerts !%d p:%d t:%d c:%d", warnings.total(), warnings.provider, warnings.task, warnings.cleanup), compact: fmt.Sprintf("!%d p:%d t:%d c:%d", warnings.total(), warnings.provider, warnings.task, warnings.cleanup), priority: 0},
-	)
-	if !model.hasState {
-		statusText = statusLine(width,
-			statusSegment{text: "Brevity Runtime Dashboard", compact: "Brevity Runtime", priority: 2},
-			statusSegment{text: source, priority: 0},
-			statusSegment{text: "read-only", priority: 0},
-			statusSegment{text: "loading", priority: 0},
-		)
-	}
+	statusText := statusLine(width, model.headerStatusSegments()...)
 	return dashboardStyles.title.Render(statusText) + "\n"
+}
+
+func (model Model) headerStatusSegments() []statusSegment {
+	source := fallback(model.source, "unknown")
+	segments := []statusSegment{
+		{text: "Brevity", priority: 0},
+		{text: source, priority: 0},
+		{text: "read-only", priority: 0},
+	}
+
+	if !model.hasState {
+		if model.lastError != nil {
+			segments = append(segments, statusSegment{text: "error", priority: 0})
+		} else {
+			segments = append(segments, statusSegment{text: "loading", priority: 0})
+		}
+		return segments
+	}
+
+	warnings := model.warningCounts()
+	if model.lastError != nil {
+		segments = append(segments, statusSegment{text: headerAlertText("error", warnings.total()), compact: headerAlertCompact("error", warnings.total()), priority: 0})
+	} else if warnings.total() > 0 {
+		segments = append(segments, statusSegment{text: headerAlertText("alerts", warnings.total()), compact: headerAlertCompact("alerts", warnings.total()), priority: 0})
+	} else {
+		segments = append(segments, statusSegment{text: "ok", priority: 2})
+	}
+
+	if warnings.total() > 0 {
+		segments = append(segments, statusSegment{text: fmt.Sprintf("p:%d t:%d c:%d", warnings.provider, warnings.task, warnings.cleanup), priority: 2})
+	}
+	if strings.TrimSpace(model.state.GeneratedAt) != "" {
+		segments = append(segments, statusSegment{text: "generated " + model.state.GeneratedAt, compact: model.state.GeneratedAt, priority: 3})
+	}
+	return segments
+}
+
+func headerAlertText(label string, count int) string {
+	if count <= 0 {
+		return label
+	}
+	return fmt.Sprintf("%s !%d", label, count)
+}
+
+func headerAlertCompact(label string, count int) string {
+	if count <= 0 {
+		return label
+	}
+	return fmt.Sprintf("!%d", count)
 }
 
 func renderSection(output *strings.Builder, title string) {
