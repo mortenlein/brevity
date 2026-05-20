@@ -97,12 +97,13 @@ func TestActionPaletteOpensWithShortcut(t *testing.T) {
 	output := plainView(model.View())
 	for _, want := range []string{
 		"Actions",
-		"Start task     read-only preview",
-		"Run worker     read-only preview",
-		"Merge task     read-only preview",
-		"Cleanup task   read-only preview",
-		"Refresh state  enabled",
-		"enter activate | esc/q/p close",
+		"> Start task",
+		"Start task        read-only preview",
+		"Run worker        read-only preview",
+		"Merge task        read-only preview",
+		"Cleanup task      read-only preview",
+		"Refresh state     enter refreshes state",
+		"esc closes | p toggles",
 	} {
 		if !strings.Contains(output, want) {
 			t.Fatalf("palette output missing %q:\n%s", want, output)
@@ -241,6 +242,26 @@ func TestActionPaletteRowsStayWithinNarrowWidth(t *testing.T) {
 		}
 	}
 	assertLinesWithinWidth(t, output, model.width)
+}
+
+func TestActionPaletteHelperOnlyRendersWhenSpaceAllows(t *testing.T) {
+	model := NewModelWithSource(&fakeClient{}, time.Second, "native")
+	model.state = bubbleState()
+	model.hasState = true
+	model.paletteOpen = true
+	model.width = 82
+	model.height = 24
+
+	output := plainView(model.View())
+	if strings.Contains(output, "esc closes | p toggles") {
+		t.Fatalf("height-constrained palette rendered helper:\n%s", output)
+	}
+
+	model.height = 30
+	output = plainView(model.View())
+	if !strings.Contains(output, "esc closes | p toggles") {
+		t.Fatalf("roomy palette omitted helper:\n%s", output)
+	}
 }
 
 func TestModelRefreshMessageUpdatesState(t *testing.T) {

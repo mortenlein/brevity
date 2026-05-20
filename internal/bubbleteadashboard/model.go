@@ -241,7 +241,7 @@ func (model Model) View() string {
 		output.WriteString(model.renderRuntimeErrorLine())
 	}
 	if model.paletteOpen {
-		output.WriteString(model.renderActionPalette())
+		output.WriteString(model.renderActionPalette(renderedRows(output.String())))
 	}
 	return model.renderWithPinnedFooter(output.String())
 }
@@ -948,19 +948,17 @@ func (model Model) renderFooter() string {
 	return "\n" + dashboardStyles.footer.Render(footer) + "\n"
 }
 
-func (model Model) renderActionPalette() string {
+func (model Model) renderActionPalette(usedRows ...int) string {
 	var output strings.Builder
 	fmt.Fprintln(&output)
 	renderSection(&output, "Actions")
 	selected := model.clampedPaletteSelection()
 	for index, action := range paletteActions() {
-		cursor := " "
-		if index == selected {
-			cursor = ">"
-		}
-		fmt.Fprintln(&output, model.renderLine(fmt.Sprintf("%s %-14s %s", cursor, action.label, action.status)))
+		fmt.Fprintln(&output, model.renderPaletteActionRow(action, index == selected))
 	}
-	fmt.Fprintln(&output, dashboardStyles.help.Render(model.renderLine("  enter activate | esc/q/p close")))
+	if model.shouldRenderActionPaletteHelp(usedRows...) {
+		fmt.Fprintln(&output, dashboardStyles.help.Render(model.renderLine("  esc closes | p toggles")))
+	}
 	return output.String()
 }
 
@@ -976,8 +974,49 @@ func paletteActions() []paletteAction {
 		{label: "Run worker", status: "read-only preview"},
 		{label: "Merge task", status: "read-only preview"},
 		{label: "Cleanup task", status: "read-only preview"},
-		{label: "Refresh state", status: "enabled", enabled: true},
+		{label: "Refresh state", status: "enter refreshes state", enabled: true},
 	}
+}
+
+func (model Model) renderPaletteActionRow(action paletteAction, selected bool) string {
+	cursor := " "
+	if selected {
+		cursor = ">"
+	}
+	status := action.status
+	if !action.enabled {
+		status = dashboardStyles.muted.Render(status)
+	}
+
+	width := model.contentWidth()
+	prefix := fmt.Sprintf("%s ", cursor)
+	labelWidth := 16
+	if width < 42 {
+		labelWidth = 14
+	}
+	statusWidth := width - visibleWidth(prefix) - labelWidth - 2
+	if statusWidth < 6 {
+		statusWidth = 6
+	}
+	line := prefix + padRight(action.label, labelWidth) + "  " + truncateValue(status, statusWidth)
+	line = model.renderLine(line)
+	if selected {
+		return model.selectedRow(line)
+	}
+	return line
+}
+
+func (model Model) shouldRenderActionPaletteHelp(usedRows ...int) bool {
+	if model.height <= 0 {
+		return true
+	}
+	used := 0
+	if len(usedRows) > 0 {
+		used = usedRows[0]
+	}
+	footerRows := renderedRows(model.renderFooter())
+	paletteRowsWithHelp := 1 + 1 + len(paletteActions()) + 1
+	return used+paletteRowsWithHelp+footerRows <= model.height
 }
 
 func (model *Model) movePaletteSelection(delta int) {

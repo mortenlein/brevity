@@ -141,12 +141,11 @@ Selected Detail
   select a row, then press d for details
 
 Actions
-  Start task     read-only preview
-  Run worker     read-only preview
-  Merge task     read-only preview
-  Cleanup task   read-only preview
-> Refresh state  enabled
-  enter activate | esc/q/p close
+  Start task        read-only preview
+  Run worker        read-only preview
+  Merge task        read-only preview
+  Cleanup task      read-only preview
+> Refresh state     enter refreshes state
 
 q quit | j/k move | d details | p action | r refresh | ? help | native | read-only
 `,
