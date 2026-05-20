@@ -1,6 +1,7 @@
 package bubbleteadashboard
 
 import (
+	"fmt"
 	"regexp"
 	"strings"
 	"testing"
@@ -264,6 +265,78 @@ func TestModelViewRendersTaskCleanupAndActionDetails(t *testing.T) {
 	}
 }
 
+func TestSelectableListKeepsSelectedItemVisible(t *testing.T) {
+	model := NewModelWithSource(&fakeClient{}, time.Second, "native")
+	model.state = bubbleStateWithManyTasks(30)
+	model.hasState = true
+	model.height = 23
+	model.selection.SelectedIndex = 11
+
+	output := plainView(model.View())
+
+	if !strings.Contains(output, "> task     task-11") {
+		t.Fatalf("selected item is not visible:\n%s", output)
+	}
+	if !strings.Contains(output, "showing 8-12 of 33") {
+		t.Fatalf("view missing expected scroll indicator:\n%s", output)
+	}
+}
+
+func TestSelectableListWindowMovesAsSelectionChanges(t *testing.T) {
+	model := NewModelWithSource(&fakeClient{}, time.Second, "native")
+	model.state = bubbleStateWithManyTasks(30)
+	model.hasState = true
+	model.height = 23
+
+	before := plainView(model.View())
+	if !strings.Contains(before, "showing 1-5 of 33") {
+		t.Fatalf("initial window did not start at first item:\n%s", before)
+	}
+
+	for i := 0; i < 12; i++ {
+		updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("j")})
+		model = updated.(Model)
+	}
+
+	after := plainView(model.View())
+	if !strings.Contains(after, "showing 9-13 of 33") {
+		t.Fatalf("window did not move with selection:\n%s", after)
+	}
+	if !strings.Contains(after, "> task     task-12") {
+		t.Fatalf("selected item is not visible after movement:\n%s", after)
+	}
+}
+
+func TestSelectableListSmallHeightDoesNotPanic(t *testing.T) {
+	model := NewModelWithSource(&fakeClient{}, time.Second, "native")
+	model.state = bubbleStateWithManyTasks(8)
+	model.hasState = true
+	model.height = 1
+	model.selection.SelectedIndex = 5
+
+	output := plainView(model.View())
+
+	if !strings.Contains(output, "showing 6-6 of 11") {
+		t.Fatalf("small-height view missing one-row window indicator:\n%s", output)
+	}
+	if !strings.Contains(output, "> task     task-05") {
+		t.Fatalf("small-height view missing selected row:\n%s", output)
+	}
+}
+
+func TestSelectableListScrollIndicatorAppearsWhenTruncated(t *testing.T) {
+	model := NewModelWithSource(&fakeClient{}, time.Second, "native")
+	model.state = bubbleStateWithManyTasks(20)
+	model.hasState = true
+	model.height = 22
+
+	output := plainView(model.View())
+
+	if !strings.Contains(output, "showing 1-4 of 23") {
+		t.Fatalf("view missing scroll indicator:\n%s", output)
+	}
+}
+
 func TestModelRefreshCommandReadsRuntimeState(t *testing.T) {
 	client := &fakeClient{
 		output: []byte(`{"schema":"brevity.runtime-state.v1","repoRoot":"C:\\repo","taskCounts":{"tracked":2}}`),
@@ -318,6 +391,20 @@ func bubbleStateWithLongPaths() contracts.RuntimeState {
 	state.Cleanup.OrphanedTaskBranches[0].Path = `C:\dev\repos\active\brevity\worktrees\completed\very-long-task-name`
 	state.Cleanup.OrphanedTaskBranches[0].SuggestedCommands = []string{
 		`git -C C:\dev\repos\active\brevity\worktrees\completed\very-long-task-name status --short`,
+	}
+	return state
+}
+
+func bubbleStateWithManyTasks(taskCount int) contracts.RuntimeState {
+	state := bubbleState()
+	state.TaskCounts.Tracked = taskCount
+	state.Tasks = make([]contracts.TaskSummary, 0, taskCount)
+	for index := 1; index <= taskCount; index++ {
+		state.Tasks = append(state.Tasks, contracts.TaskSummary{
+			Slug:   fmt.Sprintf("task-%02d", index),
+			Status: "ready",
+			Branch: fmt.Sprintf("task/task-%02d", index),
+		})
 	}
 	return state
 }

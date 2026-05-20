@@ -17,6 +17,7 @@ import (
 )
 
 const defaultRefreshInterval = 5 * time.Second
+const minimumVisibleListRows = 1
 
 type refreshMsg struct {
 	state contracts.RuntimeState
@@ -303,6 +304,7 @@ func (model Model) renderListAndDetails() string {
 	items := dashboard.SelectableItems(model.state)
 	selection := model.selection
 	selection.Clamp(len(items))
+	window := model.selectableListWindow(len(items), selection.SelectedIndex)
 
 	var output strings.Builder
 	fmt.Fprintln(&output)
@@ -310,7 +312,11 @@ func (model Model) renderListAndDetails() string {
 	if len(items) == 0 {
 		fmt.Fprintln(&output, "  (none)")
 	} else {
-		for index, item := range items {
+		if window.truncated {
+			fmt.Fprintf(&output, "  showing %d-%d of %d\n", window.start+1, window.end, len(items))
+		}
+		for index := window.start; index < window.end; index++ {
+			item := items[index]
 			fmt.Fprintln(&output, model.renderRow(index == selection.SelectedIndex, string(item.Kind), item.Label, itemWarning(item)))
 		}
 	}
@@ -332,6 +338,72 @@ func (model Model) renderListAndDetails() string {
 		fmt.Fprintln(&output, dashboardStyles.help.Render("  ? help"))
 	}
 	return output.String()
+}
+
+type listWindow struct {
+	start     int
+	end       int
+	truncated bool
+}
+
+func (model Model) selectableListWindow(itemCount int, selected int) listWindow {
+	if itemCount <= 0 {
+		return listWindow{}
+	}
+	selected = clampInt(selected, 0, itemCount-1)
+	visibleRows := model.visibleSelectableRows()
+	if visibleRows >= itemCount {
+		return listWindow{start: 0, end: itemCount}
+	}
+	if visibleRows < minimumVisibleListRows {
+		visibleRows = minimumVisibleListRows
+	}
+
+	start := selected - visibleRows + 1
+	if start < 0 {
+		start = 0
+	}
+	maxStart := itemCount - visibleRows
+	if start > maxStart {
+		start = maxStart
+	}
+	return listWindow{start: start, end: start + visibleRows, truncated: true}
+}
+
+func (model Model) visibleSelectableRows() int {
+	if model.height <= 0 {
+		return maxInt
+	}
+	reservedRows := 0
+	reservedRows += 2 // header
+	reservedRows += 6 // runtime summary
+	reservedRows += 2 // selectable list spacing and title
+	reservedRows += 4 // details pane, collapsed or minimum visible details
+	if model.selection.ShowHelp {
+		reservedRows += 7
+	}
+	if model.lastError != nil {
+		reservedRows += 3
+	}
+	reservedRows += 4 // footer
+
+	visibleRows := model.height - reservedRows
+	if visibleRows < minimumVisibleListRows {
+		return minimumVisibleListRows
+	}
+	return visibleRows
+}
+
+const maxInt = int(^uint(0) >> 1)
+
+func clampInt(value int, minimum int, maximum int) int {
+	if value < minimum {
+		return minimum
+	}
+	if value > maximum {
+		return maximum
+	}
+	return value
 }
 
 func (model Model) renderFooter() string {
