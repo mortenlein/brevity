@@ -593,6 +593,65 @@ func TestModelViewRenderInvariantsAcrossWidthsSourcesAndModes(t *testing.T) {
 	}
 }
 
+func TestModelLoadingViewRenderInvariantsAcrossWidths(t *testing.T) {
+	widths := []struct {
+		name  string
+		width int
+	}{
+		{name: "narrow", width: 48},
+		{name: "medium", width: 82},
+		{name: "wide", width: 120},
+	}
+
+	for _, width := range widths {
+		t.Run(width.name, func(t *testing.T) {
+			model := NewModelWithSource(&fakeClient{}, time.Second, "native")
+			model.width = width.width
+			model.height = 20
+
+			output := plainView(model.View())
+
+			assertLoadingOrErrorViewInvariants(t, output, width.width, "native")
+			if !strings.Contains(output, "Loading runtime state") {
+				t.Fatalf("loading view missing loading message:\n%s", output)
+			}
+		})
+	}
+}
+
+func TestModelRuntimeErrorViewRenderInvariantsAcrossWidths(t *testing.T) {
+	widths := []struct {
+		name  string
+		width int
+	}{
+		{name: "narrow", width: 48},
+		{name: "medium", width: 82},
+		{name: "wide", width: 120},
+	}
+
+	for _, width := range widths {
+		t.Run(width.name, func(t *testing.T) {
+			model := NewModelWithSource(&fakeClient{}, time.Second, "native")
+			model.width = width.width
+			model.height = 20
+			updated, _ := model.Update(refreshMsg{
+				err: fmt.Errorf("runtime unavailable"),
+				at:  time.Date(2026, 5, 20, 10, 0, 0, 0, time.UTC),
+			})
+			model = updated.(Model)
+
+			output := plainView(model.View())
+
+			assertLoadingOrErrorViewInvariants(t, output, width.width, "native")
+			for _, want := range []string{"polling error", "runtime unavailable"} {
+				if !strings.Contains(output, want) {
+					t.Fatalf("runtime error view missing %q:\n%s", want, output)
+				}
+			}
+		})
+	}
+}
+
 func TestSelectableRowWarningSuffixesByKind(t *testing.T) {
 	tests := []struct {
 		name          string
@@ -1614,5 +1673,25 @@ func assertRenderInvariants(t *testing.T, output string, width int, source strin
 	}
 	if !wantTwoPane && strings.Contains(output, paneSeparator+"Details Pane") {
 		t.Fatalf("single-column view rendered two-pane separator:\n%s", output)
+	}
+}
+
+func assertLoadingOrErrorViewInvariants(t *testing.T, output string, width int, source string) {
+	t.Helper()
+	assertLinesWithinWidth(t, output, width)
+
+	for _, want := range []string{
+		"Runtime Summary",
+		source,
+		"read-only",
+		"q",
+		"j/k",
+		"d",
+		"r",
+		"? help",
+	} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("loading/error render invariant missing %q:\n%s", want, output)
+		}
 	}
 }
