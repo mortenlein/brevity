@@ -80,6 +80,118 @@ func TestModelNavigationAndDetailsToggle(t *testing.T) {
 	}
 }
 
+func TestActionPaletteOpensWithShortcut(t *testing.T) {
+	model := NewModelWithSource(&fakeClient{}, time.Second, "native")
+	model.state = bubbleState()
+	model.hasState = true
+
+	updated, cmd := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("p")})
+	model = updated.(Model)
+
+	if cmd != nil {
+		t.Fatal("palette shortcut returned a command, want nil")
+	}
+	if !model.paletteOpen {
+		t.Fatal("paletteOpen = false, want true")
+	}
+	output := plainView(model.View())
+	for _, want := range []string{
+		"Actions",
+		"Start task     read-only preview",
+		"Run worker     read-only preview",
+		"Merge task     read-only preview",
+		"Cleanup task   read-only preview",
+		"Refresh state  read-only preview",
+		"esc/q/p close",
+	} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("palette output missing %q:\n%s", want, output)
+		}
+	}
+}
+
+func TestActionPaletteOpensWithCtrlPAndClosesWithShortcuts(t *testing.T) {
+	closeKeys := []tea.KeyMsg{
+		{Type: tea.KeyEsc},
+		{Type: tea.KeyRunes, Runes: []rune("q")},
+		{Type: tea.KeyRunes, Runes: []rune("p")},
+		{Type: tea.KeyCtrlP},
+	}
+
+	for _, key := range closeKeys {
+		t.Run(key.String(), func(t *testing.T) {
+			model := NewModelWithSource(&fakeClient{}, time.Second, "native")
+			model.state = bubbleState()
+			model.hasState = true
+
+			updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyCtrlP})
+			model = updated.(Model)
+			if !model.paletteOpen {
+				t.Fatal("ctrl+p did not open palette")
+			}
+
+			updated, cmd := model.Update(key)
+			model = updated.(Model)
+			if cmd != nil {
+				t.Fatalf("close key %q returned command, want nil", key.String())
+			}
+			if model.paletteOpen {
+				t.Fatalf("close key %q left palette open", key.String())
+			}
+			if strings.Contains(plainView(model.View()), "Start task") {
+				t.Fatalf("close key %q left palette visible:\n%s", key.String(), plainView(model.View()))
+			}
+		})
+	}
+}
+
+func TestActionPaletteConsumesKeysWithoutExecutingActions(t *testing.T) {
+	client := &fakeClient{}
+	model := NewModelWithSource(client, time.Second, "native")
+	model.state = bubbleState()
+	model.hasState = true
+	model.paletteOpen = true
+
+	for _, key := range []tea.KeyMsg{
+		{Type: tea.KeyEnter},
+		{Type: tea.KeyRunes, Runes: []rune("r")},
+		{Type: tea.KeyDown},
+		{Type: tea.KeyRunes, Runes: []rune("j")},
+	} {
+		updated, cmd := model.Update(key)
+		model = updated.(Model)
+		if cmd != nil {
+			t.Fatalf("palette key %q returned command, want nil", key.String())
+		}
+	}
+	if client.calls != 0 {
+		t.Fatalf("palette key handling called runtime client %d times, want 0", client.calls)
+	}
+	if !model.paletteOpen {
+		t.Fatal("non-close palette key closed palette")
+	}
+	if model.selection.SelectedIndex != 0 {
+		t.Fatalf("palette navigation changed dashboard selection to %d, want 0", model.selection.SelectedIndex)
+	}
+}
+
+func TestActionPaletteRowsStayWithinNarrowWidth(t *testing.T) {
+	model := NewModelWithSource(&fakeClient{}, time.Second, "native")
+	model.state = bubbleState()
+	model.hasState = true
+	model.paletteOpen = true
+	model.width = 32
+
+	output := plainView(model.renderActionPalette())
+
+	for _, want := range []string{"Actions", "read-only", "..."} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("narrow palette missing %q:\n%s", want, output)
+		}
+	}
+	assertLinesWithinWidth(t, output, model.width)
+}
+
 func TestModelRefreshMessageUpdatesState(t *testing.T) {
 	model := NewModel(&fakeClient{}, time.Second)
 	state := bubbleState()
@@ -265,7 +377,7 @@ func TestModelViewRendersOperatorSections(t *testing.T) {
 		"> prov  codex: degraded !",
 		"Details Pane",
 		"select a row, then press d for details",
-		"q quit | j/k move | d details | r refresh | ? help",
+		"q quit | j/k move | d details | p action | r refresh | ? help",
 		"native | read-only | 1s refresh",
 	} {
 		if !strings.Contains(output, want) {
@@ -415,7 +527,7 @@ func TestStyledHeaderFooterAndSummaryUseVisibleWidth(t *testing.T) {
 		statusSegment{text: "alerts " + ansiStyle("!3") + " p:1 t:1 c:1", compact: ansiStyle("!3") + " p:1 t:1 c:1", priority: 0},
 	)
 	footer := statusLine(model.width,
-		statusSegment{text: ansiStyle("q quit | j/k move | d details | r refresh | ? help"), compact: ansiStyle("q | j/k | d | r | ? help"), priority: 0},
+		statusSegment{text: ansiStyle("q quit | j/k move | d details | p action | r refresh | ? help"), compact: ansiStyle("q j/k d p r ? help"), priority: 0},
 		statusSegment{text: "powershell", priority: 1},
 		statusSegment{text: "read-only", priority: 1},
 		statusSegment{text: "1s refresh", priority: 2},
@@ -1525,7 +1637,7 @@ func TestFooterPinsToBottomWhenHeightAllows(t *testing.T) {
 	if len(lines) != model.height {
 		t.Fatalf("rendered rows = %d, want terminal height %d:\n%s", len(lines), model.height, output)
 	}
-	if !strings.Contains(lines[len(lines)-1], "q quit | j/k move | d details | r refresh | ? help") {
+	if !strings.Contains(lines[len(lines)-1], "q quit | j/k move | d details | p action | r refresh | ? help") {
 		t.Fatalf("footer was not anchored on final row:\n%s", output)
 	}
 	if lines[len(lines)-2] != "" {
@@ -1544,7 +1656,7 @@ func TestLoadingFooterPinsToBottomWhenHeightAllows(t *testing.T) {
 	if len(lines) != model.height {
 		t.Fatalf("loading rendered rows = %d, want terminal height %d:\n%s", len(lines), model.height, output)
 	}
-	if !strings.Contains(lines[len(lines)-1], "q quit | j/k move | d details") {
+	if !strings.Contains(lines[len(lines)-1], "q") || !strings.Contains(lines[len(lines)-1], "p") {
 		t.Fatalf("loading footer was not anchored on final row:\n%s", output)
 	}
 }

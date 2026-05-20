@@ -36,6 +36,7 @@ type Model struct {
 	selection       dashboard.InteractiveModel
 	state           contracts.RuntimeState
 	hasState        bool
+	paletteOpen     bool
 	width           int
 	height          int
 	hasWindowSize   bool
@@ -120,6 +121,10 @@ func lineKeyMsg(key string) tea.KeyMsg {
 	switch strings.ToLower(key) {
 	case "":
 		return tea.KeyMsg{Type: tea.KeyEnter}
+	case "esc":
+		return tea.KeyMsg{Type: tea.KeyEsc}
+	case "ctrl+p":
+		return tea.KeyMsg{Type: tea.KeyCtrlP}
 	case "down":
 		return tea.KeyMsg{Type: tea.KeyDown}
 	case "up":
@@ -161,10 +166,23 @@ func (model Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (model Model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	if model.paletteOpen {
+		switch msg.String() {
+		case "esc", "q", "p", "ctrl+p":
+			model.paletteOpen = false
+			return model, nil
+		default:
+			return model, nil
+		}
+	}
+
 	itemCount := len(dashboard.SelectableItems(model.state))
 	switch msg.String() {
 	case "q", "ctrl+c":
 		return model, tea.Quit
+	case "p", "ctrl+p":
+		model.paletteOpen = true
+		return model, nil
 	case "j", "down":
 		model.selection.MoveDown(itemCount)
 		return model, nil
@@ -201,6 +219,9 @@ func (model Model) View() string {
 		output.WriteString(sectionTitle("Warnings"))
 		output.WriteString("\n")
 		output.WriteString(model.renderRuntimeErrorLine())
+	}
+	if model.paletteOpen {
+		output.WriteString(model.renderActionPalette())
 	}
 	return model.renderWithPinnedFooter(output.String())
 }
@@ -711,7 +732,7 @@ func (model Model) fixedRowsWithoutDetailsOrHelp() int {
 func (model Model) renderHelp(maxRows int) string {
 	var output strings.Builder
 	for _, line := range []string{
-		"  q quit   r refresh",
+		"  q quit   p actions   r refresh",
 		"  j/k move d details",
 		"  ? help",
 	} {
@@ -752,13 +773,34 @@ func (model Model) renderFooter() string {
 	width := model.contentWidth()
 	source := fallback(model.source, "unknown")
 	footer := statusLine(width,
-		statusSegment{text: "q quit | j/k move | d details | r refresh | ? help", compact: "q | j/k | d | r | ? help", priority: 0},
+		statusSegment{text: "q quit | j/k move | d details | p action | r refresh | ? help", compact: "q j/k d p r ? help", priority: 0},
 		statusSegment{text: source, priority: 1},
 		statusSegment{text: "read-only", priority: 1},
 		statusSegment{text: fmt.Sprintf("%s refresh", model.refreshInterval), compact: fmt.Sprintf("%s refresh", model.refreshInterval), priority: 2},
 		statusSegment{text: "last " + fallbackRefresh(model.lastRefresh), priority: 3},
 	)
 	return "\n" + dashboardStyles.footer.Render(footer) + "\n"
+}
+
+func (model Model) renderActionPalette() string {
+	var output strings.Builder
+	fmt.Fprintln(&output)
+	renderSection(&output, "Actions")
+	for _, action := range readOnlyActions() {
+		fmt.Fprintln(&output, model.renderLine(fmt.Sprintf("  %-14s read-only preview", action)))
+	}
+	fmt.Fprintln(&output, dashboardStyles.help.Render(model.renderLine("  esc/q/p close")))
+	return output.String()
+}
+
+func readOnlyActions() []string {
+	return []string{
+		"Start task",
+		"Run worker",
+		"Merge task",
+		"Cleanup task",
+		"Refresh state",
+	}
 }
 
 func (model Model) refreshCmd() tea.Cmd {
