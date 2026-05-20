@@ -181,6 +181,65 @@ func TestModelViewReadableAtNarrowWidth(t *testing.T) {
 	}
 }
 
+func TestFooterPreservesPrioritySegmentsAtNarrowWidth(t *testing.T) {
+	model := NewModelWithSource(&fakeClient{}, time.Second, "native")
+	model.state = bubbleState()
+	model.hasState = true
+	model.width = 48
+	model.lastRefresh = "2026-05-19T10:00:00Z"
+
+	output := plainView(model.renderFooter())
+
+	for _, want := range []string{"q", "j/k", "d", "r", "? help", "native", "read-only"} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("narrow footer missing %q:\n%s", want, output)
+		}
+	}
+	for _, dropped := range []string{"1s refresh", "last 2026-05-19T10:00:00Z"} {
+		if strings.Contains(output, dropped) {
+			t.Fatalf("narrow footer kept lower-priority segment %q:\n%s", dropped, output)
+		}
+	}
+	if strings.Contains(output, "...") {
+		t.Fatalf("narrow footer should drop whole low-priority segments before clipping:\n%s", output)
+	}
+}
+
+func TestFooterDropsRefreshBeforeKeyHints(t *testing.T) {
+	model := NewModelWithSource(&fakeClient{}, time.Second, "powershell")
+	model.width = 36
+	model.lastRefresh = "2026-05-19T10:00:00Z"
+
+	output := plainView(model.renderFooter())
+
+	for _, want := range []string{"q", "j/k", "d", "r", "? help"} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("tight footer dropped key hint %q before refresh text:\n%s", want, output)
+		}
+	}
+	if strings.Contains(output, "refresh") || strings.Contains(output, "last ") {
+		t.Fatalf("tight footer kept refresh metadata before key hints:\n%s", output)
+	}
+}
+
+func TestHeaderReadableAtNarrowWidth(t *testing.T) {
+	model := NewModelWithSource(&fakeClient{}, time.Second, "powershell")
+	model.state = bubbleState()
+	model.hasState = true
+	model.width = 42
+
+	output := plainView(model.renderHeader())
+
+	for _, want := range []string{"powershell", "read-only", "p:1 t:1 c:1"} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("narrow header missing priority text %q:\n%s", want, output)
+		}
+	}
+	if strings.Contains(output, "...") {
+		t.Fatalf("narrow header should prefer compact text over clipping:\n%s", output)
+	}
+}
+
 func TestModelViewUsesSingleColumnBelowTwoPaneThreshold(t *testing.T) {
 	model := NewModelWithSource(&fakeClient{}, time.Second, "native")
 	model.state = bubbleState()

@@ -14,6 +14,7 @@ const minimumTerminalWidth = 24
 const twoPaneWidthThreshold = 110
 const paneSeparator = "  |  "
 const detailLabelWidth = 19
+const statusSeparator = " | "
 
 func (model Model) contentWidth() int {
 	if model.width <= 0 {
@@ -49,6 +50,88 @@ func truncateValue(value string, width int) string {
 		return value
 	}
 	return string([]rune(value)[:width-3]) + "..."
+}
+
+type statusSegment struct {
+	text     string
+	compact  string
+	priority int
+}
+
+func statusLine(width int, segments ...statusSegment) string {
+	if width <= 0 {
+		return ""
+	}
+	active := append([]statusSegment{}, segments...)
+	for index := range active {
+		active[index].text = strings.TrimSpace(active[index].text)
+		active[index].compact = strings.TrimSpace(active[index].compact)
+	}
+	if line := joinStatusSegments(active, false); runeCount(line) <= width {
+		return line
+	}
+	active, line, ok := dropOptionalStatusSegments(active, width, false)
+	if ok {
+		return line
+	}
+	if line := joinStatusSegments(active, true); runeCount(line) <= width {
+		return line
+	}
+	if line, ok := dropStatusSegmentsToFit(active, width, true); ok {
+		return line
+	}
+	return truncateValue(joinStatusSegments(active, true), width)
+}
+
+func dropOptionalStatusSegments(segments []statusSegment, width int, compact bool) ([]statusSegment, string, bool) {
+	active := append([]statusSegment{}, segments...)
+	for len(active) > 1 {
+		dropIndex := lowestPriorityIndex(active)
+		if active[dropIndex].priority <= 1 {
+			return active, "", false
+		}
+		active = append(active[:dropIndex], active[dropIndex+1:]...)
+		if line := joinStatusSegments(active, compact); runeCount(line) <= width {
+			return active, line, true
+		}
+	}
+	return active, "", false
+}
+
+func dropStatusSegmentsToFit(segments []statusSegment, width int, compact bool) (string, bool) {
+	active := append([]statusSegment{}, segments...)
+	for len(active) > 1 {
+		dropIndex := lowestPriorityIndex(active)
+		active = append(active[:dropIndex], active[dropIndex+1:]...)
+		if line := joinStatusSegments(active, compact); runeCount(line) <= width {
+			return line, true
+		}
+	}
+	return "", false
+}
+
+func joinStatusSegments(segments []statusSegment, compact bool) string {
+	parts := make([]string, 0, len(segments))
+	for _, segment := range segments {
+		text := segment.text
+		if compact && segment.compact != "" {
+			text = segment.compact
+		}
+		if text != "" {
+			parts = append(parts, text)
+		}
+	}
+	return strings.Join(parts, statusSeparator)
+}
+
+func lowestPriorityIndex(segments []statusSegment) int {
+	index := 0
+	for candidate := 1; candidate < len(segments); candidate++ {
+		if segments[candidate].priority > segments[index].priority {
+			index = candidate
+		}
+	}
+	return index
 }
 
 func truncatePath(value string, width int) string {

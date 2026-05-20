@@ -206,13 +206,22 @@ func (model Model) View() string {
 func (model Model) renderHeader() string {
 	width := model.contentWidth()
 	warnings := model.warningCounts()
-	statusText := fmt.Sprintf("Brevity Runtime Dashboard | %s | read-only | alerts p:%d t:%d c:%d",
-		fallback(model.source, "unknown"), warnings.provider, warnings.task, warnings.cleanup)
+	source := fallback(model.source, "unknown")
+	statusText := statusLine(width,
+		statusSegment{text: "Brevity Runtime Dashboard", compact: "Brevity Runtime", priority: 2},
+		statusSegment{text: source, priority: 0},
+		statusSegment{text: "read-only", priority: 0},
+		statusSegment{text: fmt.Sprintf("alerts p:%d t:%d c:%d", warnings.provider, warnings.task, warnings.cleanup), compact: fmt.Sprintf("p:%d t:%d c:%d", warnings.provider, warnings.task, warnings.cleanup), priority: 0},
+	)
 	if !model.hasState {
-		statusText = fmt.Sprintf("Brevity Runtime Dashboard | %s | read-only | loading",
-			fallback(model.source, "unknown"))
+		statusText = statusLine(width,
+			statusSegment{text: "Brevity Runtime Dashboard", compact: "Brevity Runtime", priority: 2},
+			statusSegment{text: source, priority: 0},
+			statusSegment{text: "read-only", priority: 0},
+			statusSegment{text: "loading", priority: 0},
+		)
 	}
-	return dashboardStyles.title.Render(truncateValue(statusText, width)) + "\n"
+	return dashboardStyles.title.Render(statusText) + "\n"
 }
 
 func renderSection(output *strings.Builder, title string) {
@@ -674,10 +683,14 @@ func clampInt(value int, minimum int, maximum int) int {
 
 func (model Model) renderFooter() string {
 	width := model.contentWidth()
-	footer := truncateValue(fmt.Sprintf("q quit | j/k move | d details | r refresh | ? help  |  %s | read-only | %s refresh | last %s",
-		fallback(model.source, "unknown"),
-		model.refreshInterval,
-		fallbackRefresh(model.lastRefresh)), width)
+	source := fallback(model.source, "unknown")
+	footer := statusLine(width,
+		statusSegment{text: "q quit | j/k move | d details | r refresh | ? help", compact: "q | j/k | d | r | ? help", priority: 0},
+		statusSegment{text: source, priority: 1},
+		statusSegment{text: "read-only", priority: 1},
+		statusSegment{text: fmt.Sprintf("%s refresh", model.refreshInterval), compact: fmt.Sprintf("%s refresh", model.refreshInterval), priority: 2},
+		statusSegment{text: "last " + fallbackRefresh(model.lastRefresh), priority: 3},
+	)
 	return "\n" + dashboardStyles.footer.Render(footer) + "\n"
 }
 
