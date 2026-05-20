@@ -551,6 +551,161 @@ func TestModelViewRendersTaskCleanupAndActionDetails(t *testing.T) {
 	}
 }
 
+func TestProviderDetailWarningsStayReadable(t *testing.T) {
+	tests := []struct {
+		name      string
+		status    string
+		want      map[string]string
+		duplicate string
+	}{
+		{
+			name:   "degraded",
+			status: "degraded",
+			want: map[string]string{
+				"status": "degraded !",
+				"note":   "capacity limited",
+			},
+			duplicate: "degraded ! degraded",
+		},
+		{
+			name:   "unavailable",
+			status: "unavailable",
+			want: map[string]string{
+				"status": "unavailable !",
+				"note":   "capacity limited",
+			},
+			duplicate: "unavailable ! unavailable",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			state := bubbleStateWithProvider("codex", tt.status)
+			state.Providers.Health["codex"] = contracts.ProviderHealth{
+				Status:    tt.status,
+				UpdatedAt: "2026-05-20T10:00:00Z",
+				Note:      "capacity limited",
+			}
+			output := detailPaneView(state, 0)
+
+			for label, value := range tt.want {
+				if !containsDetail(output, label, value) {
+					t.Fatalf("provider detail missing %q=%q:\n%s", label, value, output)
+				}
+			}
+			if strings.Contains(output, tt.duplicate) {
+				t.Fatalf("provider detail duplicated warning wording %q:\n%s", tt.duplicate, output)
+			}
+		})
+	}
+}
+
+func TestTaskDetailWarningsStayReadable(t *testing.T) {
+	tests := []struct {
+		state     string
+		wantState string
+		duplicate string
+	}{
+		{state: "failed", wantState: "failed !", duplicate: "failed ! failed"},
+		{state: "blocked", wantState: "blocked !", duplicate: "blocked ! blocked"},
+		{state: "stale", wantState: "stale !", duplicate: "stale ! stale"},
+		{state: "provider-gated", wantState: "provider-gated !", duplicate: "provider-gated ! provider-gated"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.state, func(t *testing.T) {
+			output := detailPaneView(bubbleStateWithTaskState(tt.state), 0)
+
+			for _, detail := range []struct {
+				label string
+				value string
+			}{
+				{"type", "task"},
+				{"slug", "task-one"},
+				{"state", tt.wantState},
+			} {
+				if !containsDetail(output, detail.label, detail.value) {
+					t.Fatalf("task detail missing %q=%q:\n%s", detail.label, detail.value, output)
+				}
+			}
+			if strings.Contains(output, tt.duplicate) {
+				t.Fatalf("task detail duplicated state wording %q:\n%s", tt.duplicate, output)
+			}
+		})
+	}
+}
+
+func TestCleanupDetailWarningsStayReadable(t *testing.T) {
+	state := bubbleStateWithCleanupCandidate("warning", "destructive-if-removed")
+	state.Cleanup.OrphanedTaskBranches[0].SuggestedCommands = []string{
+		`git branch --delete task/cleanup-one`,
+		`.\brevity.ps1 task cleanup cleanup-one --force`,
+	}
+
+	output := detailPaneView(state, 0)
+
+	for _, detail := range []struct {
+		label string
+		value string
+	}{
+		{"type", "cleanup candidate"},
+		{"id", "cleanup-one"},
+		{"severity/category", "warning / destructive-if-removed !"},
+	} {
+		if !containsDetail(output, detail.label, detail.value) {
+			t.Fatalf("cleanup detail missing %q=%q:\n%s", detail.label, detail.value, output)
+		}
+	}
+	for _, want := range []string{
+		`suggested commands:`,
+		`- git branch --delete task/cleanup-one`,
+		`- .\brevity.ps1 task cleanup cleanup-one --force`,
+	} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("cleanup detail missing %q:\n%s", want, output)
+		}
+	}
+	for _, duplicate := range []string{
+		"warning ! warning",
+		"destructive-if-removed ! destructive-if-removed",
+	} {
+		if strings.Contains(output, duplicate) {
+			t.Fatalf("cleanup detail duplicated warning wording %q:\n%s", duplicate, output)
+		}
+	}
+}
+
+func TestDetailsPaneSelectionAndCollapsedTextStayIntentional(t *testing.T) {
+	model := NewModelWithSource(&fakeClient{}, time.Second, "native")
+	model.state = bubbleState()
+	model.hasState = true
+	model.selection.SelectedIndex = 1
+	model.selection.ShowDetails = true
+
+	output := plainView(model.View())
+	if !containsDetail(output, "type", "task") || !containsDetail(output, "slug", "task-one") {
+		t.Fatalf("details pane did not render selected task details:\n%s", output)
+	}
+
+	model.selection.ShowDetails = false
+	output = plainView(model.View())
+	if !strings.Contains(output, "select a row, then press d for details") {
+		t.Fatalf("collapsed details text is not intentional:\n%s", output)
+	}
+	if strings.Contains(output, "no details selected") {
+		t.Fatalf("collapsed details text should not look like an empty selection:\n%s", output)
+	}
+
+	empty := NewModelWithSource(&fakeClient{}, time.Second, "native")
+	empty.state = contracts.RuntimeState{Schema: contracts.RuntimeStateSchema}
+	empty.hasState = true
+	empty.selection.ShowDetails = true
+	output = plainView(empty.View())
+	if !strings.Contains(output, "no details selected") {
+		t.Fatalf("empty selected-details text is not intentional:\n%s", output)
+	}
+}
+
 func TestSelectableListKeepsSelectedItemVisible(t *testing.T) {
 	model := NewModelWithSource(&fakeClient{}, time.Second, "native")
 	model.state = bubbleStateWithManyTasks(30)
@@ -809,4 +964,13 @@ func plainView(output string) string {
 func containsDetail(output string, label string, value string) bool {
 	pattern := regexp.MustCompile(`(?m)^\s+` + regexp.QuoteMeta(label) + `:\s+` + regexp.QuoteMeta(value))
 	return pattern.FindStringIndex(output) != nil
+}
+
+func detailPaneView(state contracts.RuntimeState, selected int) string {
+	model := NewModelWithSource(&fakeClient{}, time.Second, "native")
+	model.state = state
+	model.hasState = true
+	model.selection.SelectedIndex = selected
+	model.selection.ShowDetails = true
+	return plainView(model.View())
 }

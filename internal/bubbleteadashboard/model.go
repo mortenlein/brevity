@@ -804,7 +804,7 @@ func (model Model) renderDetails(output io.Writer, items []dashboard.SelectionIt
 		task := item.Task
 		model.detailText(output, "type", "task")
 		model.detailText(output, "slug", fallback(task.Slug, "(unknown)"))
-		model.detailText(output, "state", fallback(firstNonEmpty(task.NormalizedState, task.Status), "(unknown)"))
+		model.detailText(output, "state", fallback(firstNonEmpty(task.NormalizedState, task.Status), "(unknown)")+itemWarning(item))
 		model.detailText(output, "branch", fallback(task.Branch, "(unknown)"))
 		model.detailPath(output, "worktree", fallback(taskWorktreePath(task), "(unknown)"))
 		model.detailText(output, "worktree exists", optionalTaskBool(task.WorktreeExists, task.Worktree))
@@ -819,7 +819,7 @@ func (model Model) renderDetails(output io.Writer, items []dashboard.SelectionIt
 		candidate := item.CleanupCandidate
 		model.detailText(output, "type", "cleanup candidate")
 		model.detailText(output, "id", fallback(candidate.ID, "(unknown)"))
-		model.detailText(output, "severity/category", fmt.Sprintf("%s / %s", fallback(candidate.Severity, "(unknown)"), fallback(candidate.Category, "(unknown)")))
+		model.detailText(output, "severity/category", fmt.Sprintf("%s / %s%s", fallback(candidate.Severity, "(unknown)"), fallback(candidate.Category, "(unknown)"), itemWarning(item)))
 		model.detailPath(output, "path", fallback(candidate.Path, "(none)"))
 		model.detailText(output, "branch", fallback(candidate.Branch, "(none)"))
 		detail(output, "dirty", "%t", candidate.Dirty)
