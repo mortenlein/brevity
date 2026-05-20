@@ -1097,43 +1097,45 @@ func (model Model) renderDetails(output io.Writer, items []dashboard.SelectionIt
 	switch item.Kind {
 	case dashboard.SelectionProvider:
 		health := item.ProviderHealth
-		model.detailText(output, "type", "provider")
-		model.detailText(output, "name", fallback(item.ProviderName, "(unknown)"))
 		model.detailText(output, "status", fallback(health.Status, "unknown")+itemWarning(item))
+		model.detailText(output, "provider", fallback(item.ProviderName, "(unknown)"))
+		model.detailText(output, "reason", fallback(health.Note, "(none)"))
+		model.detailText(output, "action", providerGuidance(health))
 		model.detailText(output, "updated", fallback(health.UpdatedAt, "(unknown)"))
-		model.detailText(output, "note", fallback(health.Note, "(none)"))
-		model.detailText(output, "guidance", providerGuidance(health))
+		model.detailText(output, "type", "provider")
 	case dashboard.SelectionTask:
 		task := item.Task
-		model.detailText(output, "type", "task")
-		model.detailText(output, "slug", fallback(task.Slug, "(unknown)"))
 		model.detailText(output, "state", fallback(firstNonEmpty(task.NormalizedState, task.Status), "(unknown)")+itemWarning(item))
+		model.detailText(output, "task", fallback(task.Slug, "(unknown)"))
+		model.detailText(output, "action", taskGuidance(task))
+		model.detailText(output, "provider", fmt.Sprintf("%s / %s", fallback(taskProvider(task), "(unknown)"), fallback(taskProfile(task), "(unknown)")))
 		model.detailText(output, "branch", fallback(task.Branch, "(unknown)"))
 		model.detailPath(output, "worktree", fallback(taskWorktreePath(task), "(unknown)"))
 		model.detailText(output, "worktree exists", optionalTaskBool(task.WorktreeExists, task.Worktree))
-		model.detailText(output, "provider/profile", fmt.Sprintf("%s / %s", fallback(taskProvider(task), "(unknown)"), fallback(taskProfile(task), "(unknown)")))
 		model.detailText(output, "latest run", fallback(taskLatestRun(task), "(none)"))
 		if task.Context != nil {
 			detail(output, "context", "%d materialized, %d missing", task.Context.MaterializedFileCount, len(task.Context.MissingFiles))
 		} else {
 			model.detailText(output, "context", "(unknown)")
 		}
+		model.detailText(output, "type", "task")
 	case dashboard.SelectionCleanup:
 		candidate := item.CleanupCandidate
-		model.detailText(output, "type", "cleanup candidate")
-		model.detailText(output, "id", fallback(candidate.ID, "(unknown)"))
-		model.detailText(output, "severity/category", fmt.Sprintf("%s / %s%s", fallback(candidate.Severity, "(unknown)"), fallback(candidate.Category, "(unknown)"), itemWarning(item)))
+		model.detailText(output, "risk", fmt.Sprintf("%s / %s%s", fallback(candidate.Severity, "(unknown)"), fallback(candidate.Category, "(unknown)"), itemWarning(item)))
 		model.detailPath(output, "path", fallback(candidate.Path, "(none)"))
+		model.detailText(output, "action", cleanupGuidance(candidate))
+		model.detailText(output, "id", fallback(candidate.ID, "(unknown)"))
 		model.detailText(output, "branch", fallback(candidate.Branch, "(none)"))
 		detail(output, "dirty", "%t", candidate.Dirty)
-		model.detailText(output, "removable by execute", optionalBool(candidate.RemovableByExecute))
-		model.detailText(output, "destructive if unmerged", optionalBool(candidate.DestructiveIfUnmerged))
+		model.detailText(output, "removable", optionalBool(candidate.RemovableByExecute))
+		model.detailText(output, "destructive", optionalBool(candidate.DestructiveIfUnmerged))
 		model.renderStringList(output, "dirty reasons", candidate.DirtyReasons)
 		model.renderStringList(output, "suggested commands", candidate.SuggestedCommands)
+		model.detailText(output, "type", "cleanup candidate")
 	case dashboard.SelectionAction:
-		model.detailText(output, "type", "suggested action")
 		model.detailText(output, "action", fallback(item.ActionText, "(none)"))
 		model.detailText(output, "guidance", "display-only; no command is executed from this dashboard")
+		model.detailText(output, "type", "suggested action")
 	}
 }
 
@@ -1146,6 +1148,34 @@ func providerGuidance(health contracts.ProviderHealth) string {
 	default:
 		return "(none)"
 	}
+}
+
+func taskGuidance(task contracts.TaskSummary) string {
+	switch strings.ToLower(strings.TrimSpace(firstNonEmpty(task.NormalizedState, task.Status))) {
+	case "blocked":
+		return "inspect blocker context before rerun"
+	case "failed":
+		return "inspect latest run log before retry"
+	case "stale":
+		return "refresh runtime state before acting"
+	case "provider-gated":
+		return "check provider health before rerun"
+	case "review":
+		return "review branch and worktree state"
+	default:
+		return "(none)"
+	}
+}
+
+func cleanupGuidance(candidate contracts.CleanupCandidate) string {
+	category := strings.ToLower(strings.TrimSpace(candidate.Category))
+	if strings.Contains(category, "orphan") || strings.Contains(category, "inspection") || strings.Contains(category, "destructive") || candidate.Dirty || optionalBool(candidate.DestructiveIfUnmerged) == "true" {
+		return "inspect before cleanup"
+	}
+	if optionalBool(candidate.RemovableByExecute) == "true" {
+		return "eligible for cleanup after review"
+	}
+	return "review cleanup candidate"
 }
 
 func firstNonEmpty(values ...string) string {

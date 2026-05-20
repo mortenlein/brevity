@@ -859,8 +859,8 @@ func TestModelViewRenderInvariantsAcrossWidthsSourcesAndModes(t *testing.T) {
 		wantDetails string
 	}{
 		{name: "collapsed-details", wantDetails: "select a row, then press d for details"},
-		{name: "expanded-details", showDetails: true, wantDetails: "type:"},
-		{name: "help-visible", showDetails: true, showHelp: true, wantDetails: "type:"},
+		{name: "expanded-details", showDetails: true, wantDetails: "state:"},
+		{name: "help-visible", showDetails: true, showHelp: true, wantDetails: "state:"},
 	}
 
 	for _, width := range widths {
@@ -1298,9 +1298,9 @@ func TestModelViewRendersDetailsAndHelp(t *testing.T) {
 		value string
 	}{
 		{"type", "provider"},
-		{"name", "codex"},
+		{"provider", "codex"},
 		{"status", "degraded !"},
-		{"guidance", "provider is degraded"},
+		{"action", "provider is degraded"},
 	} {
 		if !containsDetail(output, detail.label, detail.value) {
 			t.Fatalf("view missing detail %q=%q:\n%s", detail.label, detail.value, output)
@@ -1318,12 +1318,12 @@ func TestModelViewRendersTaskCleanupAndActionDetails(t *testing.T) {
 		{
 			name:     "task",
 			selected: 1,
-			details:  map[string]string{"type": "task", "slug": "task-one", "state": "blocked", "branch": "task/task-one"},
+			details:  map[string]string{"type": "task", "task": "task-one", "state": "blocked", "action": "inspect blocker context"},
 		},
 		{
 			name:     "cleanup",
 			selected: 2,
-			details:  map[string]string{"type": "cleanup candidate", "id": "orphan-branch:task-old", "severity/category": "warning / requires-inspection"},
+			details:  map[string]string{"type": "cleanup candidate", "id": "orphan-branch:task-old", "risk": "warning / requires-inspection", "action": "inspect before cleanup"},
 		},
 		{
 			name:     "action",
@@ -1356,6 +1356,37 @@ func TestModelViewRendersTaskCleanupAndActionDetails(t *testing.T) {
 	}
 }
 
+func TestDetailFieldsLeadWithOperatorCriticalContext(t *testing.T) {
+	tests := []struct {
+		name     string
+		selected int
+		want     []string
+	}{
+		{
+			name:     "provider",
+			selected: 0,
+			want:     []string{"status:", "provider:", "reason:", "action:", "updated:", "type:"},
+		},
+		{
+			name:     "cleanup",
+			selected: 2,
+			want:     []string{"risk:", "path:", "action:", "id:", "branch:", "dirty:", "removable:", "destructive:", "type:"},
+		},
+		{
+			name:     "next action",
+			selected: 3,
+			want:     []string{"action:", "guidance:", "type:"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			output := detailPaneView(bubbleState(), tt.selected)
+			assertSubstringsInOrder(t, output, tt.want...)
+		})
+	}
+}
+
 func TestProviderDetailWarningsStayReadable(t *testing.T) {
 	tests := []struct {
 		name      string
@@ -1368,7 +1399,7 @@ func TestProviderDetailWarningsStayReadable(t *testing.T) {
 			status: "degraded",
 			want: map[string]string{
 				"status": "degraded !",
-				"note":   "capacity limited",
+				"reason": "capacity limited",
 			},
 			duplicate: "degraded ! degraded",
 		},
@@ -1377,7 +1408,7 @@ func TestProviderDetailWarningsStayReadable(t *testing.T) {
 			status: "unavailable",
 			want: map[string]string{
 				"status": "unavailable !",
-				"note":   "capacity limited",
+				"reason": "capacity limited",
 			},
 			duplicate: "unavailable ! unavailable",
 		},
@@ -1426,7 +1457,7 @@ func TestTaskDetailWarningsStayReadable(t *testing.T) {
 				value string
 			}{
 				{"type", "task"},
-				{"slug", "task-one"},
+				{"task", "task-one"},
 				{"state", tt.wantState},
 			} {
 				if !containsDetail(output, detail.label, detail.value) {
@@ -1455,7 +1486,8 @@ func TestCleanupDetailWarningsStayReadable(t *testing.T) {
 	}{
 		{"type", "cleanup candidate"},
 		{"id", "cleanup-one"},
-		{"severity/category", "warning / destructive-if-removed !"},
+		{"risk", "warning / destructive-if-removed !"},
+		{"action", "inspect before cleanup"},
 	} {
 		if !containsDetail(output, detail.label, detail.value) {
 			t.Fatalf("cleanup detail missing %q=%q:\n%s", detail.label, detail.value, output)
@@ -1515,7 +1547,7 @@ func TestTwoPaneDetailTruncationPreservesWarningMarkers(t *testing.T) {
 		{
 			name:  "cleanup warning",
 			state: bubbleStateWithCleanupCandidate("warning", "destructive-if-removed"),
-			label: "severity/category",
+			label: "risk",
 			value: "warning / destructive-if-removed !",
 		},
 	}
@@ -1574,7 +1606,7 @@ func TestCleanupDetailTruncationPreservesDestructiveContextBeforeCommands(t *tes
 
 	for _, want := range []string{
 		"warning / destructive-if... !",
-		"destructive if unmerged: true",
+		"destructive:         true",
 		`suggested commands:`,
 		`- .\brevity.ps1 task cleanup cleanup-one --force`,
 	} {
@@ -1772,7 +1804,7 @@ func TestDetailsPaneSelectionAndCollapsedTextStayIntentional(t *testing.T) {
 	model.selection.ShowDetails = true
 
 	output := plainView(model.View())
-	if !containsDetail(output, "type", "task") || !containsDetail(output, "slug", "task-one") {
+	if !containsDetail(output, "type", "task") || !containsDetail(output, "task", "task-one") {
 		t.Fatalf("details pane did not render selected task details:\n%s", output)
 	}
 
@@ -2235,6 +2267,18 @@ func plainView(output string) string {
 func containsDetail(output string, label string, value string) bool {
 	pattern := regexp.MustCompile(`(?m)\s+` + regexp.QuoteMeta(label) + `:\s+` + regexp.QuoteMeta(value))
 	return pattern.FindStringIndex(output) != nil
+}
+
+func assertSubstringsInOrder(t *testing.T, output string, values ...string) {
+	t.Helper()
+	offset := 0
+	for _, value := range values {
+		index := strings.Index(output[offset:], value)
+		if index < 0 {
+			t.Fatalf("output missing %q after offset %d:\n%s", value, offset, output)
+		}
+		offset += index + len(value)
+	}
 }
 
 func detailPaneView(state contracts.RuntimeState, selected int) string {
