@@ -18,6 +18,7 @@ import (
 
 const defaultRefreshInterval = 5 * time.Second
 const minimumVisibleListRows = 1
+const ultraSmallHeightThreshold = 3
 const fullHelpRows = 5
 const detailTruncatedIndicator = "  ... details truncated"
 const helpTruncatedIndicator = "  ... help truncated"
@@ -37,6 +38,7 @@ type Model struct {
 	hasState        bool
 	width           int
 	height          int
+	hasWindowSize   bool
 	lastRefresh     string
 	lastError       error
 	refreshInterval time.Duration
@@ -136,6 +138,7 @@ func (model Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		model.width = msg.Width
 		model.height = msg.Height
+		model.hasWindowSize = true
 		return model, nil
 	case tea.KeyMsg:
 		return model.updateKey(msg)
@@ -182,6 +185,9 @@ func (model Model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 func (model Model) View() string {
+	if model.usesUltraSmallHeightMode() {
+		return model.renderUltraSmallHeightView()
+	}
 	if !model.hasState {
 		return model.renderLoadingView()
 	}
@@ -197,6 +203,35 @@ func (model Model) View() string {
 		output.WriteString(model.renderRuntimeErrorLine())
 	}
 	return model.renderWithPinnedFooter(output.String())
+}
+
+func (model Model) usesUltraSmallHeightMode() bool {
+	return model.height > 0 && model.height <= ultraSmallHeightThreshold || model.hasWindowSize && model.height <= ultraSmallHeightThreshold
+}
+
+func (model Model) renderUltraSmallHeightView() string {
+	if model.hasWindowSize && model.height <= 0 {
+		return ""
+	}
+
+	width := model.contentWidth()
+	segments := []statusSegment{
+		{text: "Brevity", priority: 0},
+	}
+	if !model.hasState {
+		segments = append(segments, statusSegment{text: "loading", priority: 0})
+	}
+	if model.lastError != nil || model.hasState && model.warningCounts().total() > 0 {
+		segments = append(segments, statusSegment{text: "warning", priority: 0})
+	}
+	segments = append(segments,
+		statusSegment{text: fallback(model.source, "unknown"), priority: 0},
+		statusSegment{text: "read-only", priority: 0},
+		statusSegment{text: "q quit", priority: 1},
+	)
+
+	line := dashboardStyles.title.Render(statusLine(width, segments...))
+	return truncateValue(line, width) + "\n"
 }
 
 func (model Model) renderLoadingView() string {

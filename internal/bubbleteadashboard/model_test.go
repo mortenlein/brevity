@@ -1380,11 +1380,73 @@ func TestSelectableListSmallHeightDoesNotPanic(t *testing.T) {
 
 	output := plainView(model.View())
 
-	if !strings.Contains(output, "showing 6-6 of 11") {
-		t.Fatalf("small-height view missing one-row window indicator:\n%s", output)
+	for _, want := range []string{"Brevity", "warning", "native", "read-only", "q quit"} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("ultra-small-height view missing %q:\n%s", want, output)
+		}
 	}
-	if !strings.Contains(output, "> task  task-05") {
-		t.Fatalf("small-height view missing selected row:\n%s", output)
+	for _, clipped := range []string{"Selectable List", "Details Pane", "showing 6-6 of 11", "> task  task-05"} {
+		if strings.Contains(output, clipped) {
+			t.Fatalf("ultra-small-height view rendered normal layout fragment %q:\n%s", clipped, output)
+		}
+	}
+	assertLinesWithinWidth(t, output, model.contentWidth())
+}
+
+func TestUltraSmallHeightLoadingAndErrorViewsStayMinimal(t *testing.T) {
+	tests := []struct {
+		name      string
+		height    int
+		hasState  bool
+		lastError error
+		want      []string
+	}{
+		{name: "loading height one", height: 1, want: []string{"Brevity", "loading", "native", "read-only", "q quit"}},
+		{name: "loading error height two", height: 2, lastError: errors.New("runtime unavailable"), want: []string{"Brevity", "loading", "warning", "native", "read-only", "q quit"}},
+		{name: "state warning height three", height: 3, hasState: true, want: []string{"Brevity", "warning", "native", "read-only", "q quit"}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			model := NewModelWithSource(&fakeClient{}, time.Second, "native")
+			model.height = tt.height
+			model.lastError = tt.lastError
+			if tt.hasState {
+				model.state = bubbleState()
+				model.hasState = true
+			}
+
+			output := plainView(model.View())
+			lines := strings.Split(strings.TrimSuffix(output, "\n"), "\n")
+			if len(lines) > tt.height {
+				t.Fatalf("ultra-small-height rows = %d, want <= %d:\n%s", len(lines), tt.height, output)
+			}
+			for _, want := range tt.want {
+				if !strings.Contains(output, want) {
+					t.Fatalf("ultra-small-height view missing %q:\n%s", want, output)
+				}
+			}
+			for _, clipped := range []string{"Runtime Summary", "Selectable List", "Details Pane", "Warnings"} {
+				if strings.Contains(output, clipped) {
+					t.Fatalf("ultra-small-height view rendered normal layout fragment %q:\n%s", clipped, output)
+				}
+			}
+			assertLinesWithinWidth(t, output, model.contentWidth())
+		})
+	}
+}
+
+func TestUltraSmallHeightZeroFromTerminalDoesNotPanic(t *testing.T) {
+	model := NewModelWithSource(&fakeClient{}, time.Second, "native")
+	model.state = bubbleState()
+	model.hasState = true
+
+	updated, _ := model.Update(tea.WindowSizeMsg{Width: 80, Height: 0})
+	model = updated.(Model)
+
+	output := model.View()
+	if output != "" {
+		t.Fatalf("zero-height terminal rendered output %q, want empty", plainView(output))
 	}
 }
 
