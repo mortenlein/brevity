@@ -96,6 +96,43 @@ func TestModelRefreshMessageUpdatesState(t *testing.T) {
 	}
 }
 
+func TestModelStoresWindowSize(t *testing.T) {
+	model := NewModel(&fakeClient{}, time.Second)
+
+	updated, _ := model.Update(tea.WindowSizeMsg{Width: 72, Height: 24})
+	model = updated.(Model)
+
+	if model.width != 72 {
+		t.Fatalf("width = %d, want 72", model.width)
+	}
+	if model.height != 24 {
+		t.Fatalf("height = %d, want 24", model.height)
+	}
+}
+
+func TestTruncateValue(t *testing.T) {
+	got := truncateValue("abcdefghijklmnopqrstuvwxyz", 12)
+	if got != "abcdefghi..." {
+		t.Fatalf("truncateValue = %q, want %q", got, "abcdefghi...")
+	}
+}
+
+func TestTruncatePathPreservesSuffix(t *testing.T) {
+	path := `C:\dev\repos\active\brevity\worktrees\active\very-long-task-name\runs\latest\worker-output.log`
+
+	got := truncatePath(path, 32)
+
+	if len([]rune(got)) > 32 {
+		t.Fatalf("truncatePath length = %d, want <= 32: %q", len([]rune(got)), got)
+	}
+	if !strings.HasPrefix(got, "...") {
+		t.Fatalf("truncatePath = %q, want prefix ...", got)
+	}
+	if !strings.HasSuffix(got, `latest\worker-output.log`) {
+		t.Fatalf("truncatePath = %q, want important suffix", got)
+	}
+}
+
 func TestModelViewRendersOperatorSections(t *testing.T) {
 	model := NewModelWithSource(&fakeClient{}, time.Second, "native")
 	model.state = bubbleState()
@@ -117,6 +154,47 @@ func TestModelViewRendersOperatorSections(t *testing.T) {
 		if !strings.Contains(output, want) {
 			t.Fatalf("view missing %q:\n%s", want, output)
 		}
+	}
+}
+
+func TestModelViewReadableAtNarrowWidth(t *testing.T) {
+	model := NewModelWithSource(&fakeClient{}, time.Second, "native")
+	model.state = bubbleStateWithLongPaths()
+	model.hasState = true
+	model.width = 48
+	model.selection.SelectedIndex = 1
+	model.selection.ShowDetails = true
+
+	output := plainView(model.View())
+
+	for index, line := range strings.Split(output, "\n") {
+		if len([]rune(line)) > model.width {
+			t.Fatalf("line %d width = %d, want <= %d:\n%s", index+1, len([]rune(line)), model.width, output)
+		}
+	}
+	if !strings.Contains(output, "...") {
+		t.Fatalf("narrow view missing truncation marker:\n%s", output)
+	}
+	if strings.Contains(output, `C:\dev\repos\active\brevity\worktrees\active\very-long-task-name`) {
+		t.Fatalf("narrow view contains unshortened long path:\n%s", output)
+	}
+}
+
+func TestModelViewShortensLongPaths(t *testing.T) {
+	model := NewModelWithSource(&fakeClient{}, time.Second, "native")
+	model.state = bubbleStateWithLongPaths()
+	model.hasState = true
+	model.width = 60
+	model.selection.SelectedIndex = 1
+	model.selection.ShowDetails = true
+
+	output := plainView(model.View())
+
+	if !strings.Contains(output, `worktree: ...`) || !strings.Contains(output, `very-long-task-name`) {
+		t.Fatalf("view missing shortened path suffix:\n%s", output)
+	}
+	if strings.Contains(output, `C:\dev\repos\active\brevity\worktrees\active\very-long-task-name`) {
+		t.Fatalf("view contains unshortened long path:\n%s", output)
 	}
 }
 
@@ -230,6 +308,18 @@ func bubbleState() contracts.RuntimeState {
 		},
 		SuggestedNextActions: []string{"Inspect state."},
 	}
+}
+
+func bubbleStateWithLongPaths() contracts.RuntimeState {
+	state := bubbleState()
+	state.RepoRoot = `C:\dev\repos\active\brevity\with\an\unusually\deep\workspace\path`
+	state.Tasks[0].WorktreePath = `C:\dev\repos\active\brevity\worktrees\active\very-long-task-name`
+	state.Tasks[0].LatestRunLogPath = `C:\dev\repos\active\brevity\.brevity\runs\task-one\20260520-120000\worker-output.log`
+	state.Cleanup.OrphanedTaskBranches[0].Path = `C:\dev\repos\active\brevity\worktrees\completed\very-long-task-name`
+	state.Cleanup.OrphanedTaskBranches[0].SuggestedCommands = []string{
+		`git -C C:\dev\repos\active\brevity\worktrees\completed\very-long-task-name status --short`,
+	}
+	return state
 }
 
 var ansiPattern = regexp.MustCompile(`\x1b\[[0-9;]*m`)

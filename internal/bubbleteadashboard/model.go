@@ -31,6 +31,8 @@ type Model struct {
 	selection       dashboard.InteractiveModel
 	state           contracts.RuntimeState
 	hasState        bool
+	width           int
+	height          int
 	lastRefresh     string
 	lastError       error
 	refreshInterval time.Duration
@@ -127,6 +129,10 @@ func (model Model) Init() tea.Cmd {
 
 func (model Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
+	case tea.WindowSizeMsg:
+		model.width = msg.Width
+		model.height = msg.Height
+		return model, nil
 	case tea.KeyMsg:
 		return model.updateKey(msg)
 	case refreshMsg:
@@ -194,11 +200,13 @@ func (model Model) View() string {
 }
 
 func (model Model) renderHeader() string {
+	width := model.contentWidth()
+	title := truncateValue(fmt.Sprintf("Brevity Runtime Dashboard [read-only] [source: %s]",
+		fallback(model.source, "unknown")), width-4)
 	return fmt.Sprintf(
 		"%s\n%s\n",
-		dashboardStyles.title.Render(fmt.Sprintf("Brevity Runtime Dashboard [read-only] [source: %s]",
-			fallback(model.source, "unknown"))),
-		dashboardStyles.rule.Render("==============================================="),
+		dashboardStyles.title.Render(title),
+		dashboardStyles.rule.Render(strings.Repeat("=", width)),
 	)
 }
 
@@ -220,20 +228,25 @@ func renderWarningText(text string) string {
 	return " " + dashboardStyles.warning.Render(text)
 }
 
-func selectedRow(text string) string {
+func (model Model) selectedRow(text string) string {
 	return dashboardStyles.selectedRow.Render(text)
 }
 
-func unselectedRow(text string) string {
+func (model Model) unselectedRow(text string) string {
 	return text
 }
 
-func renderRow(selected bool, kind string, label string, warning string) string {
-	line := fmt.Sprintf("%s %-8s %s%s", rowMarker(selected), kind, label, warning)
-	if selected {
-		return selectedRow(line)
+func (model Model) renderRow(selected bool, kind string, label string, warning string) string {
+	prefix := fmt.Sprintf("%s %-8s ", rowMarker(selected), kind)
+	warningWidth := 0
+	if warning != "" {
+		warningWidth = 2
 	}
-	return unselectedRow(line)
+	line := prefix + truncateValue(label, model.contentWidth()-len(prefix)-warningWidth) + warning
+	if selected {
+		return model.selectedRow(line)
+	}
+	return model.unselectedRow(line)
 }
 
 func rowMarker(selected bool) string {
@@ -256,15 +269,15 @@ func (model Model) renderSummary() string {
 	var output strings.Builder
 	fmt.Fprintln(&output)
 	renderSection(&output, "Runtime Summary")
-	fmt.Fprintf(&output, "  repo: %s\n", fallback(state.RepoRoot, "(unknown)"))
-	fmt.Fprintf(&output, "  generated: %s\n", fallback(state.GeneratedAt, "(unknown)"))
-	fmt.Fprintf(&output, "  providers: %d total, %d degraded, %d unavailable%s\n",
+	fmt.Fprintf(&output, "  repo: %s\n", model.renderInlinePath(fallback(state.RepoRoot, "(unknown)"), len("  repo: ")))
+	fmt.Fprintf(&output, "%s\n", model.renderLine(fmt.Sprintf("  generated: %s", fallback(state.GeneratedAt, "(unknown)"))))
+	fmt.Fprintf(&output, "%s\n", model.renderLine(fmt.Sprintf("  providers: %d total, %d degraded, %d unavailable%s",
 		state.Providers.Summary.Total,
 		state.Providers.Summary.Degraded,
 		state.Providers.Summary.Unavailable,
 		renderWarningCount(state.Providers.Summary.Degraded+state.Providers.Summary.Unavailable),
-	)
-	fmt.Fprintf(&output, "  tasks: %d tracked, %d runnable, %d blocked, %d stale, %d provider-gated, %d review%s\n",
+	)))
+	fmt.Fprintf(&output, "%s\n", model.renderLine(fmt.Sprintf("  tasks: %d tracked, %d runnable, %d blocked, %d stale, %d provider-gated, %d review%s",
 		state.TaskCounts.Tracked,
 		state.TaskCounts.Runnable,
 		state.TaskCounts.Blocked,
@@ -272,14 +285,14 @@ func (model Model) renderSummary() string {
 		state.TaskCounts.ProviderGated,
 		state.TaskCounts.Review,
 		renderWarningCount(state.TaskCounts.Blocked+state.TaskCounts.Stale+state.TaskCounts.ProviderGated),
-	)
+	)))
 	if state.Cleanup != nil && state.Cleanup.Summary != nil {
 		summary := state.Cleanup.Summary
-		fmt.Fprintf(&output, "  cleanup: %d candidates, %d require inspection%s\n",
+		fmt.Fprintf(&output, "%s\n", model.renderLine(fmt.Sprintf("  cleanup: %d candidates, %d require inspection%s",
 			summary.TotalCandidates,
 			summary.RequiresInspectionCount,
 			renderWarningCount(summary.TotalCandidates),
-		)
+		)))
 	} else {
 		fmt.Fprintln(&output, "  cleanup: no candidates reported")
 	}
@@ -298,14 +311,14 @@ func (model Model) renderListAndDetails() string {
 		fmt.Fprintln(&output, "  (none)")
 	} else {
 		for index, item := range items {
-			fmt.Fprintln(&output, renderRow(index == selection.SelectedIndex, string(item.Kind), item.Label, itemWarning(item)))
+			fmt.Fprintln(&output, model.renderRow(index == selection.SelectedIndex, string(item.Kind), item.Label, itemWarning(item)))
 		}
 	}
 
 	fmt.Fprintln(&output)
 	renderSection(&output, "Details Pane")
 	if selection.ShowDetails {
-		renderDetails(&output, items, selection.SelectedIndex)
+		model.renderDetails(&output, items, selection.SelectedIndex)
 	} else {
 		fmt.Fprintln(&output, "  details hidden; press d or enter")
 	}
@@ -322,14 +335,17 @@ func (model Model) renderListAndDetails() string {
 }
 
 func (model Model) renderFooter() string {
+	width := model.contentWidth()
+	help := truncateValue("  q quit | j/k or arrows move | d/enter details | r refresh | ? help", width)
+	refresh := truncateValue(fmt.Sprintf("  refresh: every %s | last success: %s | source: %s",
+		model.refreshInterval,
+		fallbackRefresh(model.lastRefresh),
+		fallback(model.source, "unknown")), width)
 	return fmt.Sprintf(
 		"\n%s\n%s\n%s\n",
 		sectionTitle("Footer"),
-		dashboardStyles.footer.Render("  q quit | j/k or arrows move | d/enter details | r refresh | ? help"),
-		dashboardStyles.footer.Render(fmt.Sprintf("  refresh: every %s | last success: %s | source: %s",
-			model.refreshInterval,
-			fallbackRefresh(model.lastRefresh),
-			fallback(model.source, "unknown"))),
+		dashboardStyles.footer.Render(help),
+		dashboardStyles.footer.Render(refresh),
 	)
 }
 
@@ -407,7 +423,7 @@ func itemWarning(item dashboard.SelectionItem) string {
 	return ""
 }
 
-func renderDetails(output io.Writer, items []dashboard.SelectionItem, selected int) {
+func (model Model) renderDetails(output io.Writer, items []dashboard.SelectionItem, selected int) {
 	if len(items) == 0 {
 		fmt.Fprintln(output, "  no selectable item")
 		return
@@ -419,43 +435,43 @@ func renderDetails(output io.Writer, items []dashboard.SelectionItem, selected i
 	switch item.Kind {
 	case dashboard.SelectionProvider:
 		health := item.ProviderHealth
-		detailText(output, "type", "provider")
-		detailText(output, "name", fallback(item.ProviderName, "(unknown)"))
-		detailText(output, "status", fallback(health.Status, "unknown")+itemWarning(item))
-		detailText(output, "updated", fallback(health.UpdatedAt, "(unknown)"))
-		detailText(output, "note", fallback(health.Note, "(none)"))
-		detailText(output, "guidance", providerGuidance(health))
+		model.detailText(output, "type", "provider")
+		model.detailText(output, "name", fallback(item.ProviderName, "(unknown)"))
+		model.detailText(output, "status", fallback(health.Status, "unknown")+itemWarning(item))
+		model.detailText(output, "updated", fallback(health.UpdatedAt, "(unknown)"))
+		model.detailText(output, "note", fallback(health.Note, "(none)"))
+		model.detailText(output, "guidance", providerGuidance(health))
 	case dashboard.SelectionTask:
 		task := item.Task
-		detailText(output, "type", "task")
-		detailText(output, "slug", fallback(task.Slug, "(unknown)"))
-		detailText(output, "state", fallback(firstNonEmpty(task.NormalizedState, task.Status), "(unknown)"))
-		detailText(output, "branch", fallback(task.Branch, "(unknown)"))
-		detailText(output, "worktree", fallback(taskWorktreePath(task), "(unknown)"))
-		detailText(output, "worktree exists", optionalTaskBool(task.WorktreeExists, task.Worktree))
-		detailText(output, "provider/profile", fmt.Sprintf("%s / %s", fallback(taskProvider(task), "(unknown)"), fallback(taskProfile(task), "(unknown)")))
-		detailText(output, "latest run", fallback(taskLatestRun(task), "(none)"))
+		model.detailText(output, "type", "task")
+		model.detailText(output, "slug", fallback(task.Slug, "(unknown)"))
+		model.detailText(output, "state", fallback(firstNonEmpty(task.NormalizedState, task.Status), "(unknown)"))
+		model.detailText(output, "branch", fallback(task.Branch, "(unknown)"))
+		model.detailPath(output, "worktree", fallback(taskWorktreePath(task), "(unknown)"))
+		model.detailText(output, "worktree exists", optionalTaskBool(task.WorktreeExists, task.Worktree))
+		model.detailText(output, "provider/profile", fmt.Sprintf("%s / %s", fallback(taskProvider(task), "(unknown)"), fallback(taskProfile(task), "(unknown)")))
+		model.detailText(output, "latest run", fallback(taskLatestRun(task), "(none)"))
 		if task.Context != nil {
 			detail(output, "context", "%d materialized, %d missing", task.Context.MaterializedFileCount, len(task.Context.MissingFiles))
 		} else {
-			detailText(output, "context", "(unknown)")
+			model.detailText(output, "context", "(unknown)")
 		}
 	case dashboard.SelectionCleanup:
 		candidate := item.CleanupCandidate
-		detailText(output, "type", "cleanup candidate")
-		detailText(output, "id", fallback(candidate.ID, "(unknown)"))
-		detailText(output, "severity/category", fmt.Sprintf("%s / %s", fallback(candidate.Severity, "(unknown)"), fallback(candidate.Category, "(unknown)")))
-		detailText(output, "path", fallback(candidate.Path, "(none)"))
-		detailText(output, "branch", fallback(candidate.Branch, "(none)"))
+		model.detailText(output, "type", "cleanup candidate")
+		model.detailText(output, "id", fallback(candidate.ID, "(unknown)"))
+		model.detailText(output, "severity/category", fmt.Sprintf("%s / %s", fallback(candidate.Severity, "(unknown)"), fallback(candidate.Category, "(unknown)")))
+		model.detailPath(output, "path", fallback(candidate.Path, "(none)"))
+		model.detailText(output, "branch", fallback(candidate.Branch, "(none)"))
 		detail(output, "dirty", "%t", candidate.Dirty)
-		detailText(output, "removable by execute", optionalBool(candidate.RemovableByExecute))
-		detailText(output, "destructive if unmerged", optionalBool(candidate.DestructiveIfUnmerged))
-		renderStringList(output, "dirty reasons", candidate.DirtyReasons)
-		renderStringList(output, "suggested commands", candidate.SuggestedCommands)
+		model.detailText(output, "removable by execute", optionalBool(candidate.RemovableByExecute))
+		model.detailText(output, "destructive if unmerged", optionalBool(candidate.DestructiveIfUnmerged))
+		model.renderStringList(output, "dirty reasons", candidate.DirtyReasons)
+		model.renderStringList(output, "suggested commands", candidate.SuggestedCommands)
 	case dashboard.SelectionAction:
-		detailText(output, "type", "suggested action")
-		detailText(output, "action", fallback(item.ActionText, "(none)"))
-		detailText(output, "guidance", "display-only; no command is executed from this dashboard")
+		model.detailText(output, "type", "suggested action")
+		model.detailText(output, "action", fallback(item.ActionText, "(none)"))
+		model.detailText(output, "guidance", "display-only; no command is executed from this dashboard")
 	}
 }
 
