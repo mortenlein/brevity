@@ -4,7 +4,8 @@ Brevity's Go command under `cmd\brevity` is a frontend/runtime client plus the
 native runtime authority slices. PowerShell remains the legacy reference and
 fallback for orchestration behavior, but Go now owns provider health state
 mutation, task/runtime state reading, run-history inspection, read-only
-doctor/detail diagnostics, and cleanup/orphan inspection reports.
+doctor/detail diagnostics, cleanup/orphan inspection reports, and native task
+mutation preflight gates.
 
 The original PowerShell `.\brevity.ps1 tui` command is a lightweight read-only
 runtime/operator scaffold. The Go dashboard and `--watch` mode are the active
@@ -16,6 +17,11 @@ state directly from Go. Neither path provides an interactive mutation UI yet.
 Go-owned `.brevity` writes must go through `internal/state` and the advisory
 `.brevity/state.lock` protocol. Provider execution and worker execution are not
 implemented by this migration.
+
+Native preflight is the safety contract for future Go-owned task mutation.
+Preflight is read-only: it does not create/delete worktrees, create/delete
+branches, write `tasks.json`, or launch providers/workers. PowerShell still
+owns mutation execution for task new/start/run/merge/cleanup flows.
 
 The dashboard UX and interactive action roadmap is documented in
 [`docs/go-dashboard-ux-plan.md`](go-dashboard-ux-plan.md).
@@ -37,6 +43,7 @@ metadata. It does not mean Go writes those files itself.
 | `go run ./cmd/brevity provider set <provider> <status> [--note <note>]` | Native state action | Go state store + `.brevity/state.lock` | Mutating | Implemented | Updates provider health without PowerShell or provider execution. |
 | `go run ./cmd/brevity provider reset <provider>` | Native state action | Go state store + `.brevity/state.lock` | Mutating | Implemented | Resets provider health to `unknown` without PowerShell or provider execution. |
 | `go run ./cmd/brevity task status` | Native state inspection | Go `.brevity/tasks.json` reader | Read-only | Implemented | Lists tracked task metadata through `internal/state`; no PowerShell call and no task mutation. |
+| `go run ./cmd/brevity task preflight <new|start|run|merge|cleanup> <slug> [--json]` | Native mutation safety gate | Go state readers + read-only cleanup/provider checks | Read-only | Implemented | Emits human or stable `brevity.task-preflight.v1` JSON with status, checks, blockers, warnings, expected mutations, destructive/provider-execution flags, and suggested next action. |
 | `go run ./cmd/brevity task new <slug>` | PowerShell-backed action | PowerShell command-result JSON | Mutating | Implemented | Creates task runtime metadata and worktree through PowerShell. |
 | `go run ./cmd/brevity task cleanup <slug> --force` | PowerShell-backed action | PowerShell command-result JSON | Mutating | Implemented | Requires `--force`; cleanup behavior is owned by PowerShell. |
 | `go run ./cmd/brevity task context refresh <slug>` | PowerShell-backed action | PowerShell command-result JSON | Mutating | Implemented | Refreshes materialized task context through PowerShell. |
@@ -64,9 +71,13 @@ metadata. It does not mean Go writes those files itself.
 - Go owns provider health read/write, `.brevity/tasks.json` reading,
   `.brevity/runs.jsonl` run-history reading, native runtime-state building,
   native task status, task runtime/detail inspection, doctor diagnostics,
-  cleanup/orphan inspection reports, and the Bubble Tea native source.
+  cleanup/orphan inspection reports, task mutation preflight gates, and the
+  Bubble Tea native source.
 - PowerShell remains the authority for task mutation, worker/provider execution,
   task new/start/run/merge/cleanup execution, and legacy compatibility.
+- Every future Go task mutation must pass native preflight first. The
+  `brevity.task-preflight.v1` JSON payload is the contract shared by CLI, TUI,
+  and operator flows.
 - Provider health writes use `.brevity/state.lock` with exclusive create,
   `pid` and UTC `createdAt` contents, timeout waiting, and stale-lock cleanup
   when configured by tests/services.

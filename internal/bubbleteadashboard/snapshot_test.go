@@ -301,6 +301,9 @@ Confirm Action
   prompt        Start task task-one changes task state through PowerShell. Go will not write .bre...
   authority     PowerShell is authoritative; Go does not mutate task state
   warning       this changes task state
+  preflight     blocked / error
+  native gate   task-start preflight for task-one is blocked; no mutation or provider execution o...
+  blocked       .brevity directory is not readable
   confirm       enter confirms
   cancel        esc, q, or n cancels
 

@@ -127,6 +127,18 @@ preserves failed records, and reports older successful completed runs as
 archive/summary candidates. It refuses without `--dry-run`, never mutates the
 run index, and never touches worker logs. Use `--json` for structured output.
 
+`Brevity task preflight <new|start|run|merge|cleanup> <slug>` is the native Go
+safety gate for future task mutations. It reads repo state, task metadata,
+provider health, lock state, worktree/branch signals, and cleanup/orphan
+inspection data, then reports whether the requested mutation would be allowed,
+warned, or blocked. `--json` emits the stable `brevity.task-preflight.v1`
+contract used by CLI, TUI, and operator flows.
+
+Preflight never executes the mutation it describes. It does not create/delete
+worktrees, create/delete branches, write `tasks.json`, or launch providers or
+workers. PowerShell still owns task mutation execution until a later migration
+explicitly moves execution into Go.
+
 ### Run Index Retention
 
 `.brevity\runs.jsonl` remains an append-only worker run index for now. It is the

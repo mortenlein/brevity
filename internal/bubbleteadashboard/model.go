@@ -12,6 +12,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/mortenlein/brevity/internal/contracts"
 	"github.com/mortenlein/brevity/internal/dashboard"
+	"github.com/mortenlein/brevity/internal/preflight"
 	"github.com/mortenlein/brevity/internal/pscontract"
 	"github.com/mortenlein/brevity/internal/runtimeclient"
 	"golang.org/x/term"
@@ -1015,6 +1016,19 @@ func (model Model) selectedRunnableTask() (contracts.TaskSummary, bool) {
 	}
 }
 
+func (model Model) selectedTask() (contracts.TaskSummary, bool) {
+	items := model.selectableItems()
+	if len(items) == 0 {
+		return contracts.TaskSummary{}, false
+	}
+	selected := clampInt(model.selection.SelectedIndex, 0, len(items)-1)
+	item := items[selected]
+	if item.Kind != dashboard.SelectionTask || strings.TrimSpace(item.Task.Slug) == "" {
+		return contracts.TaskSummary{}, false
+	}
+	return item.Task, true
+}
+
 func (model Model) paneWidths() (int, int) {
 	width := model.contentWidth()
 	separatorWidth := visibleWidth(paneSeparator)
@@ -1265,6 +1279,7 @@ func (model Model) renderActionPreview(usedRows ...int) string {
 		"  authority     PowerShell is authoritative; Go will not write .brevity",
 		"  close         esc, q, or p returns to the dashboard",
 	}
+	lines = append(lines, model.nativePreflightLines(*action)...)
 	return model.renderPanel("Command Preview", lines, helpTruncatedIndicator, usedRows...)
 }
 
@@ -1301,6 +1316,7 @@ func (model Model) renderRunWorkerDryRunPreview(action ActionDescriptor, usedRow
 		"  enter         does not execute",
 		"  close         esc, q, or p returns to the dashboard",
 	}
+	lines = append(lines, model.nativePreflightLines(action)...)
 	return model.renderPanel("Run Worker Dry-Run Preview", lines, helpTruncatedIndicator, usedRows...)
 }
 
@@ -1370,12 +1386,62 @@ func (model Model) renderConfirmation(usedRows ...int) string {
 		"  authority     PowerShell is authoritative; Go does not mutate task state",
 		"  warning       this changes task state",
 	}
+	if model.confirmAction != nil {
+		lines = append(lines, model.nativePreflightLines(*model.confirmAction)...)
+	}
 	if state.Strength == pscontract.ConfirmationDestructive {
 		lines = append(lines, "  warning       destructive action; cleanup can remove branches or worktrees")
 	}
 	lines = append(lines, "  confirm       enter confirms")
 	lines = append(lines, "  cancel        esc, q, or n cancels")
 	return model.renderPanel("Confirm Action", lines, helpTruncatedIndicator, usedRows...)
+}
+
+func (model Model) nativePreflightLines(action ActionDescriptor) []string {
+	preflightAction, slug, ok := model.preflightTarget(action)
+	if !ok {
+		return nil
+	}
+	result, err := preflight.Run(preflight.Options{RepoRoot: model.state.RepoRoot, Action: preflightAction, Slug: slug})
+	if err != nil {
+		return []string{"  preflight     unavailable: " + err.Error()}
+	}
+	lines := []string{
+		"  preflight     " + string(result.Status) + " / " + string(result.Severity),
+		"  native gate   " + result.DryRunSummary,
+	}
+	if len(result.Blockers) > 0 {
+		lines = append(lines, "  blocked       "+result.Blockers[0])
+	}
+	if len(result.Warnings) > 0 {
+		lines = append(lines, "  warning       "+result.Warnings[0])
+	}
+	if result.ProviderExecution {
+		lines = append(lines, "  execution     provider execution would be required; not performed")
+	}
+	if result.Destructive {
+		lines = append(lines, "  destructive   cleanup/branch/worktree removal would be destructive")
+	}
+	return lines
+}
+
+func (model Model) preflightTarget(action ActionDescriptor) (preflight.Action, string, bool) {
+	switch action.ID {
+	case ActionStartTask:
+		slug, ok := model.selectedStartableTaskSlug()
+		return preflight.ActionTaskStart, slug, ok
+	case ActionRunWorker:
+		task, ok := model.selectedRunnableTask()
+		return preflight.ActionTaskRun, task.Slug, ok
+	case ActionMergeTask:
+		task, ok := model.selectedTask()
+		return preflight.ActionTaskMerge, task.Slug, ok
+	case ActionCleanupTask:
+		task, ok := model.selectedTask()
+		return preflight.ActionTaskCleanup, task.Slug, ok
+	default:
+		return "", "", false
+	}
 }
 
 func (model Model) renderCommandResult(usedRows ...int) string {

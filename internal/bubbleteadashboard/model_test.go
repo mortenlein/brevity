@@ -48,6 +48,7 @@ func (client *fakeClient) TaskRunsJSON(slug string) ([]byte, error)        { ret
 func (client *fakeClient) TaskRunsReconcileJSON() ([]byte, error)          { return nil, nil }
 func (client *fakeClient) TaskRunsRetentionJSON() ([]byte, error)          { return nil, nil }
 func (client *fakeClient) TaskRunsCompactJSON() ([]byte, error)            { return nil, nil }
+func (client *fakeClient) CleanupInspectJSON() ([]byte, error)             { return nil, nil }
 
 type fakeCommandBridge struct {
 	state        contracts.RuntimeState

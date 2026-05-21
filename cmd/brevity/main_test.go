@@ -11,6 +11,7 @@ import (
 
 	"github.com/mortenlein/brevity/internal/commands"
 	"github.com/mortenlein/brevity/internal/dashboard"
+	"github.com/mortenlein/brevity/internal/state"
 )
 
 type fakeRuntimeClient struct {
@@ -28,6 +29,7 @@ type fakeRuntimeClient struct {
 	runsReconcile     []byte
 	runsRetention     []byte
 	runsCompact       []byte
+	cleanupInspect    []byte
 	actionErr         error
 	calls             []string
 	afterRuntimeState func(int)
@@ -113,6 +115,11 @@ func (client *fakeRuntimeClient) TaskRunsCompactJSON() ([]byte, error) {
 	return client.runsCompact, client.actionErr
 }
 
+func (client *fakeRuntimeClient) CleanupInspectJSON() ([]byte, error) {
+	client.calls = append(client.calls, "cleanup-inspect")
+	return client.cleanupInspect, client.actionErr
+}
+
 func TestRunWithClientRendersRuntimeState(t *testing.T) {
 	client := &fakeRuntimeClient{
 		output: []byte(`{"schema":"brevity.runtime-state.v1","repoRoot":"C:\\dev\\repos\\active\\brevity","taskCounts":{"tracked":7}}`),
@@ -130,6 +137,85 @@ func TestRunWithClientRendersRuntimeState(t *testing.T) {
 	if !strings.Contains(output, "tracked: 7") {
 		t.Fatalf("output missing task count:\n%s", output)
 	}
+}
+
+func TestTaskPreflightJSONOutput(t *testing.T) {
+	root := taskPreflightFixture(t, "alpha", "planned", state.StatusHealthy)
+	previous, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.Chdir(previous)
+	if err := os.Chdir(root); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout bytes.Buffer
+	if err := runWithOptions(&stdout, &fakeRuntimeClient{}, cliOptions{kind: commandTaskPreflight, preflightAction: "task-start", slug: "alpha", json: true}); err != nil {
+		t.Fatalf("runWithOptions returned error: %v", err)
+	}
+	output := stdout.String()
+	if !strings.Contains(output, `"schema":"brevity.task-preflight.v1"`) || !strings.Contains(output, `"status":"allowed"`) {
+		t.Fatalf("unexpected output:\n%s", output)
+	}
+}
+
+func TestTaskPreflightHumanBlockedOutput(t *testing.T) {
+	root := taskPreflightFixture(t, "alpha", "planned", state.StatusHealthy)
+	previous, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.Chdir(previous)
+	if err := os.Chdir(root); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout bytes.Buffer
+	if err := runWithOptions(&stdout, &fakeRuntimeClient{}, cliOptions{kind: commandTaskPreflight, preflightAction: "task-start", slug: "missing"}); err != nil {
+		t.Fatalf("runWithOptions returned error: %v", err)
+	}
+	output := stdout.String()
+	if !strings.Contains(output, "status: blocked") || !strings.Contains(output, "task does not exist") {
+		t.Fatalf("unexpected output:\n%s", output)
+	}
+}
+
+func taskPreflightFixture(t *testing.T, slug string, taskStatus string, providerStatus state.ProviderStatus) string {
+	t.Helper()
+	root := t.TempDir()
+	worktree := filepath.Join(root, "worktrees", "active", slug)
+	prompt := filepath.Join(worktree, "prompt.md")
+	if err := os.MkdirAll(worktree, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(root, state.DirectoryName), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(prompt, []byte("prompt"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	store, err := state.NewStore(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tasks := []state.Task{{
+		Slug:            slug,
+		Status:          taskStatus,
+		NormalizedState: taskStatus,
+		Branch:          "task/" + slug,
+		WorktreePath:    worktree,
+		PromptPath:      prompt,
+		Provider:        "codex",
+		Profile:         "default",
+	}}
+	if err := store.WriteJSON(state.TasksFile, tasks); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.WriteJSON(state.ProviderHealthFile, state.ProviderHealthState{"codex": {Status: providerStatus}}); err != nil {
+		t.Fatal(err)
+	}
+	return root
 }
 
 func TestParseOptionsDefaultsToPowerShellSource(t *testing.T) {
@@ -490,6 +576,16 @@ func TestParseOptionsAcceptsRuntimeStateJSON(t *testing.T) {
 	}
 	if options.kind != commandRuntimeState || !options.json {
 		t.Fatalf("options = %#v, want runtime state json", options)
+	}
+}
+
+func TestParseOptionsAcceptsCleanupInspectJSON(t *testing.T) {
+	options, err := parseOptions([]string{"cleanup", "inspect", "--json"})
+	if err != nil {
+		t.Fatalf("parseOptions returned error: %v", err)
+	}
+	if options.kind != commandCleanupInspect || !options.json {
+		t.Fatalf("options = %#v, want cleanup inspect json", options)
 	}
 }
 
@@ -1373,6 +1469,26 @@ func TestRunRuntimeStateJSONUsesNativeState(t *testing.T) {
 	for _, want := range []string{`"schema":"brevity.runtime-state.v1"`, `"tracked":1`, `"slug":"my-task"`} {
 		if !strings.Contains(output, want) {
 			t.Fatalf("output missing %q:\n%s", want, output)
+		}
+	}
+}
+
+func TestRunCleanupInspectUsesNativeState(t *testing.T) {
+	repoRoot := tempRepoWithTasks(t, `[{"slug":"missing","status":"ready-for-worker","branch":"task/missing","worktreePath":"C:\\repo\\missing"}]`)
+	t.Chdir(repoRoot)
+	client := &fakeRuntimeClient{}
+
+	var stdout bytes.Buffer
+	err := runWithOptions(&stdout, client, cliOptions{kind: commandCleanupInspect})
+	if err != nil {
+		t.Fatalf("runWithOptions returned error: %v", err)
+	}
+	if len(client.calls) != 0 {
+		t.Fatalf("calls = %#v, want no PowerShell client calls", client.calls)
+	}
+	for _, want := range []string{"Cleanup inspection", "No cleanup executed.", "missing-worktree:missing", "inspect task metadata"} {
+		if !strings.Contains(stdout.String(), want) {
+			t.Fatalf("output missing %q:\n%s", want, stdout.String())
 		}
 	}
 }

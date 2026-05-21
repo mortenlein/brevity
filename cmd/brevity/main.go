@@ -20,6 +20,7 @@ import (
 	"github.com/mortenlein/brevity/internal/contracts"
 	"github.com/mortenlein/brevity/internal/dashboard"
 	"github.com/mortenlein/brevity/internal/diagnostics"
+	"github.com/mortenlein/brevity/internal/preflight"
 	"github.com/mortenlein/brevity/internal/runtimeclient"
 	"github.com/mortenlein/brevity/internal/state"
 )
@@ -43,6 +44,7 @@ const (
 	commandTaskStatus      commandKind = commandKind(commands.TaskStatusID)
 	commandDoctor          commandKind = commandKind(commands.DoctorID)
 	commandTaskCleanup     commandKind = commandKind(commands.TaskCleanupID)
+	commandTaskPreflight   commandKind = "task-preflight"
 	commandTaskNew         commandKind = commandKind(commands.TaskNewID)
 	commandTaskRun         commandKind = commandKind(commands.TaskRunID)
 	commandTaskRuntimeInfo commandKind = commandKind(commands.TaskRuntimeInfoID)
@@ -55,24 +57,25 @@ const (
 )
 
 type cliOptions struct {
-	help       bool
-	kind       commandKind
-	once       bool
-	watch      bool
-	bubble     bool
-	noClear    bool
-	refresh    time.Duration
-	jsonSource string
-	provider   string
-	status     string
-	note       string
-	slug       string
-	force      bool
-	execute    bool
-	dryRun     bool
-	profile    string
-	smoke      bool
-	json       bool
+	help            bool
+	kind            commandKind
+	once            bool
+	watch           bool
+	bubble          bool
+	noClear         bool
+	refresh         time.Duration
+	jsonSource      string
+	provider        string
+	status          string
+	note            string
+	slug            string
+	force           bool
+	execute         bool
+	dryRun          bool
+	profile         string
+	smoke           bool
+	json            bool
+	preflightAction preflight.Action
 }
 
 type actionCall func() ([]byte, error)
@@ -241,7 +244,7 @@ func parseProviderOptions(args []string) (cliOptions, error) {
 
 func parseTaskOptions(args []string) (cliOptions, error) {
 	if len(args) < 2 {
-		return cliOptions{}, fmt.Errorf("missing task command: supported commands: status, context refresh, runtime-info, detail, runs, new, run, cleanup")
+		return cliOptions{}, fmt.Errorf("missing task command: supported commands: status, context refresh, runtime-info, detail, runs, new, run, cleanup, preflight")
 	}
 	if args[1] == "status" {
 		if len(args) != 2 {
@@ -262,6 +265,9 @@ func parseTaskOptions(args []string) (cliOptions, error) {
 	if args[1] == "cleanup" {
 		return parseTaskCleanupOptions(args)
 	}
+	if args[1] == "preflight" {
+		return parseTaskPreflightOptions(args)
+	}
 	if args[1] == "new" {
 		return parseTaskNewOptions(args)
 	}
@@ -278,7 +284,42 @@ func parseTaskOptions(args []string) (cliOptions, error) {
 		return parseTaskRunsOptions(args)
 	}
 
-	return cliOptions{}, fmt.Errorf("unsupported task command %q: supported commands: status, context refresh, runtime-info, detail, runs, new, run, cleanup", args[1])
+	return cliOptions{}, fmt.Errorf("unsupported task command %q: supported commands: status, context refresh, runtime-info, detail, runs, new, run, cleanup, preflight", args[1])
+}
+
+func parseTaskPreflightOptions(args []string) (cliOptions, error) {
+	if len(args) < 4 || args[3] == "" {
+		return cliOptions{}, fmt.Errorf("usage: brevity task preflight <new|start|run|merge|cleanup> <slug> [--json]")
+	}
+	action, ok := preflightActionFromWord(args[2])
+	if !ok {
+		return cliOptions{}, fmt.Errorf("unsupported preflight action %q: supported actions: new, start, run, merge, cleanup", args[2])
+	}
+	options := cliOptions{kind: commandTaskPreflight, preflightAction: action, slug: args[3]}
+	for _, arg := range args[4:] {
+		if arg != "--json" {
+			return cliOptions{}, fmt.Errorf("unknown argument for brevity task preflight %s: %s", args[2], arg)
+		}
+		options.json = true
+	}
+	return options, nil
+}
+
+func preflightActionFromWord(word string) (preflight.Action, bool) {
+	switch strings.ToLower(strings.TrimSpace(word)) {
+	case "new":
+		return preflight.ActionTaskNew, true
+	case "start":
+		return preflight.ActionTaskStart, true
+	case "run":
+		return preflight.ActionTaskRun, true
+	case "merge":
+		return preflight.ActionTaskMerge, true
+	case "cleanup":
+		return preflight.ActionTaskCleanup, true
+	default:
+		return "", false
+	}
 }
 
 func parseTaskNewOptions(args []string) (cliOptions, error) {
@@ -466,6 +507,8 @@ func runWithContextOptions(ctx context.Context, stdout io.Writer, client runtime
 		return routeDoctorCommand(stdout, options)
 	case commandTaskCleanup, commandTaskNew, commandTaskRun, commandTaskRuntimeInfo, commandTaskDetail:
 		return routeTaskCommand(stdout, client, options)
+	case commandTaskPreflight:
+		return routeTaskPreflightCommand(stdout, options)
 	case commandTaskRuns, commandRunsReconcile, commandRunsRetention, commandRunsCompact:
 		return routeTaskRunsCommand(stdout, client, options)
 	case commandCleanupInspect:
@@ -489,6 +532,22 @@ func runWithContextOptions(ctx context.Context, stdout io.Writer, client runtime
 		}
 		return routeDashboardCommand(stdout, client)
 	}
+}
+
+func routeTaskPreflightCommand(stdout io.Writer, options cliOptions) error {
+	result, err := preflight.Run(preflight.Options{Action: options.preflightAction, Slug: options.slug})
+	if err != nil {
+		return err
+	}
+	if options.json {
+		output, err := json.Marshal(result)
+		if err != nil {
+			return err
+		}
+		_, err = stdout.Write(append(output, '\n'))
+		return err
+	}
+	return preflight.RenderHuman(stdout, result)
 }
 
 func routeCleanupInspectCommand(stdout io.Writer, options cliOptions) error {
