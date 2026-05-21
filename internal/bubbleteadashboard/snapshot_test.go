@@ -141,10 +141,10 @@ Selected Detail
   select a row, then press d for details
 
 Actions
-  Start task        future via PowerShell
-  Run worker        future via PowerShell
-  Merge task        future via PowerShell
-  Cleanup task      future via PowerShell
+  Start task        future PowerShell action; confirmation required; not enable...
+  Run worker        future PowerShell action; confirmation required; not enable...
+  Merge task        future PowerShell action; confirmation required; not enable...
+  Cleanup task      future PowerShell action; confirmation required; not enable...
 > Refresh state     enter refreshes state
 
 j/k r p d q quit ? help | native | read-only

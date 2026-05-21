@@ -6,11 +6,15 @@ type ID string
 
 const (
 	DashboardID          ID = "dashboard"
+	RuntimeStateID       ID = "runtime-state"
+	ProviderStatusID     ID = "provider-status"
 	ProviderSetID        ID = "provider-set"
 	ProviderResetID      ID = "provider-reset"
 	TaskContextRefreshID ID = "context-refresh"
+	TaskStatusID         ID = "task-status"
 	DoctorID             ID = "doctor"
 	TaskCleanupID        ID = "task-cleanup"
+	TaskMergeID          ID = "task-merge"
 	TaskNewID            ID = "task-new"
 	TaskRunID            ID = "task-run"
 	TaskRuntimeInfoID    ID = "task-runtime-info"
@@ -51,10 +55,20 @@ var (
 		Words: []string{"doctor"},
 		Usage: "brevity doctor",
 	}
+	RuntimeState = Command{
+		ID:    RuntimeStateID,
+		Words: []string{"runtime", "state"},
+		Usage: "brevity runtime state --json",
+	}
 	ProviderSet = Command{
 		ID:    ProviderSetID,
 		Words: []string{"provider", "set"},
 		Usage: "brevity provider set <provider> <status>",
+	}
+	ProviderStatus = Command{
+		ID:    ProviderStatusID,
+		Words: []string{"provider", "status"},
+		Usage: "brevity provider status",
 	}
 	ProviderReset = Command{
 		ID:    ProviderResetID,
@@ -70,6 +84,11 @@ var (
 		ID:    TaskNewID,
 		Words: []string{"task", "new"},
 		Usage: "brevity task new <slug>",
+	}
+	TaskStatus = Command{
+		ID:    TaskStatusID,
+		Words: []string{"task", "status"},
+		Usage: "brevity task status",
 	}
 	TaskRun = Command{
 		ID:    TaskRunID,
@@ -106,14 +125,22 @@ var (
 		Words: []string{"task", "cleanup"},
 		Usage: "brevity task cleanup <slug> --force",
 	}
+	TaskMerge = Command{
+		ID:    TaskMergeID,
+		Words: []string{"task", "merge"},
+		Usage: "brevity task merge <slug>",
+	}
 )
 
 var UsageCommands = []Command{
 	Dashboard,
+	RuntimeState,
 	Doctor,
+	ProviderStatus,
 	ProviderSet,
 	ProviderReset,
 	TaskContextRefresh,
+	TaskStatus,
 	TaskNew,
 	TaskRun,
 	TaskRuntimeInfo,
@@ -122,4 +149,5 @@ var UsageCommands = []Command{
 	TaskRunsRetention,
 	TaskRunsCompact,
 	TaskCleanup,
+	TaskMerge,
 }

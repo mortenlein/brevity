@@ -5,6 +5,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/mortenlein/brevity/internal/contracts"
+	"github.com/mortenlein/brevity/internal/pscontract"
 	"github.com/mortenlein/brevity/internal/runtimeclient"
 )
 
@@ -35,6 +36,7 @@ type ActionDescriptor struct {
 	Shortcut             string
 	ConfirmationRequired bool
 	ExecutesViaBridge    bool
+	Command              pscontract.CommandDescriptor
 }
 
 // DashboardCommandBridge is the only place where executable TUI actions may
@@ -57,13 +59,29 @@ func (bridge RuntimeClientCommandBridge) RefreshRuntimeState() (contracts.Runtim
 }
 
 func actionDescriptors() []ActionDescriptor {
-	return []ActionDescriptor{
-		{ID: ActionStartTask, Label: "Start task", Kind: ActionKindFuture, Description: "future via PowerShell", ConfirmationRequired: true, ExecutesViaBridge: true},
-		{ID: ActionRunWorker, Label: "Run worker", Kind: ActionKindFuture, Description: "future via PowerShell", ConfirmationRequired: true, ExecutesViaBridge: true},
-		{ID: ActionMergeTask, Label: "Merge task", Kind: ActionKindFuture, Description: "future via PowerShell", ConfirmationRequired: true, ExecutesViaBridge: true},
-		{ID: ActionCleanupTask, Label: "Cleanup task", Kind: ActionKindFuture, Description: "future via PowerShell", ConfirmationRequired: true, ExecutesViaBridge: true},
-		{ID: ActionRefreshState, Label: "Refresh state", Kind: ActionKindReadOnly, Enabled: true, Description: "enter refreshes state", Shortcut: "r", ExecutesViaBridge: true},
+	descriptors := pscontract.DashboardDescriptors()
+	actions := make([]ActionDescriptor, 0, len(descriptors))
+	for _, descriptor := range descriptors {
+		action := ActionDescriptor{
+			ID:                   ActionID(descriptor.ActionID),
+			Label:                descriptor.Label,
+			Kind:                 ActionKindFuture,
+			Enabled:              descriptor.Enabled,
+			Description:          descriptor.DisabledReason,
+			ConfirmationRequired: descriptor.RequiresConfirmation,
+			ExecutesViaBridge:    true,
+			Command:              descriptor,
+		}
+		if descriptor.ActionID == pscontract.ActionRefreshState {
+			action.Kind = ActionKindReadOnly
+			action.Description = "enter refreshes state"
+			action.Shortcut = "r"
+		} else if descriptor.Mutating {
+			action.Kind = ActionKindMutating
+		}
+		actions = append(actions, action)
 	}
+	return actions
 }
 
 func (model Model) commandForAction(action ActionDescriptor) tea.Cmd {

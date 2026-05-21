@@ -76,3 +76,21 @@ than from optimistic local edits to runtime files.
 The TUI may offer buttons, menus, and confirmations, but Brevity CLI commands
 remain the write boundary. Runtime JSON is an observation contract; command
 execution is the mutation contract.
+
+## Go Dashboard Contract
+
+The Go Bubble Tea dashboard must treat PowerShell as authoritative. Go may build
+argv-style command descriptors and display disabled future actions, but it must
+not write `.brevity`, mutate task state, merge branches, remove worktrees, or
+start providers/workers directly.
+
+Command construction must keep the executable, script path, command words, and
+operator-selected values as separate argv entries. Do not concatenate a shell
+command string for task slugs, paths, profiles, or flags; paths with spaces must
+remain a single argument.
+
+Current dashboard enablement is intentionally narrow: Refresh runtime state is
+the only executable action. Start, Run, Merge, and Cleanup remain disabled until
+the command contract, confirmation UI, dry-run command display, PowerShell
+execution, post-command refresh, and audit/result display are enabled in that
+order.

@@ -109,10 +109,10 @@ func TestActionPaletteOpensWithShortcut(t *testing.T) {
 	for _, want := range []string{
 		"Actions",
 		"> Start task",
-		"Start task        future via PowerShell",
-		"Run worker        future via PowerShell",
-		"Merge task        future via PowerShell",
-		"Cleanup task      future via PowerShell",
+		"Start task        future PowerShell action; confirmation required; not enabled yet",
+		"Run worker        future PowerShell action; confirmation required; not enabled yet",
+		"Merge task        future PowerShell action; confirmation required; not enabled yet",
+		"Cleanup task      future PowerShell action; confirmation required; not enabled yet",
 		"Refresh state     enter refreshes state",
 		"enter runs Refresh only | esc closes | p toggles",
 	} {
