@@ -345,9 +345,15 @@ func (model Model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		case "enter":
 			action := model.actionDescriptors()[model.clampedPaletteSelection()]
 			if action.ID == ActionRunWorker {
+				cmd := model.commandForAction(action)
+				if cmd == nil {
+					model.paletteOpen = false
+					model.actionPreview = &action
+					return model, nil
+				}
 				model.paletteOpen = false
-				model.actionPreview = &action
-				return model, nil
+				model.startCommandRun(action)
+				return model, cmd
 			}
 			if !action.Enabled {
 				model.paletteOpen = false
@@ -1225,12 +1231,12 @@ func (model Model) renderHelpOverlay(usedRows ...int) string {
 		"  p opens actions; read-only actions can execute PowerShell commands",
 		"  Start task requires a selected task row and confirmation",
 		"  Start task changes task state through PowerShell only",
-		"  Run worker is dry-run only; no provider is launched",
+		"  Run worker loads a PowerShell-owned execution plan only",
 		"  future worker execution will be long-running and PowerShell-authoritative",
 		"  Merge and Cleanup remain disabled future actions",
 		"  command results scroll with up/down or j/k; esc closes finished results",
 		"  recent command activity is session-only and read-only",
-		"  dry-run previews never execute on enter",
+		"  provider launch is disabled; no worker execution occurs",
 		"  executable today: Refresh state, Provider status, Task status, confirmed Start task",
 		"  esc, q, p, or ? closes panels without running commands",
 	}
@@ -1382,6 +1388,14 @@ func (model Model) renderCommandResult(usedRows ...int) string {
 		"  status        " + string(run.status),
 	}
 	if run.status == commandRunning {
+		if run.action.ID == ActionRunWorker {
+			lines = append(lines,
+				"  message       loading PowerShell-owned execution plan",
+				"  execution     no worker/provider launched",
+				"  boundary      Go renders only; PowerShell owns plan semantics",
+			)
+			return model.renderPanel("Run Worker Plan", lines, detailTruncatedIndicator, usedRows...)
+		}
 		lines = append(lines,
 			"  message       running PowerShell command",
 			"  cancel        wait for timeout or completion; esc is disabled while running",
@@ -1400,6 +1414,9 @@ func (model Model) renderCommandResult(usedRows ...int) string {
 		return model.renderPanel("Command Result", lines, detailTruncatedIndicator, usedRows...)
 	}
 	result := *run.result
+	if run.action.ID == ActionRunWorker {
+		return model.renderTaskRunPlanResult(run, result, usedRows...)
+	}
 	lines = append(lines,
 		"  exit code     "+fmt.Sprint(result.ExitCode),
 		"  message       "+result.OperatorMessage(),
@@ -1426,6 +1443,73 @@ func (model Model) renderCommandResult(usedRows ...int) string {
 	}
 	lines = append(lines, "  close         esc or q closes result")
 	return model.renderScrollablePanel("Command Result", lines, run.scroll, detailTruncatedIndicator, usedRows...)
+}
+
+func (model Model) renderTaskRunPlanResult(run commandRunState, result pscontract.ExecutionResult, usedRows ...int) string {
+	lines := []string{
+		"  action        " + run.action.Label,
+		"  status        " + string(run.status),
+		"  exit code     " + fmt.Sprint(result.ExitCode),
+		"  execution     no worker/provider launched",
+		"  boundary      Go renders only; PowerShell owns execution semantics",
+	}
+	commandResult, err := contracts.ParseCommandResult([]byte(result.Stdout))
+	if err != nil {
+		lines = append(lines,
+			"  result        failed to parse PowerShell plan JSON",
+			"  error         "+err.Error(),
+		)
+		if result.Error != "" {
+			lines = append(lines, "  command error "+result.Error)
+		}
+		lines = append(lines, "  close         esc or q closes result")
+		return model.renderScrollablePanel("Run Worker Plan Error", lines, run.scroll, detailTruncatedIndicator, usedRows...)
+	}
+	if !commandResult.Success {
+		lines = append(lines,
+			"  result        PowerShell plan generation failed",
+		)
+		for _, commandError := range commandResult.Errors {
+			lines = append(lines, "  error         "+commandError.DisplayText())
+		}
+		lines = append(lines, "  close         esc or q closes result")
+		return model.renderScrollablePanel("Run Worker Plan Error", lines, run.scroll, detailTruncatedIndicator, usedRows...)
+	}
+	plan, err := contracts.ParseTaskRunPlanPayload(commandResult)
+	if err != nil {
+		lines = append(lines,
+			"  result        malformed PowerShell plan payload",
+			"  error         "+err.Error(),
+			"  close         esc or q closes result",
+		)
+		return model.renderScrollablePanel("Run Worker Plan Error", lines, run.scroll, detailTruncatedIndicator, usedRows...)
+	}
+	lines = append(lines,
+		"  task          "+plan.Slug,
+		"  provider      "+fallback(plan.Provider, "(unknown)"),
+		"  profile       "+fallback(plan.Profile, "(default)"),
+		"  worktree      "+fallback(plan.WorktreePath, "(missing)"),
+		"  prompt        "+fallback(plan.PromptPath, "(missing)"),
+		"  worker        "+fallback(plan.WorkerCommand.Display, plan.WorkerCommand.Command),
+		"  kind          "+fallback(plan.ExecutionKind, "(unknown)"),
+		"  approval      "+fallback(plan.ApprovalMode, "(unspecified)"),
+		"  provider run  "+formatBool(plan.ProviderExecutionWouldOccur),
+		"  isolated wt   "+formatBool(plan.IsolatedWorktreeRequired),
+		"  dry-run       "+formatBool(plan.DryRunOnly),
+		"  no execution  "+formatBool(plan.NoExecutionOccurred),
+		"  authority     "+fallback(plan.Authority, "PowerShell-owned execution plan"),
+	)
+	for _, warning := range append(commandResult.Warnings, plan.Warnings...) {
+		lines = append(lines, "  warning       "+warning.DisplayText())
+	}
+	for _, note := range plan.SafetyNotes {
+		lines = append(lines, "  safety        "+note)
+	}
+	for _, item := range plan.Unsupported {
+		lines = append(lines, "  note          "+item)
+	}
+	lines = append(lines, "  close         esc or q closes result")
+	return model.renderScrollablePanel("Run Worker Execution Plan", lines, run.scroll, detailTruncatedIndicator, usedRows...)
 }
 
 func (status commandStatus) isActive() bool {
@@ -1687,7 +1771,7 @@ func (model Model) renderActionPalette(usedRows ...int) string {
 		fmt.Fprintln(&output, model.renderPaletteActionRow(action, index == selected))
 	}
 	if model.shouldRenderActionPaletteHelp(usedRows...) {
-		fmt.Fprintln(&output, dashboardStyles.help.Render(model.renderLine("  enter runs read-only/start or opens dry-run preview | esc closes")))
+		fmt.Fprintln(&output, dashboardStyles.help.Render(model.renderLine("  enter runs read-only/start or loads worker plan | esc closes")))
 	}
 	return output.String()
 }
@@ -1782,6 +1866,13 @@ func fallback(value string, fallbackValue string) string {
 		return fallbackValue
 	}
 	return value
+}
+
+func formatBool(value bool) string {
+	if value {
+		return "yes"
+	}
+	return "no"
 }
 
 func warningSuffix(count int) string {

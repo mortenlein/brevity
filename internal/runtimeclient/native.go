@@ -140,6 +140,9 @@ func (client NativeClient) TaskNewJSON(slug string) ([]byte, error) {
 func (client NativeClient) TaskRunJSON(slug string, profile string, smoke bool) ([]byte, error) {
 	return nil, nativeUnsupported("task run")
 }
+func (client NativeClient) TaskRunPlanJSON(slug string, profile string) ([]byte, error) {
+	return nil, nativeUnsupported("task run plan")
+}
 func (client NativeClient) TaskRuntimeInfoJSON(slug string) ([]byte, error) {
 	return nil, nativeUnsupported("task runtime-info")
 }

@@ -113,6 +113,35 @@ type TaskRunExecutionPayload struct {
 	LogPath       string `json:"logPath"`
 }
 
+type TaskRunPlanPayload struct {
+	Slug                        string               `json:"slug"`
+	Provider                    string               `json:"provider"`
+	Profile                     string               `json:"profile"`
+	WorktreePath                string               `json:"worktreePath"`
+	PromptPath                  string               `json:"promptPath"`
+	WorkerCommand               TaskRunWorkerCommand `json:"workerCommand"`
+	ApprovalMode                string               `json:"approvalMode"`
+	ExecutionKind               string               `json:"executionKind"`
+	ProviderExecutionWouldOccur bool                 `json:"providerExecutionWouldOccur"`
+	IsolatedWorktreeRequired    bool                 `json:"isolatedWorktreeRequired"`
+	DryRunOnly                  bool                 `json:"dryRunOnly"`
+	NoExecutionOccurred         bool                 `json:"noExecutionOccurred"`
+	Authority                   string               `json:"authority"`
+	Warnings                    []ResultMessage      `json:"warnings"`
+	SafetyNotes                 []string             `json:"safetyNotes"`
+	Unsupported                 []string             `json:"unsupported"`
+}
+
+type TaskRunWorkerCommand struct {
+	Provider         string   `json:"provider"`
+	Command          string   `json:"command"`
+	Arguments        []string `json:"arguments"`
+	Display          string   `json:"display"`
+	WorkingDirectory string   `json:"workingDirectory"`
+	ExecutionPolicy  string   `json:"executionPolicy"`
+	EnvironmentNames []string `json:"environmentNames"`
+}
+
 type TaskRuntimeInfoPayload struct {
 	Slug            string                      `json:"slug"`
 	Status          string                      `json:"status"`
@@ -296,6 +325,21 @@ func ParseTaskRunExecutionPayload(result CommandResult) (TaskRunExecutionPayload
 		return TaskRunExecutionPayload{}, fmt.Errorf("invalid task run payload: %w", err)
 	}
 
+	return payload, nil
+}
+
+func ParseTaskRunPlanPayload(result CommandResult) (TaskRunPlanPayload, error) {
+	if len(result.Payload) == 0 {
+		return TaskRunPlanPayload{}, errors.New("task run plan result missing payload")
+	}
+
+	var payload TaskRunPlanPayload
+	if err := json.Unmarshal(result.Payload, &payload); err != nil {
+		return TaskRunPlanPayload{}, fmt.Errorf("invalid task run plan payload: %w", err)
+	}
+	if payload.Slug == "" {
+		return TaskRunPlanPayload{}, errors.New("invalid task run plan payload: missing slug")
+	}
 	return payload, nil
 }
 

@@ -74,6 +74,11 @@ func (client *fakeRuntimeClient) TaskRunJSON(slug string, profile string, smoke 
 	return client.taskRun, client.actionErr
 }
 
+func (client *fakeRuntimeClient) TaskRunPlanJSON(slug string, profile string) ([]byte, error) {
+	client.calls = append(client.calls, "task-run-plan:"+slug+":"+profile)
+	return client.taskRun, client.actionErr
+}
+
 func (client *fakeRuntimeClient) TaskRuntimeInfoJSON(slug string) ([]byte, error) {
 	client.calls = append(client.calls, "runtime-info:"+slug)
 	return client.runtimeInfo, client.actionErr

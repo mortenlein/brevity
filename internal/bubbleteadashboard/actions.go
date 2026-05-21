@@ -51,6 +51,7 @@ type DashboardCommandBridge interface {
 	RefreshRuntimeState() (contracts.RuntimeState, error)
 	ExecuteReadOnlyAction(action ActionDescriptor) pscontract.ExecutionResult
 	ExecuteMutatingAction(action ActionDescriptor, commandArgs []string) pscontract.ExecutionResult
+	LoadTaskRunPlan(slug string, profile string) pscontract.ExecutionResult
 }
 
 type RuntimeClientCommandBridge struct {
@@ -71,6 +72,24 @@ func (bridge RuntimeClientCommandBridge) ExecuteReadOnlyAction(action ActionDesc
 
 func (bridge RuntimeClientCommandBridge) ExecuteMutatingAction(action ActionDescriptor, commandArgs []string) pscontract.ExecutionResult {
 	return pscontract.PowerShellCommandRunner{ScriptPath: bridge.scriptPath()}.RunMutating(context.Background(), action.Command, commandArgs)
+}
+
+func (bridge RuntimeClientCommandBridge) LoadTaskRunPlan(slug string, profile string) pscontract.ExecutionResult {
+	started := time.Now()
+	output, err := bridge.Client.TaskRunPlanJSON(slug, profile)
+	result := pscontract.ExecutionResult{
+		ActionID:            pscontract.ActionRunWorker,
+		CommandDisplayLabel: "Run worker plan",
+		StartedAt:           started,
+		CompletedAt:         time.Now(),
+		Stdout:              string(output),
+		ExitCode:            0,
+	}
+	if err != nil {
+		result.ExitCode = 1
+		result.Error = err.Error()
+	}
+	return result
 }
 
 func (bridge RuntimeClientCommandBridge) scriptPath() string {
@@ -142,16 +161,17 @@ func (model Model) actionDescriptors() []ActionDescriptor {
 			if runnable {
 				actions[index].Enabled = true
 				actions[index].Kind = ActionKindDryRun
-				actions[index].Description = "dry-run preview for " + runTask.Slug
+				actions[index].Description = "PowerShell plan preview for " + runTask.Slug
+				actions[index].Command.Arguments = []string{"--plan"}
 				actions[index].Command.Provider = taskProvider(runTask)
 				actions[index].Command.Profile = taskProfile(runTask)
 				actions[index].Command.Enabled = false
-				actions[index].Command.DisabledReason = "dry-run only; worker/provider execution is disabled"
+				actions[index].Command.DisabledReason = "dry-run plan only; worker/provider execution is disabled"
 			} else {
 				actions[index].Enabled = false
-				actions[index].Description = "dry-run only; select a runnable task row"
+				actions[index].Description = "plan preview only; select a runnable task row"
 				actions[index].Command.Enabled = false
-				actions[index].Command.DisabledReason = "dry-run only; select a runnable task row with slug and runnable state"
+				actions[index].Command.DisabledReason = "plan preview only; select a runnable task row with slug and runnable state"
 			}
 		}
 	}
@@ -180,7 +200,14 @@ func (model Model) commandForAction(action ActionDescriptor) tea.Cmd {
 		}
 		return model.executeMutatingCmd(action, []string{slug})
 	case ActionRunWorker:
-		return nil
+		if model.commandRun != nil && model.commandRun.status == commandRunning {
+			return nil
+		}
+		task, ok := model.selectedRunnableTask()
+		if !ok {
+			return nil
+		}
+		return model.loadTaskRunPlanCmd(task.Slug, taskProfile(task))
 	default:
 		return nil
 	}
@@ -208,6 +235,13 @@ func (model Model) executeMutatingCmd(action ActionDescriptor, commandArgs []str
 	args := append([]string{}, commandArgs...)
 	return func() tea.Msg {
 		return commandResultMsg{id: runID, result: model.dashboardCommandBridge().ExecuteMutatingAction(action, args)}
+	}
+}
+
+func (model Model) loadTaskRunPlanCmd(slug string, profile string) tea.Cmd {
+	runID := model.nextCommandID + 1
+	return func() tea.Msg {
+		return commandResultMsg{id: runID, result: model.dashboardCommandBridge().LoadTaskRunPlan(slug, profile)}
 	}
 }
 

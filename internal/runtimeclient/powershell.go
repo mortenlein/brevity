@@ -19,6 +19,7 @@ type Client interface {
 	TaskCleanupJSON(slug string) ([]byte, error)
 	TaskNewJSON(slug string) ([]byte, error)
 	TaskRunJSON(slug string, profile string, smoke bool) ([]byte, error)
+	TaskRunPlanJSON(slug string, profile string) ([]byte, error)
 	TaskRuntimeInfoJSON(slug string) ([]byte, error)
 	TaskRunsJSON(slug string) ([]byte, error)
 	TaskRunsReconcileJSON() ([]byte, error)
@@ -72,6 +73,16 @@ func (client PowerShellClient) TaskRunJSON(slug string, profile string, smoke bo
 	if smoke {
 		description += " --smoke"
 		args = append(args, "--smoke")
+	}
+	return client.runJSON(description, args...)
+}
+
+func (client PowerShellClient) TaskRunPlanJSON(slug string, profile string) ([]byte, error) {
+	description := jsonDescription(commands.TaskRun, slug, "--plan")
+	args := commands.TaskRun.JSONArgs(slug, "--plan")
+	if profile != "" {
+		description += " --profile " + profile
+		args = append(args, "--profile", profile)
 	}
 	return client.runJSON(description, args...)
 }

@@ -143,7 +143,7 @@ func TestRunWorkerDryRunFixtureIntegrationDoesNotExecute(t *testing.T) {
 		t.Fatalf("fixture tasks = %d, want 1", len(state.Tasks))
 	}
 	state.Tasks[0].Provider = "codex"
-	state.Tasks[0].Profile = "fixture-profile"
+	state.Tasks[0].Profile = ""
 	state.Tasks[0].Status = "ready-for-worker"
 	state.Tasks[0].NormalizedState = "ready-for-worker"
 
@@ -157,19 +157,21 @@ func TestRunWorkerDryRunFixtureIntegrationDoesNotExecute(t *testing.T) {
 
 	updated, cmd := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	model = updated.(Model)
-	if cmd != nil {
-		t.Fatal("Run worker dry-run fixture returned command, want nil")
+	if cmd == nil {
+		t.Fatal("Run worker dry-run fixture did not request execution plan")
 	}
-	if model.commandRun != nil || model.confirmation != nil {
-		t.Fatalf("Run worker dry-run entered execution state: command=%#v confirmation=%#v", model.commandRun, model.confirmation)
+	if model.commandRun == nil || model.confirmation != nil {
+		t.Fatalf("Run worker dry-run did not enter plan loading state: command=%#v confirmation=%#v", model.commandRun, model.confirmation)
 	}
+	updated, _ = model.Update(cmd())
+	model = updated.(Model)
 	output := plainView(model.View())
-	for _, want := range []string{"Run Worker Dry-Run Preview", fixtureStartTaskSlug, "codex / fixture-profile", "no worker/provider launched", "dry-run only"} {
+	for _, want := range []string{"Run Worker Execution Plan", fixtureStartTaskSlug, "no worker/provider launched", "dry-run       yes", "PowerShell-owned execution plan"} {
 		if !strings.Contains(output, want) {
 			t.Fatalf("fixture dry-run preview missing %q:\n%s", want, output)
 		}
 	}
-	if strings.Contains(output, "task run --execute") && cmd != nil {
+	if strings.Contains(output, "task run --execute") {
 		t.Fatal("fixture dry-run unexpectedly prepared an executable command")
 	}
 }
@@ -229,6 +231,7 @@ func newStartTaskFixture(t *testing.T) startTaskFixture {
     "createdAt": "2026-05-21T00:00:00Z"
   }
 ]`)
+	writeFile(t, promptPath, "# Fixture prompt\n\nNo provider or worker should be launched during plan generation.\n")
 
 	return startTaskFixture{repoRoot: repoRoot, scriptPath: scriptPath, promptPath: promptPath}
 }

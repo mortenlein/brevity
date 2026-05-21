@@ -7321,6 +7321,7 @@ function Show-TaskRun {
     param(
         [string]$Slug,
         [bool]$Execute = $false,
+        [bool]$Plan = $false,
         [string]$ProfileName,
         [bool]$Smoke = $false,
         [bool]$ForceProvider = $false,
@@ -7333,12 +7334,17 @@ function Show-TaskRun {
             exit 1
         }
         Write-Host "Missing task slug." -ForegroundColor Red
-        Write-Host "Usage: .\brevity.ps1 task run <slug> [--execute] [--profile <name>]"
+        Write-Host "Usage: .\brevity.ps1 task run <slug> [--plan --json] [--execute] [--profile <name>]"
         exit 1
     }
 
-    if ($Json -and -not $Execute) {
-        Write-CommandErrorResult -Command "task run" -Code "execute-required" -Message "Structured task run results are only available for synchronous --execute runs."
+    if ($Execute -and $Plan) {
+        Write-CommandErrorResult -Command "task run" -Code "plan-execute-conflict" -Message "Refusing to combine --plan and --execute."
+        exit 1
+    }
+
+    if ($Json -and -not $Execute -and -not $Plan) {
+        Write-CommandErrorResult -Command "task run" -Code "execute-or-plan-required" -Message "Structured task run results require --plan or synchronous --execute."
         exit 1
     }
 
@@ -7441,8 +7447,11 @@ function Show-TaskRun {
         }
     }
 
-    Update-TaskPromptFromSpec -PromptPath $task.promptPath -Slug $Slug -SpecPath $specPath | Out-Null
-    $contextFiles = @(Copy-TaskWorkspaceContext -WorktreePath $task.worktreePath)
+    $contextFiles = @()
+    if (-not $Plan) {
+        Update-TaskPromptFromSpec -PromptPath $task.promptPath -Slug $Slug -SpecPath $specPath | Out-Null
+        $contextFiles = @(Copy-TaskWorkspaceContext -WorktreePath $task.worktreePath)
+    }
 
     try {
         if ($Smoke) {
@@ -7511,7 +7520,14 @@ function Show-TaskRun {
         }
     }
     if ($providerStatus -eq "unavailable") {
-        if ($Json -and -not $ForceProvider) {
+        if ($Plan) {
+            $runWarnings += [pscustomobject]([ordered]@{
+                code = "provider-unavailable"
+                message = "Provider '$providerName' is currently unavailable; execution would be provider-gated unless forced."
+                details = [pscustomobject]@{ provider = $providerName; status = $providerStatus; note = $providerNote }
+            })
+        }
+        elseif ($Json -and -not $ForceProvider) {
             $payload = [pscustomobject]([ordered]@{
                 slug = $Slug
                 provider = $workerCommand.provider
@@ -7546,6 +7562,72 @@ function Show-TaskRun {
             Write-Host "Provider gate overridden with --force-provider." -ForegroundColor Yellow
         }
     }
+
+    if ($Plan) {
+        $workerArguments = @()
+        if (Get-Member -InputObject $workerCommand -Name "arguments" -MemberType NoteProperty -ErrorAction SilentlyContinue) {
+            $workerArguments = @($workerCommand.arguments | ForEach-Object { [string]$_ })
+        }
+        $environmentNames = @()
+        if (Get-Member -InputObject $workerCommand -Name "environment" -MemberType NoteProperty -ErrorAction SilentlyContinue) {
+            if ($null -ne $workerCommand.environment) {
+                $environmentNames = @($workerCommand.environment.Keys | ForEach-Object { [string]$_ })
+            }
+        }
+        $safetyNotes = @(
+            "Plan generation is read-only.",
+            "No worker/provider process was launched.",
+            "Go renders this plan; PowerShell owns execution semantics.",
+            "Future execution will use the same PowerShell-owned command shape."
+        )
+        $unsupported = @()
+        if ([string]::IsNullOrWhiteSpace($effectiveProfileName)) {
+            $unsupported += "No explicit profile was provided; provider default profile resolution was used."
+        }
+        if (-not (Get-Member -InputObject $workerCommand -Name "display" -MemberType NoteProperty -ErrorAction SilentlyContinue)) {
+            $unsupported += "Worker command display string is unavailable."
+        }
+
+        $payload = [pscustomobject]([ordered]@{
+            slug = $Slug
+            provider = [string]$workerCommand.provider
+            profile = $effectiveProfileName
+            worktreePath = [string]$task.worktreePath
+            promptPath = [string]$task.promptPath
+            workerCommand = [pscustomobject]([ordered]@{
+                provider = [string]$workerCommand.provider
+                command = [string]$workerCommand.command
+                arguments = $workerArguments
+                display = [string]$workerCommand.display
+                workingDirectory = [string]$workerCommand.workingDirectory
+                executionPolicy = [string]$workerCommand.executionPolicy
+                environmentNames = $environmentNames
+            })
+            approvalMode = "future-confirmation-required"
+            executionKind = "worker-provider"
+            providerExecutionWouldOccur = $true
+            isolatedWorktreeRequired = $true
+            dryRunOnly = $true
+            noExecutionOccurred = $true
+            authority = "PowerShell-owned execution plan; Go renders only."
+            warnings = $runWarnings
+            safetyNotes = $safetyNotes
+            unsupported = $unsupported
+        })
+
+        if ($Json) {
+            Write-CommandResult -Command "task run" -Success $true -Severity "info" -Warnings $runWarnings -SuggestedNextActions @("Review the plan before enabling future worker execution.") -Payload $payload
+        }
+        else {
+            Write-Host "Run Worker execution plan"
+            Write-Host "Task: $Slug"
+            Write-Host "Provider: $($workerCommand.provider)"
+            Write-Host "Worker: $($workerCommand.display)"
+            Write-Host "Dry run only. No worker/provider process was launched."
+        }
+        return
+    }
+
     if (-not $Json) {
         Write-Host "Task: $($task.slug)"
         Write-Host "Worktree: $($task.worktreePath)"
@@ -8368,7 +8450,8 @@ function New-TaskWorktree {
             $ErrorActionPreference = $previousErrorActionPreference
         }
     }
-    else {
+
+    if (-not $Json) {
         git worktree add $targetPath -b $branchName
     }
     if ($LASTEXITCODE -ne 0) {
@@ -9049,6 +9132,7 @@ switch ($Command.ToLowerInvariant()) {
             "run" {
                 $taskSlug = $null
                 $executeTask = $false
+                $planTask = $false
                 $profileName = $null
                 $smokeTask = $false
                 $forceProvider = $false
@@ -9064,6 +9148,9 @@ switch ($Command.ToLowerInvariant()) {
                         $arg = $RemainingArgs[$i]
                         if ($arg -eq "--execute") {
                             $executeTask = $true
+                        }
+                        elseif ($arg -eq "--plan") {
+                            $planTask = $true
                         }
                         elseif ($arg -eq "--smoke") {
                             $smokeTask = $true
@@ -9093,14 +9180,14 @@ switch ($Command.ToLowerInvariant()) {
                             }
                             else {
                                 Write-Host "Unknown argument for brevity task run: $arg" -ForegroundColor Red
-                                Write-Host "Usage: .\brevity.ps1 task run <slug> [--execute] [--profile <name>] [--smoke]"
+                                Write-Host "Usage: .\brevity.ps1 task run <slug> [--plan --json] [--execute] [--profile <name>] [--smoke]"
                             }
                             exit 1
                         }
                     }
                 }
 
-                Show-TaskRun -Slug $taskSlug -Execute $executeTask -ProfileName $profileName -Smoke $smokeTask -ForceProvider $forceProvider -Json $jsonOutput
+                Show-TaskRun -Slug $taskSlug -Execute $executeTask -Plan $planTask -ProfileName $profileName -Smoke $smokeTask -ForceProvider $forceProvider -Json $jsonOutput
             }
             "status" { Show-TaskStatus }
             "runtime-info" {

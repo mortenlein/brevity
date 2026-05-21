@@ -40,6 +40,9 @@ func (client *fakeClient) TaskNewJSON(slug string) ([]byte, error)     { return 
 func (client *fakeClient) TaskRunJSON(slug string, profile string, smoke bool) ([]byte, error) {
 	return nil, nil
 }
+func (client *fakeClient) TaskRunPlanJSON(slug string, profile string) ([]byte, error) {
+	return nil, nil
+}
 func (client *fakeClient) TaskRuntimeInfoJSON(slug string) ([]byte, error) { return nil, nil }
 func (client *fakeClient) TaskRunsJSON(slug string) ([]byte, error)        { return nil, nil }
 func (client *fakeClient) TaskRunsReconcileJSON() ([]byte, error)          { return nil, nil }
@@ -55,6 +58,9 @@ type fakeCommandBridge struct {
 	mutateCalls  int
 	mutateArgs   []string
 	mutateAction ActionDescriptor
+	planCalls    int
+	planSlug     string
+	planProfile  string
 }
 
 func (bridge *fakeCommandBridge) RefreshRuntimeState() (contracts.RuntimeState, error) {
@@ -82,6 +88,19 @@ func (bridge *fakeCommandBridge) ExecuteMutatingAction(action ActionDescriptor, 
 	}
 	if bridge.result.ActionID == "" {
 		bridge.result.ActionID = pscontract.ActionID(action.ID)
+	}
+	return bridge.result
+}
+
+func (bridge *fakeCommandBridge) LoadTaskRunPlan(slug string, profile string) pscontract.ExecutionResult {
+	bridge.planCalls++
+	bridge.planSlug = slug
+	bridge.planProfile = profile
+	if bridge.result.CommandDisplayLabel == "" {
+		bridge.result.CommandDisplayLabel = "Run worker plan"
+	}
+	if bridge.result.ActionID == "" {
+		bridge.result.ActionID = pscontract.ActionRunWorker
 	}
 	return bridge.result
 }
@@ -142,11 +161,11 @@ func TestActionPaletteOpensWithShortcut(t *testing.T) {
 		"Provider status   executable read-only",
 		"Task status       executable read-only",
 		"Start task        future PowerShell action; select a task row to enable",
-		"Run worker        dry-run only; select a runnable task row",
+		"Run worker        plan preview only; select a runnable task row",
 		"Merge task        future PowerShell action; confirmation required; not enabled yet",
 		"Cleanup task      future PowerShell action; confirmation required; not enabled yet",
 		"Refresh state     enter refreshes state",
-		"enter runs read-only/start or opens dry-run preview | esc closes",
+		"enter runs read-only/start or loads worker plan | esc closes",
 	} {
 		if !strings.Contains(output, want) {
 			t.Fatalf("palette output missing %q:\n%s", want, output)
@@ -576,7 +595,10 @@ func TestSelectedRunnableTaskOnlyComesFromRunnableTaskRows(t *testing.T) {
 }
 
 func TestRunWorkerDryRunPreviewDoesNotExecute(t *testing.T) {
-	bridge := &fakeCommandBridge{}
+	bridge := &fakeCommandBridge{result: pscontract.ExecutionResult{
+		ExitCode: 0,
+		Stdout:   `{"schema":"brevity.command-result.v1","command":"task run","success":true,"severity":"info","payload":{"slug":"task-one","provider":"codex","profile":"large","worktreePath":"C:\\repo\\worktrees\\active\\brevity-task-one","promptPath":"C:\\repo\\.brevity\\tasks\\task-one\\prompt.md","workerCommand":{"provider":"codex","command":"codex","arguments":["run"],"display":"codex run <prompt>","workingDirectory":"C:\\repo\\worktrees\\active\\brevity-task-one"},"approvalMode":"future-confirmation-required","executionKind":"worker-provider","providerExecutionWouldOccur":true,"isolatedWorktreeRequired":true,"dryRunOnly":true,"noExecutionOccurred":true,"authority":"PowerShell-owned execution plan; Go renders only.","safetyNotes":["No worker/provider process was launched."]}}`,
+	}}
 	model := NewModelWithSource(&fakeClient{}, time.Second, "native")
 	model.commandBridge = bridge
 	model.state = bubbleState()
@@ -590,20 +612,26 @@ func TestRunWorkerDryRunPreviewDoesNotExecute(t *testing.T) {
 
 	updated, cmd := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	model = updated.(Model)
-	if cmd != nil {
-		t.Fatal("Run worker dry-run returned command, want nil")
+	if cmd == nil {
+		t.Fatal("Run worker dry-run did not request plan")
 	}
-	if model.actionPreview == nil {
-		t.Fatal("Run worker did not open dry-run preview")
+	if model.actionPreview != nil {
+		t.Fatal("Run worker opened old dry-run preview")
 	}
+	if model.commandRun == nil || model.commandRun.status != commandRunning {
+		t.Fatalf("Run worker status = %#v, want running", model.commandRun)
+	}
+	updated, _ = model.Update(cmd())
+	model = updated.(Model)
 	output := plainView(model.View())
 	for _, want := range []string{
-		"Run Worker Dry-Run Preview",
+		"Run Worker Execution Plan",
 		"task          task-one",
-		"provider      codex / large",
-		"dry-run only",
+		"provider      codex",
+		"profile       large",
+		"worker        codex run <prompt>",
 		"no worker/provider launched",
-		"enter         does not execute",
+		"dry-run       yes",
 	} {
 		if !strings.Contains(output, want) {
 			t.Fatalf("Run worker preview missing %q:\n%s", want, output)
@@ -613,8 +641,8 @@ func TestRunWorkerDryRunPreviewDoesNotExecute(t *testing.T) {
 
 	updated, cmd = model.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	model = updated.(Model)
-	if cmd != nil || bridge.executeCalls != 0 || bridge.mutateCalls != 0 {
-		t.Fatalf("enter in dry-run executed: cmd=%v execute=%d mutate=%d", cmd, bridge.executeCalls, bridge.mutateCalls)
+	if cmd != nil || bridge.executeCalls != 0 || bridge.mutateCalls != 0 || bridge.planCalls != 1 {
+		t.Fatalf("enter in plan result executed unexpected command: cmd=%v execute=%d mutate=%d plan=%d", cmd, bridge.executeCalls, bridge.mutateCalls, bridge.planCalls)
 	}
 }
 
@@ -1048,13 +1076,13 @@ func TestActionPaletteHelperOnlyRendersWhenSpaceAllows(t *testing.T) {
 	model.height = 24
 
 	output := plainView(model.View())
-	if strings.Contains(output, "opens dry-run preview") {
+	if strings.Contains(output, "loads worker plan") {
 		t.Fatalf("height-constrained palette rendered helper:\n%s", output)
 	}
 
 	model.height = 31
 	output = plainView(model.View())
-	if !strings.Contains(output, "enter runs read-only/start or opens dry-run preview | esc closes") {
+	if !strings.Contains(output, "enter runs read-only/start or loads worker plan | esc closes") {
 		t.Fatalf("roomy palette omitted helper:\n%s", output)
 	}
 }

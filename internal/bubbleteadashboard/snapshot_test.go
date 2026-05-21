@@ -147,7 +147,7 @@ Actions
 > Provider status   executable read-only
   Task status       executable read-only
   Start task        future PowerShell action; select a task row to enable
-  Run worker        dry-run only; select a runnable task row
+  Run worker        plan preview only; select a runnable task row
   Merge task        future PowerShell action; confirmation required; not enable...
   Cleanup task      future PowerShell action; confirmation required; not enable...
 
@@ -185,7 +185,7 @@ Actions
   Provider status   executable read-only
   Task status       executable read-only
 > Start task        confirmation required for task-one
-  Run worker        dry-run only; select a runnable task row
+  Run worker        plan preview only; select a runnable task row
   Merge task        future PowerShell action; confirmation required; not enable...
   Cleanup task      future PowerShell action; confirmation required; not enable...
 
