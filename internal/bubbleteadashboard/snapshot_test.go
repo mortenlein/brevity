@@ -146,7 +146,7 @@ Actions
   Refresh state     enter refreshes state
 > Provider status   executable read-only
   Task status       executable read-only
-  Start task        future PowerShell action; select a task row to enable
+  Start task        select a task row to enable
   Run worker        plan preview only; select a runnable task row
   Merge task        future PowerShell action; confirmation required; not enable...
   Cleanup task      future PowerShell action; confirmation required; not enable...
@@ -184,7 +184,7 @@ Actions
   Refresh state     enter refreshes state
   Provider status   executable read-only
   Task status       executable read-only
-> Start task        confirmation required for task-one
+> Start task        native start confirmation for task-one
   Run worker        plan preview only; select a runnable task row
   Merge task        future PowerShell action; confirmation required; not enable...
   Cleanup task      future PowerShell action; confirmation required; not enable...
@@ -254,7 +254,7 @@ Selected Detail
 Command Preview
   action        Start task
   status        disabled / blocked
-  command       powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\\brevity.ps1 task start...
+  command       brevity task start <selected-task-slug>
   blocked       not enabled yet; select a task row to enable Start task
   confirm       confirmation required before any future execution
   authority     PowerShell is authoritative; Go will not write .brevity
@@ -297,9 +297,9 @@ Selected Detail
 Confirm Action
   action        Start task
   status        not executable unless enabled by command descriptor
-  command       powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\\brevity.ps1 task start...
-  prompt        Start task task-one changes task state through PowerShell. Go will not write .bre...
-  authority     PowerShell is authoritative; Go does not mutate task state
+  command       brevity task start task-one
+  prompt        Start task task-one changes task metadata through native Go. No provider or worke...
+  authority     native Go task start service
   warning       this changes task state
   preflight     blocked / error
   native gate   task-start preflight for task-one is blocked; no mutation or provider execution o...

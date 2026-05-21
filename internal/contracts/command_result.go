@@ -97,6 +97,18 @@ type TaskNewPayload struct {
 	MetadataPath string `json:"metadataPath"`
 }
 
+type TaskStartPayload struct {
+	Action          string `json:"action"`
+	Slug            string `json:"slug"`
+	OldState        string `json:"oldState"`
+	NewState        string `json:"newState"`
+	UpdatedAt       string `json:"updatedAt"`
+	StartedAt       string `json:"startedAt,omitempty"`
+	OperatorMessage string `json:"operatorMessage"`
+	RefreshExpected bool   `json:"refreshExpected"`
+	NoExecution     bool   `json:"noExecution"`
+}
+
 type TaskRunExecutionPayload struct {
 	Slug          string `json:"slug"`
 	RunID         string `json:"runId"`
@@ -333,6 +345,19 @@ func ParseTaskNewPayload(result CommandResult) (TaskNewPayload, error) {
 	var payload TaskNewPayload
 	if err := json.Unmarshal(result.Payload, &payload); err != nil {
 		return TaskNewPayload{}, fmt.Errorf("invalid task new payload: %w", err)
+	}
+
+	return payload, nil
+}
+
+func ParseTaskStartPayload(result CommandResult) (TaskStartPayload, error) {
+	if len(result.Payload) == 0 {
+		return TaskStartPayload{}, errors.New("task start result missing payload")
+	}
+
+	var payload TaskStartPayload
+	if err := json.Unmarshal(result.Payload, &payload); err != nil {
+		return TaskStartPayload{}, fmt.Errorf("invalid task start payload: %w", err)
 	}
 
 	return payload, nil

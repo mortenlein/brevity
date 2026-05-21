@@ -2,13 +2,16 @@ package bubbleteadashboard
 
 import (
 	"context"
+	"encoding/json"
 	"path/filepath"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/mortenlein/brevity/internal/actions"
 	"github.com/mortenlein/brevity/internal/contracts"
 	"github.com/mortenlein/brevity/internal/pscontract"
 	"github.com/mortenlein/brevity/internal/runtimeclient"
+	"github.com/mortenlein/brevity/internal/state"
 )
 
 type ActionKind string
@@ -51,6 +54,7 @@ type DashboardCommandBridge interface {
 	RefreshRuntimeState() (contracts.RuntimeState, error)
 	ExecuteReadOnlyAction(action ActionDescriptor) pscontract.ExecutionResult
 	ExecuteMutatingAction(action ActionDescriptor, commandArgs []string) pscontract.ExecutionResult
+	ExecuteTaskStart(slug string, repoRoot string) pscontract.ExecutionResult
 	LoadTaskRunPlan(slug string, profile string) pscontract.ExecutionResult
 }
 
@@ -72,6 +76,39 @@ func (bridge RuntimeClientCommandBridge) ExecuteReadOnlyAction(action ActionDesc
 
 func (bridge RuntimeClientCommandBridge) ExecuteMutatingAction(action ActionDescriptor, commandArgs []string) pscontract.ExecutionResult {
 	return pscontract.PowerShellCommandRunner{ScriptPath: bridge.scriptPath()}.RunMutating(context.Background(), action.Command, commandArgs)
+}
+
+func (bridge RuntimeClientCommandBridge) ExecuteTaskStart(slug string, repoRoot string) pscontract.ExecutionResult {
+	started := time.Now()
+	store, err := state.NewStore(repoRoot)
+	result := pscontract.ExecutionResult{
+		ActionID:            pscontract.ActionStartTask,
+		CommandDisplayLabel: "Start task",
+		StartedAt:           started,
+		CompletedAt:         time.Now(),
+		RefreshAfter:        true,
+	}
+	if err != nil {
+		result.ExitCode = 1
+		result.Error = err.Error()
+		return result
+	}
+	commandResult, runErr := actions.TaskStartService{Store: store}.Start(slug)
+	output, marshalErr := json.Marshal(commandResult)
+	if marshalErr != nil {
+		result.ExitCode = 1
+		result.Error = marshalErr.Error()
+		return result
+	}
+	result.Stdout = string(output)
+	if runErr != nil || !commandResult.Success {
+		result.ExitCode = 1
+		if runErr != nil {
+			result.Error = runErr.Error()
+		}
+	}
+	result.CompletedAt = time.Now()
+	return result
 }
 
 func (bridge RuntimeClientCommandBridge) LoadTaskRunPlan(slug string, profile string) pscontract.ExecutionResult {
@@ -148,14 +185,15 @@ func (model Model) actionDescriptors() []ActionDescriptor {
 		case ActionStartTask:
 			if startable {
 				actions[index].Enabled = true
-				actions[index].Description = "confirmation required for " + startSlug
+				actions[index].Description = "native start confirmation for " + startSlug
 				actions[index].Command.Enabled = true
 				actions[index].Command.DisabledReason = ""
+				actions[index].Command.SafetyWarning = "Go native task start updates task metadata only; no provider or worker execution."
 			} else {
 				actions[index].Enabled = false
-				actions[index].Description = "future PowerShell action; select a task row to enable"
+				actions[index].Description = "select a task row to enable"
 				actions[index].Command.Enabled = false
-				actions[index].Command.DisabledReason = "future PowerShell action; select a task row with a slug to enable Start task"
+				actions[index].Command.DisabledReason = "select a task row with a slug to enable Start task"
 			}
 		case ActionRunWorker:
 			if runnable {
@@ -198,7 +236,7 @@ func (model Model) commandForAction(action ActionDescriptor) tea.Cmd {
 		if !ok {
 			return nil
 		}
-		return model.executeMutatingCmd(action, []string{slug})
+		return model.executeTaskStartCmd(slug)
 	case ActionRunWorker:
 		if model.commandRun != nil && model.commandRun.status == commandRunning {
 			return nil
@@ -235,6 +273,14 @@ func (model Model) executeMutatingCmd(action ActionDescriptor, commandArgs []str
 	args := append([]string{}, commandArgs...)
 	return func() tea.Msg {
 		return commandResultMsg{id: runID, result: model.dashboardCommandBridge().ExecuteMutatingAction(action, args)}
+	}
+}
+
+func (model Model) executeTaskStartCmd(slug string) tea.Cmd {
+	runID := model.nextCommandID + 1
+	repoRoot := model.state.RepoRoot
+	return func() tea.Msg {
+		return commandResultMsg{id: runID, result: model.dashboardCommandBridge().ExecuteTaskStart(slug, repoRoot)}
 	}
 }
 

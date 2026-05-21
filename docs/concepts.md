@@ -591,19 +591,16 @@ branches, clean up worktrees, or otherwise change task lifecycle state.
 If the metadata file does not exist, Brevity reports that no Brevity tasks were
 found.
 
-`Brevity task start <slug>` reads the same metadata file and finds the matching
-task record. It prints:
+`Brevity task start <slug>` is Go-owned task lifecycle mutation. It reads the
+same metadata file, runs native mutation preflight, acquires the advisory
+`.brevity\state.lock`, and updates the matching task record to
+`ready-for-worker`.
 
-- task slug
-- worktree path
-- prompt path
-- exact Codex start command
-
-The Codex command format is:
-
-```text
-codex -C <worktreePath> -a never -s workspace-write
-```
+Start updates `updatedAt`, sets `startedAt` when absent, preserves unrelated and
+unknown task fields, and returns `brevity.command-result.v1` in JSON mode. It
+does not launch Codex, run a provider/worker, create or delete branches, create
+or delete worktrees, or materialize prompt/context files. PowerShell task start
+remains available only as legacy/reference behavior.
 
 The command also tells the operator to read `prompt.md` and follow it exactly.
 It does not automatically launch Codex or run planner automation.

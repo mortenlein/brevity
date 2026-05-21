@@ -59,6 +59,9 @@ type fakeCommandBridge struct {
 	mutateCalls  int
 	mutateArgs   []string
 	mutateAction ActionDescriptor
+	startCalls   int
+	startSlug    string
+	startRepo    string
 	planCalls    int
 	planSlug     string
 	planProfile  string
@@ -89,6 +92,19 @@ func (bridge *fakeCommandBridge) ExecuteMutatingAction(action ActionDescriptor, 
 	}
 	if bridge.result.ActionID == "" {
 		bridge.result.ActionID = pscontract.ActionID(action.ID)
+	}
+	return bridge.result
+}
+
+func (bridge *fakeCommandBridge) ExecuteTaskStart(slug string, repoRoot string) pscontract.ExecutionResult {
+	bridge.startCalls++
+	bridge.startSlug = slug
+	bridge.startRepo = repoRoot
+	if bridge.result.CommandDisplayLabel == "" {
+		bridge.result.CommandDisplayLabel = "Start task"
+	}
+	if bridge.result.ActionID == "" {
+		bridge.result.ActionID = pscontract.ActionStartTask
 	}
 	return bridge.result
 }
@@ -161,7 +177,7 @@ func TestActionPaletteOpensWithShortcut(t *testing.T) {
 		"> Refresh state",
 		"Provider status   executable read-only",
 		"Task status       executable read-only",
-		"Start task        future PowerShell action; select a task row to enable",
+		"Start task        select a task row to enable",
 		"Run worker        plan preview only; select a runnable task row",
 		"Merge task        future PowerShell action; confirmation required; not enabled yet",
 		"Cleanup task      future PowerShell action; confirmation required; not enabled yet",
@@ -303,7 +319,7 @@ func TestActionPaletteEnterOnDisabledActionDoesNotPollRuntimeState(t *testing.T)
 	for _, want := range []string{
 		"Command Preview",
 		"action        Start task",
-		"blocked       future PowerShell action",
+		"blocked       select a task row",
 		"PowerShell is authoritative",
 	} {
 		if !strings.Contains(output, want) {
@@ -666,7 +682,7 @@ func TestStartTaskConfirmationOpensAndCancelDoesNotExecute(t *testing.T) {
 		t.Fatal("Start task did not open confirmation")
 	}
 	output := plainView(model.View())
-	for _, want := range []string{"Start task", "task-one", "task start...", "PowerShell is authoritative", "this changes task state"} {
+	for _, want := range []string{"Start task", "task-one", "brevity task start", "native Go task start service", "this changes task state"} {
 		if !strings.Contains(output, want) {
 			t.Fatalf("confirmation missing %q:\n%s", want, output)
 		}
@@ -674,8 +690,8 @@ func TestStartTaskConfirmationOpensAndCancelDoesNotExecute(t *testing.T) {
 
 	updated, cmd = model.Update(tea.KeyMsg{Type: tea.KeyEsc})
 	model = updated.(Model)
-	if cmd != nil || bridge.mutateCalls != 0 {
-		t.Fatalf("cancel executed command: cmd=%v mutateCalls=%d", cmd, bridge.mutateCalls)
+	if cmd != nil || bridge.mutateCalls != 0 || bridge.startCalls != 0 {
+		t.Fatalf("cancel executed command: cmd=%v mutateCalls=%d startCalls=%d", cmd, bridge.mutateCalls, bridge.startCalls)
 	}
 	if model.confirmation != nil {
 		t.Fatal("cancel left confirmation open")
@@ -710,14 +726,14 @@ func TestConfirmingStartTaskExecutesBridgeAddsActivityAndRefreshesOnSuccess(t *t
 
 	updated, followup := model.Update(cmd())
 	model = updated.(Model)
-	if bridge.mutateCalls != 1 {
-		t.Fatalf("mutateCalls = %d, want 1", bridge.mutateCalls)
+	if bridge.startCalls != 1 {
+		t.Fatalf("startCalls = %d, want 1", bridge.startCalls)
 	}
-	if got := strings.Join(bridge.mutateArgs, " "); got != "task-one" {
-		t.Fatalf("mutating args = %q, want task-one", got)
+	if bridge.mutateCalls != 0 {
+		t.Fatalf("mutateCalls = %d, want 0", bridge.mutateCalls)
 	}
-	if bridge.mutateAction.ID != ActionStartTask {
-		t.Fatalf("mutating action = %s, want %s", bridge.mutateAction.ID, ActionStartTask)
+	if bridge.startSlug != "task-one" {
+		t.Fatalf("startSlug = %q, want task-one", bridge.startSlug)
 	}
 	if model.commandRun.status != commandSucceeded {
 		t.Fatalf("status = %s, want succeeded", model.commandRun.status)

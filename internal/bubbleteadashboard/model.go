@@ -1241,10 +1241,10 @@ func (model Model) renderHelpOverlay(usedRows ...int) string {
 		"  navigate with up/down or j/k; d toggles selected details",
 		"  r refreshes runtime state; l toggles live polling",
 		"  PowerShell remains authoritative for Brevity state",
-		"  Go does not write .brevity or start providers/workers",
+		"  Go owns task start metadata updates and does not start providers/workers",
 		"  p opens actions; read-only actions can execute PowerShell commands",
 		"  Start task requires a selected task row and confirmation",
-		"  Start task changes task state through PowerShell only",
+		"  Start task changes task state through native Go only",
 		"  Run worker loads a PowerShell-owned execution plan only",
 		"  future worker execution will be long-running and PowerShell-authoritative",
 		"  Merge and Cleanup remain disabled future actions",
@@ -1305,7 +1305,7 @@ func (model Model) renderRunWorkerDryRunPreview(action ActionDescriptor, usedRow
 		"  provider      " + provider + " / " + profile,
 		"  command       " + model.previewCommandShape(action),
 		"  status        dry-run only; execution is disabled",
-		"  boundary      PowerShell remains authoritative; Go does not write .brevity",
+		"  boundary      PowerShell remains authoritative for worker execution",
 		"  warning       worker/provider execution is not enabled",
 		"  execution     no worker/provider launched",
 		"  mode          dry-run only",
@@ -1329,6 +1329,8 @@ func (model Model) previewCommandShape(action ActionDescriptor) string {
 		} else {
 			args = []string{"<selected-task-slug>"}
 		}
+		args = append([]string{"brevity", "task", "start"}, args...)
+		return strings.Join(args, " ")
 	case ActionRunWorker:
 		if task, ok := model.selectedRunnableTask(); ok {
 			args = []string{task.Slug}
@@ -1357,7 +1359,7 @@ func (model Model) confirmationForAction(action ActionDescriptor) (pscontract.Co
 			return pscontract.ConfirmationState{}, false
 		}
 		confirmation.Prompt = fmt.Sprintf(
-			"Start task %s changes task state through PowerShell. Go will not write .brevity directly.",
+			"Start task %s changes task metadata through native Go. No provider or worker is launched.",
 			slug,
 		)
 	}
@@ -1373,17 +1375,26 @@ func (model Model) renderConfirmation(usedRows ...int) string {
 	command := "(unavailable)"
 	if model.confirmAction != nil {
 		actionLabel = model.confirmAction.Label
-		invocation, err := pscontract.BuildInvocation(model.confirmAction.Command, `.\\brevity.ps1`, model.confirmArgs, false)
-		if err == nil {
-			command = invocation.Display()
+		if model.confirmAction.ID == ActionStartTask {
+			args := append([]string{"brevity", "task", "start"}, model.confirmArgs...)
+			command = strings.Join(args, " ")
+		} else {
+			invocation, err := pscontract.BuildInvocation(model.confirmAction.Command, `.\\brevity.ps1`, model.confirmArgs, false)
+			if err == nil {
+				command = invocation.Display()
+			}
 		}
+	}
+	authority := "PowerShell is authoritative; Go does not mutate task state"
+	if model.confirmAction != nil && model.confirmAction.ID == ActionStartTask {
+		authority = "native Go task start service"
 	}
 	lines := []string{
 		"  action        " + actionLabel,
 		"  status        not executable unless enabled by command descriptor",
 		"  command       " + command,
 		"  prompt        " + state.Prompt,
-		"  authority     PowerShell is authoritative; Go does not mutate task state",
+		"  authority     " + authority,
 		"  warning       this changes task state",
 	}
 	if model.confirmAction != nil {

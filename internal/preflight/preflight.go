@@ -109,7 +109,7 @@ func applyActionMetadata(result *Result) {
 		result.ExpectedMutations = []string{"create task metadata", "create task branch/worktree in future implementation"}
 	case ActionTaskStart:
 		result.RequiresConfirmation = true
-		result.ExpectedMutations = []string{"transition task to active/startable state", "create or register task worktree if PowerShell requires it"}
+		result.ExpectedMutations = []string{"transition task metadata to ready-for-worker", "update task timestamps"}
 	case ActionTaskRun:
 		result.ProviderExecution = true
 		result.RequiresConfirmation = true
@@ -176,7 +176,7 @@ func checkWorktree(task state.Task, action Action, result *Result) {
 	path := firstNonEmpty(task.WorktreePath, nestedWorktreePath(task.Worktree))
 	if path == "" {
 		if action == ActionTaskStart {
-			result.AddCheck("worktree-path", StatusWarn, SeverityWarn, "worktree path is not recorded; start may materialize it later")
+			result.AddCheck("worktree-path", StatusWarn, SeverityWarn, "worktree path is not recorded; native start will not create it")
 		} else {
 			result.AddCheck("worktree-path", StatusBlocked, SeverityError, "worktree path is required")
 		}
@@ -189,7 +189,7 @@ func checkWorktree(task state.Task, action Action, result *Result) {
 	}
 	if _, err := os.Stat(path); err != nil {
 		if action == ActionTaskStart {
-			result.AddCheck("worktree-path", StatusWarn, SeverityWarn, "worktree path is recorded but missing; start may create it later")
+			result.AddCheck("worktree-path", StatusWarn, SeverityWarn, "worktree path is recorded but missing; native start will not create it")
 		} else {
 			result.AddCheck("worktree-path", StatusBlocked, SeverityError, "worktree path is missing")
 		}
@@ -202,7 +202,7 @@ func checkBranch(task state.Task, action Action, result *Result) {
 	branch := firstNonEmpty(task.Branch, nestedWorktreeBranch(task.Worktree))
 	if branch == "" {
 		if action == ActionTaskStart {
-			result.AddCheck("branch-name", StatusWarn, SeverityWarn, "branch is not recorded; start may create it later")
+			result.AddCheck("branch-name", StatusWarn, SeverityWarn, "branch is not recorded; native start will not create it")
 		} else {
 			result.AddCheck("branch-name", StatusBlocked, SeverityError, "branch name is required")
 		}

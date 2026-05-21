@@ -642,27 +642,19 @@ contents. When the spec is missing, Brevity prints a clear not-found message and
 the expected path. This command is read-only; it does not create worktrees,
 parse backlog planner output, or change `.brevity\tasks.json`.
 
-The task start command reads the matching record from:
+The native Go task start command reads the matching record from:
 
 ```text
 <repo>\.brevity\tasks.json
 ```
 
-It prints the task slug, worktree path, prompt path, and exact Codex command to
-run manually:
-
-```text
-codex -C <worktreePath> -a never -s workspace-write
-```
-
-It also prints `Read prompt.md and follow it exactly.` Brevity does not
-automatically launch Codex.
-
-Before printing the command, Brevity refreshes `prompt.md` from the matching
-vault task spec when one exists and refreshes `.brevity\context` from selected
-project memory files. The generated prompt includes the task slug, embedded spec
-contents, local context guidance, constraints, acceptance checks, and bounded
-worker instructions.
+It runs native mutation preflight, takes the advisory `.brevity\state.lock`,
+updates the task record to `ready-for-worker`, sets `updatedAt`, sets
+`startedAt` when absent, preserves unrelated and unknown task fields, and emits
+`brevity.command-result.v1` for JSON consumers. It does not launch Codex, run a
+provider/worker, create or delete branches, create or delete worktrees, or
+materialize prompt/context files. PowerShell task start remains available as
+legacy/reference behavior.
 
 The task run command reads the matching record from:
 

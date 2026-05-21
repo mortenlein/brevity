@@ -1,12 +1,16 @@
 package state
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
+	"os"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/mortenlein/brevity/internal/contracts"
+	"github.com/mortenlein/brevity/internal/state/locking"
 )
 
 const TasksFile = "tasks.json"
@@ -61,6 +65,17 @@ type Task struct {
 	LatestRunSource       string              `json:"latestRunSource,omitempty"`
 }
 
+type TaskUpdateOptions struct {
+	LockOptions locking.Options
+}
+
+type TaskUpdate struct {
+	Previous Task
+	Updated  Task
+}
+
+type TaskMutator func(task map[string]json.RawMessage) error
+
 type TaskWorktree struct {
 	Exists     bool   `json:"exists"`
 	Path       string `json:"path"`
@@ -111,8 +126,122 @@ func LoadTasks(store Store) (Tasks, bool, error) {
 	return tasks, false, nil
 }
 
+func UpdateTask(store Store, slug string, options TaskUpdateOptions, mutate TaskMutator) (TaskUpdate, error) {
+	slug = strings.TrimSpace(slug)
+	if slug == "" {
+		return TaskUpdate{}, fmt.Errorf("task slug is required")
+	}
+	if mutate == nil {
+		return TaskUpdate{}, fmt.Errorf("task mutator is required")
+	}
+	lockOptions := options.LockOptions
+	if lockOptions.Timeout == 0 {
+		lockOptions.Timeout = 5 * time.Second
+	}
+	lock, err := locking.Acquire(store.LockPath(), lockOptions)
+	if err != nil {
+		return TaskUpdate{}, fmt.Errorf("task metadata locked: %w", err)
+	}
+	defer lock.Release()
+
+	rawTasks, err := loadRawTasks(store)
+	if err != nil {
+		return TaskUpdate{}, err
+	}
+	index := -1
+	for i, rawTask := range rawTasks {
+		if rawTaskKey(rawTask) == slug {
+			index = i
+			break
+		}
+	}
+	if index < 0 {
+		return TaskUpdate{}, fmt.Errorf("task not found: %s", slug)
+	}
+
+	previous, err := rawTaskToTask(rawTasks[index])
+	if err != nil {
+		return TaskUpdate{}, fmt.Errorf("parse task %s: %w", slug, err)
+	}
+	nextRaw := cloneRawTask(rawTasks[index])
+	if err := mutate(nextRaw); err != nil {
+		return TaskUpdate{}, err
+	}
+	updated, err := rawTaskToTask(nextRaw)
+	if err != nil {
+		return TaskUpdate{}, fmt.Errorf("parse updated task %s: %w", slug, err)
+	}
+	rawTasks[index] = nextRaw
+	if err := writeRawTasks(store, rawTasks); err != nil {
+		return TaskUpdate{}, err
+	}
+	return TaskUpdate{Previous: previous, Updated: updated}, nil
+}
+
 func (tasks *Tasks) UnmarshalJSON(input []byte) error {
 	return json.Unmarshal(input, &tasks.Items)
+}
+
+func loadRawTasks(store Store) ([]map[string]json.RawMessage, error) {
+	data, err := os.ReadFile(store.Path(TasksFile))
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, fmt.Errorf(".brevity/%s is missing", TasksFile)
+		}
+		return nil, fmt.Errorf("read %s: %w", TasksFile, err)
+	}
+	if len(bytes.TrimSpace(data)) == 0 {
+		return nil, fmt.Errorf("read %s: file is empty", TasksFile)
+	}
+	var rawTasks []map[string]json.RawMessage
+	if err := json.Unmarshal(data, &rawTasks); err != nil {
+		return nil, fmt.Errorf("parse %s: %w", TasksFile, err)
+	}
+	if rawTasks == nil {
+		rawTasks = []map[string]json.RawMessage{}
+	}
+	var typed []Task
+	if err := json.Unmarshal(data, &typed); err != nil {
+		return nil, fmt.Errorf("parse %s: %w", TasksFile, err)
+	}
+	if err := (Tasks{Items: typed}).Validate(); err != nil {
+		return nil, err
+	}
+	return rawTasks, nil
+}
+
+func writeRawTasks(store Store, rawTasks []map[string]json.RawMessage) error {
+	return store.WriteJSON(TasksFile, rawTasks)
+}
+
+func rawTaskKey(rawTask map[string]json.RawMessage) string {
+	for _, key := range []string{"slug", "id"} {
+		var value string
+		if err := json.Unmarshal(rawTask[key], &value); err == nil && strings.TrimSpace(value) != "" {
+			return strings.TrimSpace(value)
+		}
+	}
+	return ""
+}
+
+func rawTaskToTask(rawTask map[string]json.RawMessage) (Task, error) {
+	data, err := json.Marshal(rawTask)
+	if err != nil {
+		return Task{}, err
+	}
+	var task Task
+	if err := json.Unmarshal(data, &task); err != nil {
+		return Task{}, err
+	}
+	return task, nil
+}
+
+func cloneRawTask(rawTask map[string]json.RawMessage) map[string]json.RawMessage {
+	clone := make(map[string]json.RawMessage, len(rawTask))
+	for key, value := range rawTask {
+		clone[key] = append(json.RawMessage(nil), value...)
+	}
+	return clone
 }
 
 func (tasks Tasks) Validate() error {

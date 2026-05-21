@@ -88,17 +88,20 @@ status, and task run-history read paths. `task runs <slug> --json` and
 machine consumers. Their human output is operator-oriented and may evolve, but
 the JSON payloads are intended to change additively.
 
-PowerShell remains the legacy/reference implementation for commands that mutate
-task state or invoke providers/workers. The TUI should continue treating worker
+PowerShell remains the legacy/reference implementation for commands that invoke
+providers/workers or own task new/run/merge/cleanup execution. Native Go owns
+confirmed Start task metadata mutation. The TUI should continue treating worker
 execution, task creation, cleanup, merge, and other mutations as explicit
 command-boundary operations.
 
 ## Go Dashboard Contract
 
-The Go Bubble Tea dashboard must treat PowerShell as authoritative. Go may build
-argv-style command descriptors and display disabled future actions, but it must
-not write `.brevity`, mutate task state, merge branches, remove worktrees, or
-start providers/workers directly.
+The Go Bubble Tea dashboard uses native Go for confirmed Start task and treats
+PowerShell as legacy authority for the remaining task execution surfaces. Go may
+build argv-style command descriptors and display disabled future actions, but
+only Start task may write `.brevity`; it must use the native state store,
+advisory lock, and preflight gate. The dashboard must not merge branches, remove
+worktrees, or start providers/workers directly.
 
 Command construction must keep the executable, script path, command words, and
 operator-selected values as separate argv entries. Do not concatenate a shell
@@ -107,9 +110,9 @@ remain a single argument.
 
 Current dashboard enablement is intentionally narrow: Refresh runtime state is
 executable, and Start task is executable only after a task row is selected and
-confirmed. Run worker, Merge task, and Cleanup task remain disabled until their
-PowerShell contracts, confirmation UI, post-command refresh, and result display
-are hardened.
+confirmed. Run worker remains a dry-run plan preview. Merge task and Cleanup
+task remain disabled until their contracts, confirmation UI, post-command
+refresh, and result display are hardened.
 
 ## Start Task Fixture Smoke
 
@@ -120,13 +123,12 @@ task action:
 go test ./internal/bubbleteadashboard -run StartTaskFixtureIntegration -count=1 -v
 ```
 
-The test creates a temporary git repository, copies `brevity.ps1` into it,
-creates only the minimum `.brevity` runtime files, and adds one fixture task
-named `fixture-start-task`. It drives dashboard selection, confirmation, the
-PowerShell bridge invocation, the result panel, the activity row, and runtime
-refresh against that temp repo.
+The test creates a temporary git repository, creates only the minimum `.brevity`
+runtime files, and adds one fixture task named `fixture-start-task`. It drives
+dashboard selection, confirmation, native Go Start execution, the result panel,
+the activity row, runtime refresh, and the temp `tasks.json` update.
 
-This exists so Start task can be tested without real user tasks. PowerShell
-remains authoritative for the mutation, and Go production code does not write
-`.brevity` directly. The fixture does not start providers or workers, and it
-does not enable Run worker, Merge task, or Cleanup task.
+This exists so Start task can be tested without real user tasks. Go is
+authoritative for this mutation and writes through the native state store and
+lock. The fixture does not start providers or workers, and it does not enable
+Run worker, Merge task, or Cleanup task.

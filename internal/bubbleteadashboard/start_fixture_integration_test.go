@@ -78,8 +78,8 @@ func TestStartTaskFixtureIntegration(t *testing.T) {
 	if model.commandRun == nil || model.commandRun.status != commandSucceeded {
 		t.Fatalf("commandRun = %#v, want succeeded", model.commandRun)
 	}
-	if got := strings.TrimSpace(model.commandRun.result.Stdout); !strings.Contains(got, "Task: "+fixtureStartTaskSlug) || !strings.Contains(got, "Worker: codex -C") {
-		t.Fatalf("Start task stdout did not prove fixture command path:\n%s", got)
+	if got := strings.TrimSpace(model.commandRun.result.Stdout); !strings.Contains(got, `"command":"task start"`) || !strings.Contains(got, `"slug":"`+fixtureStartTaskSlug+`"`) || !strings.Contains(got, `"noExecution":true`) {
+		t.Fatalf("Start task stdout did not prove native fixture command path:\n%s", got)
 	}
 	if len(model.activities) == 0 || model.activities[0].status != commandSucceeded {
 		t.Fatalf("activity row not recorded: %#v", model.activities)
@@ -99,12 +99,12 @@ func TestStartTaskFixtureIntegration(t *testing.T) {
 		t.Fatalf("refreshed state repoRoot = %q, want fixture %q", model.state.RepoRoot, fixture.repoRoot)
 	}
 
-	prompt, err := os.ReadFile(fixture.promptPath)
+	tasksData, err := os.ReadFile(filepath.Join(fixture.repoRoot, ".brevity", "tasks.json"))
 	if err != nil {
-		t.Fatalf("read fixture prompt: %v", err)
+		t.Fatalf("read fixture tasks: %v", err)
 	}
-	if !strings.Contains(string(prompt), fixtureStartTaskSlug) {
-		t.Fatalf("fixture prompt was not materialized for %s:\n%s", fixtureStartTaskSlug, string(prompt))
+	if !strings.Contains(string(tasksData), `"normalizedState": "ready-for-worker"`) || !strings.Contains(string(tasksData), `"startedAt":`) {
+		t.Fatalf("fixture task metadata was not updated by native start:\n%s", tasksData)
 	}
 	if _, err := os.Stat(filepath.Join(sourceRepoRoot(t), ".brevity", "tasks.json")); err != nil {
 		t.Fatalf("real repo task metadata should remain present and untouched by fixture setup: %v", err)

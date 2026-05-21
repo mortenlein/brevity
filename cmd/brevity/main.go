@@ -46,6 +46,7 @@ const (
 	commandTaskCleanup     commandKind = commandKind(commands.TaskCleanupID)
 	commandTaskPreflight   commandKind = "task-preflight"
 	commandTaskNew         commandKind = commandKind(commands.TaskNewID)
+	commandTaskStart       commandKind = commandKind(commands.TaskStartID)
 	commandTaskRun         commandKind = commandKind(commands.TaskRunID)
 	commandTaskRuntimeInfo commandKind = commandKind(commands.TaskRuntimeInfoID)
 	commandTaskDetail      commandKind = commandKind(commands.TaskDetailID)
@@ -244,7 +245,7 @@ func parseProviderOptions(args []string) (cliOptions, error) {
 
 func parseTaskOptions(args []string) (cliOptions, error) {
 	if len(args) < 2 {
-		return cliOptions{}, fmt.Errorf("missing task command: supported commands: status, context refresh, runtime-info, detail, runs, new, run, cleanup, preflight")
+		return cliOptions{}, fmt.Errorf("missing task command: supported commands: status, context refresh, runtime-info, detail, runs, new, start, run, cleanup, preflight")
 	}
 	if args[1] == "status" {
 		if len(args) != 2 {
@@ -271,6 +272,9 @@ func parseTaskOptions(args []string) (cliOptions, error) {
 	if args[1] == "new" {
 		return parseTaskNewOptions(args)
 	}
+	if args[1] == "start" {
+		return parseTaskStartOptions(args)
+	}
 	if args[1] == "run" {
 		return parseTaskRunOptions(args)
 	}
@@ -284,7 +288,7 @@ func parseTaskOptions(args []string) (cliOptions, error) {
 		return parseTaskRunsOptions(args)
 	}
 
-	return cliOptions{}, fmt.Errorf("unsupported task command %q: supported commands: status, context refresh, runtime-info, detail, runs, new, run, cleanup, preflight", args[1])
+	return cliOptions{}, fmt.Errorf("unsupported task command %q: supported commands: status, context refresh, runtime-info, detail, runs, new, start, run, cleanup, preflight", args[1])
 }
 
 func parseTaskPreflightOptions(args []string) (cliOptions, error) {
@@ -328,6 +332,20 @@ func parseTaskNewOptions(args []string) (cliOptions, error) {
 	}
 
 	return cliOptions{kind: commandTaskNew, slug: args[2]}, nil
+}
+
+func parseTaskStartOptions(args []string) (cliOptions, error) {
+	if len(args) < 3 || args[2] == "" {
+		return cliOptions{}, usageError(commands.TaskStart)
+	}
+	options := cliOptions{kind: commandTaskStart, slug: args[2]}
+	for _, arg := range args[3:] {
+		if arg != "--json" {
+			return cliOptions{}, usageError(commands.TaskStart)
+		}
+		options.json = true
+	}
+	return options, nil
 }
 
 func parseTaskCleanupOptions(args []string) (cliOptions, error) {
@@ -505,7 +523,7 @@ func runWithContextOptions(ctx context.Context, stdout io.Writer, client runtime
 		return routeTaskContextCommand(stdout, client, options)
 	case commandDoctor:
 		return routeDoctorCommand(stdout, options)
-	case commandTaskCleanup, commandTaskNew, commandTaskRun, commandTaskRuntimeInfo, commandTaskDetail:
+	case commandTaskCleanup, commandTaskNew, commandTaskStart, commandTaskRun, commandTaskRuntimeInfo, commandTaskDetail:
 		return routeTaskCommand(stdout, client, options)
 	case commandTaskPreflight:
 		return routeTaskPreflightCommand(stdout, options)
@@ -984,6 +1002,8 @@ func routeTaskCommand(stdout io.Writer, client runtimeclient.Client, options cli
 		return runTaskCleanup(stdout, client, options)
 	case commandTaskNew:
 		return runTaskNew(stdout, client, options)
+	case commandTaskStart:
+		return runTaskStart(stdout, options)
 	case commandTaskRun:
 		return runTaskRun(stdout, client, options)
 	case commandTaskRuntimeInfo, commandTaskDetail:
@@ -1110,6 +1130,33 @@ func runTaskNew(stdout io.Writer, client runtimeclient.Client, options cliOption
 		},
 		render: actions.RenderTaskNewResult,
 	})
+}
+
+func runTaskStart(stdout io.Writer, options cliOptions) error {
+	store, err := state.NewStore("")
+	if err != nil {
+		return err
+	}
+	service := actions.TaskStartService{Store: store}
+	result, runErr := service.Start(options.slug)
+	if options.json {
+		output, err := json.Marshal(result)
+		if err != nil {
+			return err
+		}
+		if _, err := stdout.Write(append(output, '\n')); err != nil {
+			return err
+		}
+	} else if renderErr := actions.RenderTaskStartResult(stdout, result); renderErr != nil {
+		return renderErr
+	}
+	if runErr != nil {
+		return runErr
+	}
+	if !result.Success {
+		return fmt.Errorf("%s reported success=false", result.Command)
+	}
+	return nil
 }
 
 func runTaskRun(stdout io.Writer, client runtimeclient.Client, options cliOptions) error {
