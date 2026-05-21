@@ -1029,6 +1029,14 @@ func (model Model) selectedTask() (contracts.TaskSummary, bool) {
 	return item.Task, true
 }
 
+func (model Model) selectedTaskSlug() (string, bool) {
+	task, ok := model.selectedTask()
+	if !ok {
+		return "", false
+	}
+	return strings.TrimSpace(task.Slug), true
+}
+
 func (model Model) paneWidths() (int, int) {
 	width := model.contentWidth()
 	separatorWidth := visibleWidth(paneSeparator)
@@ -1245,8 +1253,8 @@ func (model Model) renderHelpOverlay(usedRows ...int) string {
 		"  p opens actions; read-only actions can execute PowerShell commands",
 		"  Start task requires a selected task row and confirmation",
 		"  Start task changes task state through native Go only",
-		"  Run worker loads a PowerShell-owned execution plan only",
-		"  future worker execution will be long-running and PowerShell-authoritative",
+		"  Run worker loads a native Go execution envelope only",
+		"  future worker execution will be long-running; provider launch is disabled",
 		"  Merge and Cleanup remain disabled future actions",
 		"  command results scroll with up/down or j/k; esc closes finished results",
 		"  recent command activity is session-only and read-only",
@@ -1305,7 +1313,7 @@ func (model Model) renderRunWorkerDryRunPreview(action ActionDescriptor, usedRow
 		"  provider      " + provider + " / " + profile,
 		"  command       " + model.previewCommandShape(action),
 		"  status        dry-run only; execution is disabled",
-		"  boundary      PowerShell remains authoritative for worker execution",
+		"  boundary      native Go owns planning; worker execution is disabled",
 		"  warning       worker/provider execution is not enabled",
 		"  execution     no worker/provider launched",
 		"  mode          dry-run only",
@@ -1467,9 +1475,9 @@ func (model Model) renderCommandResult(usedRows ...int) string {
 	if run.status == commandRunning {
 		if run.action.ID == ActionRunWorker {
 			lines = append(lines,
-				"  message       loading PowerShell-owned execution plan",
+				"  message       loading native Go execution envelope",
 				"  execution     no worker/provider launched",
-				"  boundary      Go renders only; PowerShell owns plan semantics",
+				"  boundary      native Go owns plan semantics",
 			)
 			return model.renderPanel("Run Worker Plan", lines, detailTruncatedIndicator, usedRows...)
 		}
@@ -1528,12 +1536,12 @@ func (model Model) renderTaskRunPlanResult(run commandRunState, result pscontrac
 		"  status        " + string(run.status),
 		"  exit code     " + fmt.Sprint(result.ExitCode),
 		"  execution     no worker/provider launched",
-		"  boundary      Go renders only; PowerShell owns execution semantics",
+		"  boundary      native Go owns planning; execution is disabled",
 	}
 	commandResult, err := contracts.ParseCommandResult([]byte(result.Stdout))
 	if err != nil {
 		lines = append(lines,
-			"  result        failed to parse PowerShell plan JSON",
+			"  result        failed to parse native plan JSON",
 			"  error         "+err.Error(),
 		)
 		if result.Error != "" {
@@ -1544,7 +1552,7 @@ func (model Model) renderTaskRunPlanResult(run commandRunState, result pscontrac
 	}
 	if !commandResult.Success {
 		lines = append(lines,
-			"  result        PowerShell plan generation failed",
+			"  result        native plan generation failed",
 		)
 		for _, commandError := range commandResult.Errors {
 			lines = append(lines, "  error         "+commandError.DisplayText())
@@ -1555,7 +1563,7 @@ func (model Model) renderTaskRunPlanResult(run commandRunState, result pscontrac
 	plan, err := contracts.ParseTaskRunPlanPayload(commandResult)
 	if err != nil {
 		lines = append(lines,
-			"  result        malformed PowerShell plan payload",
+			"  result        malformed native plan payload",
 			"  error         "+err.Error(),
 			"  close         esc or q closes result",
 		)
@@ -1574,7 +1582,7 @@ func (model Model) renderTaskRunPlanResult(run commandRunState, result pscontrac
 		"  isolated wt   "+formatBool(plan.IsolatedWorktreeRequired),
 		"  dry-run       "+formatBool(plan.DryRunOnly),
 		"  no execution  "+formatBool(plan.NoExecutionOccurred),
-		"  authority     "+fallback(plan.Authority, "PowerShell-owned execution plan"),
+		"  authority     "+fallback(plan.Authority, "native-go"),
 	)
 	for _, warning := range append(commandResult.Warnings, plan.Warnings...) {
 		lines = append(lines, "  warning       "+warning.DisplayText())

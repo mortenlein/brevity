@@ -57,7 +57,7 @@ type DashboardCommandBridge interface {
 	ExecuteMutatingAction(action ActionDescriptor, commandArgs []string) pscontract.ExecutionResult
 	ExecuteTaskStart(slug string, repoRoot string) pscontract.ExecutionResult
 	ExecuteContextRefresh(slug string, repoRoot string) pscontract.ExecutionResult
-	LoadTaskRunPlan(slug string, profile string) pscontract.ExecutionResult
+	LoadTaskRunPlan(slug string, profile string, repoRoot string) pscontract.ExecutionResult
 }
 
 type RuntimeClientCommandBridge struct {
@@ -146,9 +146,9 @@ func (bridge RuntimeClientCommandBridge) ExecuteContextRefresh(slug string, repo
 	return result
 }
 
-func (bridge RuntimeClientCommandBridge) LoadTaskRunPlan(slug string, profile string) pscontract.ExecutionResult {
+func (bridge RuntimeClientCommandBridge) LoadTaskRunPlan(slug string, profile string, repoRoot string) pscontract.ExecutionResult {
 	started := time.Now()
-	output, err := bridge.Client.TaskRunPlanJSON(slug, profile)
+	output, err := runtimeclient.NewNativeClient(repoRoot).TaskRunPlanJSON(slug, profile)
 	result := pscontract.ExecutionResult{
 		ActionID:            pscontract.ActionRunWorker,
 		CommandDisplayLabel: "Run worker plan",
@@ -247,7 +247,7 @@ func (model Model) actionDescriptors() []ActionDescriptor {
 			if runnable {
 				actions[index].Enabled = true
 				actions[index].Kind = ActionKindDryRun
-				actions[index].Description = "PowerShell plan preview for " + runTask.Slug
+				actions[index].Description = "native plan preview for " + runTask.Slug
 				actions[index].Command.Arguments = []string{"--plan"}
 				actions[index].Command.Provider = taskProvider(runTask)
 				actions[index].Command.Profile = taskProfile(runTask)
@@ -351,8 +351,9 @@ func (model Model) executeContextRefreshCmd(slug string) tea.Cmd {
 
 func (model Model) loadTaskRunPlanCmd(slug string, profile string) tea.Cmd {
 	runID := model.nextCommandID + 1
+	repoRoot := model.state.RepoRoot
 	return func() tea.Msg {
-		return commandResultMsg{id: runID, result: model.dashboardCommandBridge().LoadTaskRunPlan(slug, profile)}
+		return commandResultMsg{id: runID, result: model.dashboardCommandBridge().LoadTaskRunPlan(slug, profile, repoRoot)}
 	}
 }
 

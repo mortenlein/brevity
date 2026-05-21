@@ -611,13 +611,29 @@ worktree from selected project memory files. The prompt keeps the worker bounded
 by including the task slug, embedded spec contents, local context guidance,
 constraints, acceptance checks, and stop-after-summary instructions.
 
-`Brevity task run <slug> [--execute] [--profile <name>] [--smoke] [--force-provider]` reads the same metadata file and finds the matching task
-record. It prints:
+`Brevity task run <slug> --plan --json [--profile <name>]` is now owned by
+native Go. It reads the same metadata file and returns a materialized execution
+envelope for operators and the TUI. The envelope includes task state,
+provider/profile/model resolution, prompt freshness, worktree/prompt paths, a
+planned run id, planned log/stdout/stderr paths, argv-style worker command
+shape, expected future state mutations and files, warnings, blockers, and
+`authority: native-go`.
+
+Planning is read-only. It does not launch Codex, Gemini, Antigravity, or any
+worker process. It does not write `.brevity\runs.jsonl`, update task state, or
+materialize execution logs. Run Worker in the Bubble Tea dashboard consumes this
+native plan and remains plan-only.
+
+`Brevity task run <slug> --execute [--profile <name>] [--smoke] [--force-provider]`
+remains the legacy PowerShell execution path. Native Go execution is not
+implemented yet.
+
+The task-run command reads the matching task record and plans:
 
 - task slug
 - worktree path
 - prompt path
-- headless worker command
+- headless worker command argv/display shape
 
 The command is built from worker settings in `.brevity\config.json` or overridden by
 the provided profile. The configured
@@ -644,10 +660,10 @@ blank to omit `-s`. Set `skipTrust` to `true` to include
 `--approval-mode yolo`. With `--execute`, Brevity applies
 `executionPolicy` to the worker process only before running the generated
 command. The default `Bypass` value is scoped to the child process and does not
-change the user's machine policy. By default, Brevity prints the command only.
-With `--execute`, Brevity runs the generated command. It does not update task
-status, record metrics, or run planner automation. Unsupported worker providers
-return a clear unsupported-provider error.
+change the user's machine policy. With `--plan`, Brevity prints or returns the
+native execution envelope only. With legacy `--execute`, PowerShell runs the
+generated command. Unsupported worker providers return a clear
+unsupported-provider error.
 
 Before a worker handoff, Brevity materializes only selected durable project
 memory files into the task worktree at `.brevity\context\`: `project.md`,

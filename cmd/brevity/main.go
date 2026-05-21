@@ -404,6 +404,10 @@ func parseTaskRunOptions(args []string) (cliOptions, error) {
 	for index := 3; index < len(args); index++ {
 		arg := args[index]
 		switch arg {
+		case "--plan":
+			options.dryRun = true
+		case "--json":
+			options.json = true
 		case "--execute":
 			options.execute = true
 		case "--smoke":
@@ -418,8 +422,11 @@ func parseTaskRunOptions(args []string) (cliOptions, error) {
 			return cliOptions{}, fmt.Errorf("unknown argument for brevity task run: %s", arg)
 		}
 	}
-	if !options.execute {
-		return cliOptions{}, fmt.Errorf("brevity task run requires --execute")
+	if options.execute && options.dryRun {
+		return cliOptions{}, fmt.Errorf("brevity task run cannot combine --plan and --execute")
+	}
+	if !options.execute && !options.dryRun {
+		return cliOptions{}, fmt.Errorf("brevity task run requires --plan or --execute")
 	}
 
 	return options, nil
@@ -1179,8 +1186,11 @@ func runTaskStart(stdout io.Writer, options cliOptions) error {
 }
 
 func runTaskRun(stdout io.Writer, client runtimeclient.Client, options cliOptions) error {
+	if options.dryRun {
+		return runTaskRunPlan(stdout, options)
+	}
 	if !options.execute {
-		return fmt.Errorf("brevity task run requires --execute")
+		return fmt.Errorf("brevity task run requires --plan or --execute")
 	}
 
 	return runPowerShellAction(stdout, actionSpec{
@@ -1195,6 +1205,28 @@ func runTaskRun(stdout io.Writer, client runtimeclient.Client, options cliOption
 			return nil
 		},
 	})
+}
+
+func runTaskRunPlan(stdout io.Writer, options cliOptions) error {
+	output, err := runtimeclient.NewNativeClient("").TaskRunPlanJSON(options.slug, options.profile)
+	if err != nil {
+		return err
+	}
+	if options.json {
+		_, writeErr := stdout.Write(append(output, '\n'))
+		return writeErr
+	}
+	result, parseErr := contracts.ParseCommandResult(output)
+	if parseErr != nil {
+		return parseErr
+	}
+	if renderErr := actions.RenderTaskRunPlanResult(stdout, result); renderErr != nil {
+		return renderErr
+	}
+	if !result.Success {
+		return fmt.Errorf("%s plan reported success=false", result.Command)
+	}
+	return nil
 }
 
 func runTaskRuntimeInfo(stdout io.Writer, client runtimeclient.Client, options cliOptions) error {

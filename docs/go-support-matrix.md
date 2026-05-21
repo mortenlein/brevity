@@ -5,8 +5,8 @@ native runtime authority slices. PowerShell remains the legacy reference and
 fallback for orchestration behavior, but Go now owns provider health state
 mutation, task/runtime state reading, run-history inspection, read-only
 doctor/detail diagnostics, cleanup/orphan inspection reports, native task
-mutation preflight gates, `task start <slug>` metadata mutation, and native
-task prompt/context refresh.
+mutation preflight gates, `task start <slug>` metadata mutation, native
+task prompt/context refresh, and native task-run planning.
 
 The original PowerShell `.\brevity.ps1 tui` command is a lightweight read-only
 runtime/operator scaffold. The Go dashboard and `--watch` mode are the active
@@ -14,8 +14,9 @@ frontend direction for the future operator UX. The default dashboard source
 still consumes PowerShell-produced runtime-state data for compatibility, while
 `runtime state --json`, `task status`, and `--json-source native` read runtime
 state directly from Go. The Bubble Tea dashboard can run confirmed Start task
-and Refresh context through native Go. Run Worker remains dry-run/plan-only and
-provider execution is still disabled from Go.
+and Refresh context through native Go. Run Worker uses the native Go execution
+envelope for dry-run/plan previews only; provider execution is still disabled
+from Go.
 
 Go-owned `.brevity` writes must go through `internal/state` and the advisory
 `.brevity/state.lock` protocol. Provider execution and worker execution are not
@@ -55,7 +56,9 @@ metadata. It does not mean Go writes those files itself.
 | `go run ./cmd/brevity task runtime-info <slug>` | Native read-only inspection | Go `.brevity/tasks.json` + `.brevity/runs.jsonl` reader | Read-only | Implemented | Displays task runtime details without PowerShell. |
 | `go run ./cmd/brevity task detail <slug>` | Native read-only inspection | Go `.brevity/tasks.json` + `.brevity/runs.jsonl` reader | Read-only | Implemented | Alias-style focused task detail view with metadata, worktree, prompt, provider/profile, latest run, and operator interpretation. |
 | `go run ./cmd/brevity task runs <slug>` | Native read-only inspection | Go `.brevity/runs.jsonl` reader | Read-only | Implemented | Displays recent run-index records for one task without PowerShell. |
-| `go run ./cmd/brevity task run <slug> --execute [--profile <profile>] [--smoke]` | PowerShell-backed action | PowerShell command-result JSON | Mutating | Implemented | Starts a synchronous worker run through PowerShell and records run metadata. |
+| `go run ./cmd/brevity task run <slug> --plan --json [--profile <profile>]` | Native execution planning | Go task-run plan service | Read-only | Implemented | Emits `brevity.command-result.v1` with a native `brevity.task-run-plan.v1` execution envelope: provider/profile, prompt freshness, planned run/log paths, argv command shape, expected future mutations/files, warnings, and blockers. It never launches providers/workers and never writes `.brevity\runs.jsonl`. |
+| `go run ./cmd/brevity task run <slug> --plan [--profile <profile>]` | Native execution planning | Go task-run plan service | Read-only | Implemented | Human rendering of the same native execution envelope; exits non-zero when plan blockers exist. |
+| `go run ./cmd/brevity task run <slug> --execute [--profile <profile>] [--smoke]` | PowerShell-backed action | PowerShell command-result JSON | Mutating | Implemented legacy fallback | Starts a synchronous worker run through PowerShell and records run metadata. Native Go execution is not implemented. |
 | `go run ./cmd/brevity task runs reconcile --dry-run` | Read-only inspection | PowerShell command-result JSON | Read-only | Implemented | Reports stale or incomplete run records; dry-run only. |
 | `go run ./cmd/brevity task runs retention --dry-run` | Read-only inspection | PowerShell command-result JSON | Read-only | Implemented | Reports run-index retention signals; dry-run only. |
 | `go run ./cmd/brevity task runs compact --dry-run` | Read-only inspection | PowerShell command-result JSON | Read-only | Implemented | Reports a compaction plan; dry-run only. |
@@ -77,11 +80,12 @@ metadata. It does not mean Go writes those files itself.
   task-start and prompt/context refresh writes,
   `.brevity/runs.jsonl` run-history reading, native runtime-state building,
   native task status, task runtime/detail inspection, doctor diagnostics,
-  cleanup/orphan inspection reports, task mutation preflight gates, and the
-  Bubble Tea native source.
+  cleanup/orphan inspection reports, task mutation preflight gates,
+  `task run --plan` execution envelopes, and the Bubble Tea native source.
 - PowerShell remains the authority for task new/run/merge/cleanup execution,
-  worker/provider execution, and legacy compatibility. Its prompt/context
-  refresh behavior is now reference/fallback rather than the Go CLI path.
+  worker/provider execution, and legacy compatibility. Its task-run planning and
+  prompt/context refresh behavior are now reference/fallback rather than the Go
+  CLI path.
 - Every Go task mutation must pass native preflight first. The
   `brevity.task-preflight.v1` JSON payload is the contract shared by CLI, TUI,
   and operator flows.

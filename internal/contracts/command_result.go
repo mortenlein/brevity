@@ -133,20 +133,37 @@ type TaskRunExecutionPayload struct {
 }
 
 type TaskRunPlanPayload struct {
+	Schema                      string               `json:"schema,omitempty"`
+	Version                     int                  `json:"version,omitempty"`
 	Slug                        string               `json:"slug"`
+	TaskState                   string               `json:"taskState,omitempty"`
 	Provider                    string               `json:"provider"`
 	Profile                     string               `json:"profile"`
+	Model                       string               `json:"model,omitempty"`
 	WorktreePath                string               `json:"worktreePath"`
 	PromptPath                  string               `json:"promptPath"`
+	PromptStatus                string               `json:"promptStatus,omitempty"`
+	PromptFreshness             string               `json:"promptFreshness,omitempty"`
+	RunIDPlan                   string               `json:"runIdPlan,omitempty"`
+	LogPathPlan                 string               `json:"logPathPlan,omitempty"`
+	StdoutPathPlan              string               `json:"stdoutPathPlan,omitempty"`
+	StderrPathPlan              string               `json:"stderrPathPlan,omitempty"`
 	WorkerCommand               TaskRunWorkerCommand `json:"workerCommand"`
 	ApprovalMode                string               `json:"approvalMode"`
 	ExecutionKind               string               `json:"executionKind"`
 	ProviderExecutionWouldOccur bool                 `json:"providerExecutionWouldOccur"`
+	ProviderExecution           bool                 `json:"providerExecution,omitempty"`
+	LongRunning                 bool                 `json:"longRunning,omitempty"`
+	Streaming                   bool                 `json:"streaming,omitempty"`
 	IsolatedWorktreeRequired    bool                 `json:"isolatedWorktreeRequired"`
 	DryRunOnly                  bool                 `json:"dryRunOnly"`
 	NoExecutionOccurred         bool                 `json:"noExecutionOccurred"`
 	Authority                   string               `json:"authority"`
+	GeneratedAt                 string               `json:"generatedAt,omitempty"`
+	ExpectedStateMutations      []string             `json:"expectedStateMutations,omitempty"`
+	ExpectedFilesWritten        []string             `json:"expectedFilesWritten,omitempty"`
 	Warnings                    []ResultMessage      `json:"warnings"`
+	Blockers                    []ResultMessage      `json:"blockers,omitempty"`
 	SafetyNotes                 []string             `json:"safetyNotes"`
 	Unsupported                 []string             `json:"unsupported"`
 }
