@@ -122,6 +122,9 @@ func (model Model) commandForAction(action ActionDescriptor) tea.Cmd {
 	case ActionRefreshState:
 		return model.refreshCmd()
 	case ActionProviderStatus, ActionTaskStatus:
+		if model.commandRun != nil && model.commandRun.status == commandRunning {
+			return nil
+		}
 		return model.executeReadOnlyCmd(action)
 	default:
 		return nil
@@ -139,8 +142,9 @@ func (model Model) refreshCmd() tea.Cmd {
 }
 
 func (model Model) executeReadOnlyCmd(action ActionDescriptor) tea.Cmd {
+	runID := model.nextCommandID + 1
 	return func() tea.Msg {
-		return commandResultMsg{result: model.dashboardCommandBridge().ExecuteReadOnlyAction(action)}
+		return commandResultMsg{id: runID, result: model.dashboardCommandBridge().ExecuteReadOnlyAction(action)}
 	}
 }
 

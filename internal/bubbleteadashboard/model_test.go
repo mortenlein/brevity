@@ -496,12 +496,12 @@ func TestCommandResultPanelsRenderSuccessFailureAndStderr(t *testing.T) {
 		{
 			name:   "success",
 			result: pscontract.ExecutionResult{ActionID: pscontract.ActionRefreshState, CommandDisplayLabel: "Refresh state", ExitCode: 0},
-			want:   []string{"Command Result", "action        Refresh state", "status        success", "exit code     0", "Refresh state succeeded"},
+			want:   []string{"Command Result", "action        Refresh state", "status        succeeded", "exit code     0", "Refresh state succeeded"},
 		},
 		{
 			name:   "failure with stderr",
 			result: pscontract.ExecutionResult{ActionID: pscontract.ActionRunWorker, CommandDisplayLabel: "Run worker", ExitCode: 2, Stderr: "worker failed", RefreshAfter: true},
-			want:   []string{"Command Result", "status        failure", "exit code     2", "stderr        worker failed", "Run worker failed with exit code 2"},
+			want:   []string{"Command Result", "status        failed", "exit code     2", "stderr        worker failed", "Run worker failed with exit code 2"},
 		},
 		{
 			name:   "refresh follow up",
@@ -517,7 +517,15 @@ func TestCommandResultPanelsRenderSuccessFailureAndStderr(t *testing.T) {
 			model.hasState = true
 			model.width = 72
 			model.height = 34
-			model.commandResult = &tt.result
+			model.commandRun = &commandRunState{
+				id:     1,
+				action: ActionDescriptor{Label: fallback(tt.result.CommandDisplayLabel, string(tt.result.ActionID))},
+				status: commandSucceeded,
+				result: &tt.result,
+			}
+			if !tt.result.Success() {
+				model.commandRun.status = commandFailed
+			}
 
 			output := plainView(model.View())
 			for _, want := range tt.want {
@@ -526,12 +534,149 @@ func TestCommandResultPanelsRenderSuccessFailureAndStderr(t *testing.T) {
 				}
 			}
 			lines := strings.Split(strings.TrimSuffix(output, "\n"), "\n")
-			if !strings.Contains(lines[len(lines)-1], "j/k r p d q quit ? help") {
+			if !strings.Contains(lines[len(lines)-1], "j/k scroll") {
 				t.Fatalf("footer was not pinned below command result:\n%s", output)
 			}
 			assertLinesWithinWidth(t, output, model.width)
 		})
 	}
+}
+
+func TestReadOnlyActionEnterShowsRunningBeforeResult(t *testing.T) {
+	bridge := &fakeCommandBridge{result: pscontract.ExecutionResult{ExitCode: 0, Stdout: "ok"}}
+	model := NewModelWithSource(&fakeClient{}, time.Second, "native")
+	model.commandBridge = bridge
+	model.state = bubbleState()
+	model.hasState = true
+	model.paletteOpen = true
+	model.paletteSelected = 1
+
+	updated, cmd := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model = updated.(Model)
+	if cmd == nil {
+		t.Fatal("provider status returned nil command")
+	}
+	if model.commandRun == nil || model.commandRun.status != commandRunning {
+		t.Fatalf("commandRun = %#v, want running", model.commandRun)
+	}
+	if !strings.Contains(plainView(model.View()), "status        running") {
+		t.Fatalf("running state did not render:\n%s", plainView(model.View()))
+	}
+
+	updated, _ = model.Update(cmd())
+	model = updated.(Model)
+	if model.commandRun == nil || model.commandRun.status != commandSucceeded {
+		t.Fatalf("commandRun status = %#v, want succeeded", model.commandRun)
+	}
+	if !strings.Contains(plainView(model.View()), "stdout        ok") {
+		t.Fatalf("success result did not render stdout:\n%s", plainView(model.View()))
+	}
+}
+
+func TestSecondReadOnlyCommandWhileRunningIsBlocked(t *testing.T) {
+	model := NewModelWithSource(&fakeClient{}, time.Second, "native")
+	model.state = bubbleState()
+	model.hasState = true
+	model.commandRun = &commandRunState{status: commandRunning}
+
+	action := actionDescriptors()[1]
+	if cmd := model.commandForAction(action); cmd != nil {
+		t.Fatal("running command allowed a second read-only command")
+	}
+}
+
+func TestCommandResultScrollAndEscClose(t *testing.T) {
+	lines := make([]string, 0, 20)
+	for i := 0; i < 20; i++ {
+		lines = append(lines, fmt.Sprintf("line-%02d with extra text", i))
+	}
+	result := pscontract.ExecutionResult{ActionID: pscontract.ActionProviderStatus, CommandDisplayLabel: "Provider status", ExitCode: 0, Stdout: strings.Join(lines, "\n")}
+	model := NewModelWithSource(&fakeClient{}, time.Second, "native")
+	model.state = bubbleState()
+	model.hasState = true
+	model.width = 64
+	model.height = 40
+	model.commandRun = &commandRunState{id: 1, action: ActionDescriptor{Label: "Provider status"}, status: commandSucceeded, result: &result}
+
+	first := plainView(model.View())
+	if !strings.Contains(first, "line-00") {
+		t.Fatalf("first page missing first stdout line:\n%s", first)
+	}
+	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("j")})
+	model = updated.(Model)
+	if model.commandRun.scroll != 1 {
+		t.Fatalf("scroll = %d, want 1", model.commandRun.scroll)
+	}
+	scrolled := plainView(model.View())
+	if !strings.Contains(scrolled, "output above") {
+		t.Fatalf("scrolled result did not show output-above marker:\n%s", scrolled)
+	}
+	assertLinesWithinWidth(t, scrolled, model.width)
+
+	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	model = updated.(Model)
+	if model.commandRun != nil {
+		t.Fatal("esc did not close completed result panel")
+	}
+}
+
+func TestPollingTickManualRefreshAndFailurePreservesState(t *testing.T) {
+	bridge := &fakeCommandBridge{state: bubbleState()}
+	model := NewModelWithSource(&fakeClient{}, time.Second, "native")
+	model.commandBridge = bridge
+	model.state = bubbleState()
+	model.hasState = true
+	model.pollingEnabled = true
+
+	updated, cmd := model.Update(tickMsg(time.Now()))
+	model = updated.(Model)
+	if cmd == nil {
+		t.Fatal("tick returned nil command")
+	}
+	updated, cmd = model.Update(refreshStartedMsg{})
+	model = updated.(Model)
+	if cmd == nil || !model.polling {
+		t.Fatalf("refresh start cmd=%v polling=%t, want command and polling", cmd, model.polling)
+	}
+
+	bridge.err = errors.New("runtime unavailable")
+	updated, _ = model.Update(cmd())
+	model = updated.(Model)
+	if !model.hasState || model.state.RepoRoot != `C:\repo` {
+		t.Fatal("poll failure replaced last-known state")
+	}
+	if model.lastError == nil {
+		t.Fatal("poll failure did not store lastError")
+	}
+
+	updated, cmd = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("r")})
+	model = updated.(Model)
+	if cmd == nil {
+		t.Fatal("manual refresh did not return refresh-start command")
+	}
+}
+
+func TestCommandActivitiesRenderCapAndDetails(t *testing.T) {
+	model := NewModelWithSource(&fakeClient{}, time.Second, "native")
+	model.state = bubbleState()
+	model.hasState = true
+	for i := 0; i < 12; i++ {
+		model.addActivity(commandActivity{id: i, action: fmt.Sprintf("Provider status %02d", i), status: commandSucceeded, summary: "ok"})
+	}
+	if len(model.activities) != 10 {
+		t.Fatalf("activities = %d, want cap 10", len(model.activities))
+	}
+	output := plainView(model.View())
+	if !strings.Contains(output, "run") || strings.Contains(output, "Provider status 00") {
+		t.Fatalf("activity rows did not render capped history:\n%s", output)
+	}
+	model.selection.SelectedIndex = 1
+	model.selection.ShowDetails = true
+	output = plainView(model.View())
+	if !strings.Contains(output, "session-only read-only command activity") {
+		t.Fatalf("activity detail missing session-only guidance:\n%s", output)
+	}
+	assertLinesWithinWidth(t, output, model.contentWidth())
 }
 
 func TestActionPaletteHelperOnlyRendersWhenSpaceAllows(t *testing.T) {

@@ -151,7 +151,7 @@ Actions
   Merge task        future PowerShell action; confirmation required; not enable...
   Cleanup task      future PowerShell action; confirmation required; not enable...
 
-j/k r p d q quit ? help | native | read-only
+up/down or j/k choose | enter run read-only | esc close | native | read-only
 `,
 		},
 		{
@@ -180,10 +180,10 @@ Selected Detail
 
 Help
   navigate with up/down or j/k; d toggles selected details
-  r refreshes runtime state through the command bridge
+  r refreshes runtime state; l toggles live polling
   ... help truncated
 
-j/k r p d q quit ? help | native | read-only
+esc or ? closes help | read-only boundary | ? help | native | read-only
 `,
 		},
 		{
@@ -235,7 +235,12 @@ up/down or j/k move | r refresh | p actions | d details | q quit | ? help | nati
 					Stderr:              "worker failed",
 					RefreshAfter:        true,
 				}
-				model.commandResult = &result
+				model.commandRun = &commandRunState{
+					id:     1,
+					action: ActionDescriptor{Label: "Run worker"},
+					status: commandFailed,
+					result: &result,
+				}
 				model.width = 100
 				model.height = 32
 			}),
@@ -260,13 +265,13 @@ Selected Detail
 
 Command Result
   action        Run worker
-  status        failure
+  status        failed
   exit code     2
   message       Run worker failed with exit code 2: worker failed
   stderr        worker failed
   close         esc or q closes result
 
-up/down or j/k move | r refresh | p actions | d details | q quit | ? help | native | read-only
+up/down or j/k scroll | home/end | esc close | q close | native | read-only | 1s refresh
 `,
 		},
 	}
@@ -301,7 +306,7 @@ func normalizedSnapshotView(model Model) string {
 		for footerIndex >= 0 && strings.TrimSpace(lines[footerIndex]) == "" {
 			footerIndex--
 		}
-		if footerIndex >= 0 && strings.Contains(lines[footerIndex], "q quit") {
+		if footerIndex >= 0 && (strings.Contains(lines[footerIndex], "q quit") || strings.Contains(lines[footerIndex], "q close")) {
 			blankStart := footerIndex - 1
 			for blankStart >= 0 && strings.TrimSpace(lines[blankStart]) == "" {
 				blankStart--

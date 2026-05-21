@@ -35,10 +35,43 @@ type refreshMsg struct {
 	at    time.Time
 }
 
+type refreshStartedMsg struct{}
+
 type tickMsg time.Time
 
 type commandResultMsg struct {
+	id     int
 	result pscontract.ExecutionResult
+}
+
+type commandStatus string
+
+const (
+	commandIdle      commandStatus = "idle"
+	commandRunning   commandStatus = "running"
+	commandSucceeded commandStatus = "succeeded"
+	commandFailed    commandStatus = "failed"
+	commandTimedOut  commandStatus = "timed out"
+	commandCanceled  commandStatus = "cancelled"
+)
+
+type commandRunState struct {
+	id        int
+	action    ActionDescriptor
+	status    commandStatus
+	result    *pscontract.ExecutionResult
+	startedAt time.Time
+	scroll    int
+}
+
+type commandActivity struct {
+	id          int
+	action      string
+	status      commandStatus
+	completedAt time.Time
+	summary     string
+	result      *pscontract.ExecutionResult
+	showDetails bool
 }
 
 type Model struct {
@@ -52,12 +85,16 @@ type Model struct {
 	helpOpen        bool
 	actionPreview   *ActionDescriptor
 	confirmation    *pscontract.ConfirmationState
-	commandResult   *pscontract.ExecutionResult
+	commandRun      *commandRunState
+	activities      []commandActivity
+	nextCommandID   int
 	width           int
 	height          int
 	hasWindowSize   bool
 	lastRefresh     string
 	lastError       error
+	polling         bool
+	pollingEnabled  bool
 	refreshInterval time.Duration
 	source          string
 }
@@ -130,8 +167,13 @@ func runLineFallback(stdout io.Writer, input io.Reader, client runtimeclient.Cli
 			return nil
 		}
 		if cmd != nil {
-			updated, _ = model.Update(cmd())
+			msg := cmd()
+			updated, followup := model.Update(msg)
 			model = updated.(Model)
+			if followup != nil {
+				updated, _ = model.Update(followup())
+				model = updated.(Model)
+			}
 		}
 		fmt.Fprint(stdout, model.View())
 	}
@@ -168,7 +210,14 @@ func (model Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return model, nil
 	case tea.KeyMsg:
 		return model.updateKey(msg)
+	case refreshStartedMsg:
+		if model.polling {
+			return model, nil
+		}
+		model.polling = true
+		return model, model.refreshCmd()
 	case refreshMsg:
+		model.polling = false
 		if msg.err != nil {
 			model.lastError = msg.err
 			return model, nil
@@ -177,12 +226,16 @@ func (model Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		model.hasState = true
 		model.lastError = nil
 		model.lastRefresh = msg.at.Format(time.RFC3339)
-		model.selection.Clamp(len(dashboard.SelectableItems(model.state)))
+		model.selection.Clamp(len(model.selectableItems()))
 		return model, nil
 	case tickMsg:
-		return model, tea.Batch(model.refreshCmd(), model.tickCmd())
+		cmds := []tea.Cmd{model.tickCmd()}
+		if model.pollingEnabled && !model.polling {
+			cmds = append(cmds, func() tea.Msg { return refreshStartedMsg{} })
+		}
+		return model, tea.Batch(cmds...)
 	case commandResultMsg:
-		model.commandResult = &msg.result
+		model.completeCommand(msg.id, msg.result)
 		return model, nil
 	default:
 		return model, nil
@@ -210,10 +263,33 @@ func (model Model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 	}
 
-	if model.commandResult != nil {
+	if model.commandRun != nil {
 		switch msg.String() {
-		case "esc", "q":
-			model.commandResult = nil
+		case "esc":
+			if model.commandRun.status == commandRunning {
+				return model, nil
+			}
+			model.commandRun = nil
+			return model, nil
+		case "q":
+			if model.commandRun.status == commandRunning {
+				return model, nil
+			}
+			model.commandRun = nil
+			return model, nil
+		case "j", "down":
+			model.commandRun.scroll++
+			return model, nil
+		case "k", "up":
+			if model.commandRun.scroll > 0 {
+				model.commandRun.scroll--
+			}
+			return model, nil
+		case "home":
+			model.commandRun.scroll = 0
+			return model, nil
+		case "end":
+			model.commandRun.scroll = maxInt
 			return model, nil
 		default:
 			return model, nil
@@ -253,13 +329,28 @@ func (model Model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				return model, nil
 			}
 			model.paletteOpen = false
+			if action.ID == ActionProviderStatus || action.ID == ActionTaskStatus {
+				model.nextCommandID++
+				model.commandRun = &commandRunState{
+					id:        model.nextCommandID,
+					action:    action,
+					status:    commandRunning,
+					startedAt: time.Now(),
+				}
+				model.addActivity(commandActivity{
+					id:      model.nextCommandID,
+					action:  action.Label,
+					status:  commandRunning,
+					summary: "started",
+				})
+			}
 			return model, cmd
 		default:
 			return model, nil
 		}
 	}
 
-	itemCount := len(dashboard.SelectableItems(model.state))
+	itemCount := len(model.selectableItems())
 	switch msg.String() {
 	case "q", "ctrl+c":
 		return model, tea.Quit
@@ -280,7 +371,13 @@ func (model Model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		model.helpOpen = true
 		return model, nil
 	case "r":
-		return model, model.refreshCmd()
+		if model.polling {
+			return model, nil
+		}
+		return model, func() tea.Msg { return refreshStartedMsg{} }
+	case "l":
+		model.pollingEnabled = !model.pollingEnabled
+		return model, nil
 	default:
 		return model, nil
 	}
@@ -313,7 +410,7 @@ func (model Model) View() string {
 	if model.confirmation != nil {
 		output.WriteString(model.renderConfirmation(renderedRows(output.String())))
 	}
-	if model.commandResult != nil {
+	if model.commandRun != nil {
 		output.WriteString(model.renderCommandResult(renderedRows(output.String())))
 	}
 	if model.helpOpen {
@@ -337,6 +434,9 @@ func (model Model) renderUltraSmallHeightView() string {
 	}
 	if !model.hasState {
 		segments = append(segments, statusSegment{text: "loading", priority: 0})
+	}
+	if model.commandRun != nil && model.commandRun.status == commandRunning {
+		segments = append(segments, statusSegment{text: "running", priority: 0})
 	}
 	if model.lastError != nil || model.hasState && model.warningCounts().total() > 0 {
 		segments = append(segments, statusSegment{text: "warning", priority: 0})
@@ -425,6 +525,11 @@ func (model Model) headerStatusSegments() []statusSegment {
 	if strings.TrimSpace(model.state.GeneratedAt) != "" {
 		segments = append(segments, statusSegment{text: "generated " + model.state.GeneratedAt, compact: model.state.GeneratedAt, priority: 3})
 	}
+	if model.polling {
+		segments = append(segments, statusSegment{text: "polling", priority: 2})
+	} else if model.pollingEnabled {
+		segments = append(segments, statusSegment{text: "live", priority: 3})
+	}
 	return segments
 }
 
@@ -492,7 +597,7 @@ func kindBadge(kind string) string {
 	case string(dashboard.SelectionTask):
 		return statusBadge("task", "")
 	case string(dashboard.SelectionActivity):
-		return statusBadge("run", "")
+		return statusBadge("run", "accent")
 	case string(dashboard.SelectionCleanup):
 		return statusBadge("clean", "warning")
 	case string(dashboard.SelectionAction):
@@ -695,7 +800,7 @@ func (model Model) renderListAndDetails() string {
 }
 
 func (model Model) renderSingleColumnListAndDetails() string {
-	items := dashboard.SelectableItems(model.state)
+	items := model.selectableItems()
 	selection := model.selection
 	selection.Clamp(len(items))
 	window := model.selectableListWindow(len(items), selection.SelectedIndex)
@@ -735,7 +840,7 @@ func (model Model) renderSingleColumnListAndDetails() string {
 }
 
 func (model Model) renderTwoPaneListAndDetails() string {
-	items := dashboard.SelectableItems(model.state)
+	items := model.selectableItems()
 	selection := model.selection
 	selection.Clamp(len(items))
 
@@ -802,6 +907,33 @@ func (model Model) renderEmptyRuntimeSignals() string {
 		fmt.Fprintln(&output, model.renderLine(line))
 	}
 	return output.String()
+}
+
+func (model Model) selectableItems() []dashboard.SelectionItem {
+	items := dashboard.SelectableItems(model.state)
+	if len(model.activities) == 0 {
+		return items
+	}
+	activityItems := make([]dashboard.SelectionItem, 0, len(model.activities))
+	for _, activity := range model.activities {
+		label := fmt.Sprintf("%s: %s", activity.action, activity.status)
+		if strings.TrimSpace(activity.summary) != "" {
+			label += " - " + activity.summary
+		}
+		activityItems = append(activityItems, dashboard.SelectionItem{
+			Kind:  dashboard.SelectionActivity,
+			Label: label,
+		})
+	}
+	out := make([]dashboard.SelectionItem, 0, len(items)+len(activityItems))
+	providerEnd := 0
+	for providerEnd < len(items) && items[providerEnd].Kind == dashboard.SelectionProvider {
+		providerEnd++
+	}
+	out = append(out, items[:providerEnd]...)
+	out = append(out, activityItems...)
+	out = append(out, items[providerEnd:]...)
+	return out
 }
 
 func (model Model) paneWidths() (int, int) {
@@ -1014,11 +1146,13 @@ func (model Model) renderHelpOverlay(usedRows ...int) string {
 	renderSection(&output, "Help")
 	lines := []string{
 		"  navigate with up/down or j/k; d toggles selected details",
-		"  r refreshes runtime state through the command bridge",
-		"  p opens actions; read-only actions can execute PowerShell commands",
-		"  mutating actions are disabled and show a blocked command preview",
+		"  r refreshes runtime state; l toggles live polling",
 		"  PowerShell remains authoritative for Brevity state",
 		"  Go does not write .brevity or start providers/workers",
+		"  p opens actions; read-only actions can execute PowerShell commands",
+		"  command results scroll with up/down or j/k; esc closes finished results",
+		"  recent command activity is session-only and read-only",
+		"  mutating actions are disabled and show a blocked command preview",
 		"  executable today: Refresh state, Provider status, Task status",
 		"  esc, q, p, or ? closes panels without running commands",
 	}
@@ -1074,20 +1208,29 @@ func (model Model) renderConfirmation(usedRows ...int) string {
 }
 
 func (model Model) renderCommandResult(usedRows ...int) string {
-	if model.commandResult == nil {
+	if model.commandRun == nil {
 		return ""
 	}
-	result := *model.commandResult
-	status := "success"
-	if !result.Success() {
-		status = "failure"
-	}
+	run := *model.commandRun
 	lines := []string{
-		"  action        " + fallback(result.CommandDisplayLabel, string(result.ActionID)),
-		"  status        " + status,
-		"  exit code     " + fmt.Sprint(result.ExitCode),
-		"  message       " + result.OperatorMessage(),
+		"  action        " + run.action.Label,
+		"  status        " + string(run.status),
 	}
+	if run.status == commandRunning {
+		lines = append(lines,
+			"  message       running read-only PowerShell command",
+			"  cancel        wait for timeout or completion; esc is disabled while running",
+		)
+		return model.renderPanel("Command Result", lines, detailTruncatedIndicator, usedRows...)
+	}
+	if run.result == nil {
+		return model.renderPanel("Command Result", lines, detailTruncatedIndicator, usedRows...)
+	}
+	result := *run.result
+	lines = append(lines,
+		"  exit code     "+fmt.Sprint(result.ExitCode),
+		"  message       "+result.OperatorMessage(),
+	)
 	if result.TimedOut {
 		lines = append(lines, "  timeout       command exceeded its read-only timeout")
 	}
@@ -1109,7 +1252,7 @@ func (model Model) renderCommandResult(usedRows ...int) string {
 		lines = append(lines, "  follow-up     press r to refresh runtime state")
 	}
 	lines = append(lines, "  close         esc or q closes result")
-	return model.renderPanel("Command Result", lines, detailTruncatedIndicator, usedRows...)
+	return model.renderScrollablePanel("Command Result", lines, run.scroll, detailTruncatedIndicator, usedRows...)
 }
 
 func commandOutputLines(label string, value string) []string {
@@ -1124,6 +1267,76 @@ func commandOutputLines(label string, value string) []string {
 		output = append(output, "                "+line)
 	}
 	return output
+}
+
+func (model *Model) completeCommand(id int, result pscontract.ExecutionResult) {
+	if model.commandRun == nil || model.commandRun.id != id {
+		return
+	}
+	status := commandFailed
+	if result.Canceled {
+		status = commandCanceled
+	} else if result.TimedOut {
+		status = commandTimedOut
+	} else if result.Success() {
+		status = commandSucceeded
+	}
+	model.commandRun.status = status
+	model.commandRun.result = &result
+	model.commandRun.scroll = 0
+	model.addActivity(commandActivity{
+		id:          id,
+		action:      fallback(result.CommandDisplayLabel, model.commandRun.action.Label),
+		status:      status,
+		completedAt: result.CompletedAt,
+		summary:     commandResultSummary(result),
+		result:      &result,
+	})
+}
+
+func (model *Model) addActivity(activity commandActivity) {
+	for index := range model.activities {
+		if model.activities[index].id == activity.id {
+			model.activities[index] = activity
+			model.selection.Clamp(len(model.selectableItems()))
+			return
+		}
+	}
+	model.activities = append([]commandActivity{activity}, model.activities...)
+	if len(model.activities) > 10 {
+		model.activities = model.activities[:10]
+	}
+	model.selection.Clamp(len(model.selectableItems()))
+}
+
+func commandResultSummary(result pscontract.ExecutionResult) string {
+	if result.TimedOut {
+		return "timeout"
+	}
+	if result.Canceled {
+		return "canceled"
+	}
+	if strings.TrimSpace(result.Error) != "" {
+		return result.Error
+	}
+	if strings.TrimSpace(result.Stderr) != "" {
+		return strings.TrimSpace(result.Stderr)
+	}
+	if strings.TrimSpace(result.Stdout) != "" {
+		return firstOutputLine(result.Stdout)
+	}
+	return result.OperatorMessage()
+}
+
+func firstOutputLine(value string) string {
+	lines := strings.Split(strings.ReplaceAll(value, "\r\n", "\n"), "\n")
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line != "" {
+			return line
+		}
+	}
+	return ""
 }
 
 func (model Model) renderPanel(title string, lines []string, indicator string, usedRows ...int) string {
@@ -1149,6 +1362,55 @@ func (model Model) renderPanel(title string, lines []string, indicator string, u
 		fmt.Fprintln(&body, dashboardStyles.help.Render(model.renderLine(line)))
 	}
 	output.WriteString(truncateRows(body.String(), maxRows, indicator, model.contentWidth()))
+	return output.String()
+}
+
+func (model Model) renderScrollablePanel(title string, lines []string, scroll int, indicator string, usedRows ...int) string {
+	if model.height > 0 && model.height <= ultraSmallHeightThreshold {
+		return ""
+	}
+	maxRows := maxInt
+	if model.height > 0 {
+		used := 0
+		if len(usedRows) > 0 {
+			used = usedRows[0]
+		}
+		maxRows = model.height - used - renderedRows(model.renderFooter()) - 2
+		if maxRows < 1 {
+			maxRows = 1
+		}
+	}
+	if scroll < 0 {
+		scroll = 0
+	}
+	if scroll > len(lines)-maxRows {
+		scroll = len(lines) - maxRows
+	}
+	if scroll < 0 {
+		scroll = 0
+	}
+	end := scroll + maxRows
+	if end > len(lines) {
+		end = len(lines)
+	}
+	visible := lines[scroll:end]
+	if scroll > 0 && len(visible) > 0 {
+		visible[0] = "  ... output above"
+	}
+	if end < len(lines) && len(visible) > 0 {
+		visible[len(visible)-1] = indicator
+	}
+	if model.commandRun != nil {
+		model.commandRun.scroll = scroll
+	}
+	var output strings.Builder
+	fmt.Fprintln(&output)
+	renderSection(&output, title)
+	var body strings.Builder
+	for _, line := range visible {
+		fmt.Fprintln(&body, dashboardStyles.help.Render(model.renderLine(line)))
+	}
+	output.WriteString(body.String())
 	return output.String()
 }
 
@@ -1183,10 +1445,35 @@ func clampInt(value int, minimum int, maximum int) int {
 func (model Model) renderFooter() string {
 	width := model.contentWidth()
 	source := fallback(model.source, "unknown")
+	controls := "up/down or j/k move | r refresh | p actions | d details | q quit | ? help"
+	compactControls := "j/k r p d q quit ? help"
+	if model.commandRun != nil {
+		if model.commandRun.status == commandRunning {
+			controls = "command running | q/esc wait | read-only"
+			compactControls = "running | wait"
+		} else {
+			controls = "up/down or j/k scroll | home/end | esc close | q close"
+			compactControls = "j/k scroll | esc close"
+		}
+	} else if model.paletteOpen {
+		controls = "up/down or j/k choose | enter run read-only | esc close"
+		compactControls = "j/k enter esc"
+	} else if model.helpOpen {
+		controls = "esc or ? closes help | read-only boundary | ? help"
+		compactControls = "esc ? help"
+	}
+	live := "live off"
+	if model.pollingEnabled {
+		live = "live on"
+	}
+	if model.polling {
+		live = "polling"
+	}
 	footer := statusLine(width,
-		statusSegment{text: "up/down or j/k move | r refresh | p actions | d details | q quit | ? help", compact: "j/k r p d q quit ? help", priority: 0},
+		statusSegment{text: controls, compact: compactControls, priority: 0},
 		statusSegment{text: source, priority: 1},
 		statusSegment{text: "read-only", priority: 1},
+		statusSegment{text: live, priority: 3},
 		statusSegment{text: fmt.Sprintf("%s refresh", model.refreshInterval), compact: fmt.Sprintf("%s refresh", model.refreshInterval), priority: 2},
 		statusSegment{text: "last " + fallbackRefresh(model.lastRefresh), priority: 3},
 	)
@@ -1380,8 +1667,18 @@ func (model Model) renderDetails(output io.Writer, items []dashboard.SelectionIt
 		}
 		model.detailText(output, "type", "task")
 	case dashboard.SelectionActivity:
+		activity := model.activityForLabel(item.Label)
 		model.detailText(output, "activity", fallback(item.Label, "(none)"))
-		model.detailText(output, "guidance", "display-only runtime activity signal")
+		if activity != nil {
+			model.detailText(output, "status", string(activity.status))
+			model.detailText(output, "summary", fallback(activity.summary, "(none)"))
+			if !activity.completedAt.IsZero() {
+				model.detailText(output, "completed", activity.completedAt.Format(time.RFC3339))
+			}
+			model.detailText(output, "guidance", "session-only read-only command activity")
+		} else {
+			model.detailText(output, "guidance", "display-only runtime activity signal")
+		}
 		detailBreak(output)
 		model.detailText(output, "type", "run/activity")
 	case dashboard.SelectionCleanup:
@@ -1404,6 +1701,19 @@ func (model Model) renderDetails(output io.Writer, items []dashboard.SelectionIt
 		detailBreak(output)
 		model.detailText(output, "type", "suggested action")
 	}
+}
+
+func (model Model) activityForLabel(label string) *commandActivity {
+	for index := range model.activities {
+		activityLabel := fmt.Sprintf("%s: %s", model.activities[index].action, model.activities[index].status)
+		if strings.TrimSpace(model.activities[index].summary) != "" {
+			activityLabel += " - " + model.activities[index].summary
+		}
+		if activityLabel == label {
+			return &model.activities[index]
+		}
+	}
+	return nil
 }
 
 func providerGuidance(health contracts.ProviderHealth) string {
