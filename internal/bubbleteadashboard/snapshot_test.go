@@ -121,7 +121,7 @@ j/k r p d q quit ? help | native | read-only
 			name: "action palette open",
 			model: snapshotModel(func(model *Model) {
 				model.paletteOpen = true
-				model.paletteSelected = 4
+				model.paletteSelected = 1
 			}),
 			want: `
 Brevity | native | read-only | alerts !3 | p:1 t:1 c:1
@@ -143,11 +143,13 @@ Selected Detail
   select a row, then press d for details
 
 Actions
+  Refresh state     enter refreshes state
+> Provider status   executable read-only
+  Task status       executable read-only
   Start task        future PowerShell action; confirmation required; not enable...
   Run worker        future PowerShell action; confirmation required; not enable...
   Merge task        future PowerShell action; confirmation required; not enable...
   Cleanup task      future PowerShell action; confirmation required; not enable...
-> Refresh state     enter refreshes state
 
 j/k r p d q quit ? help | native | read-only
 `,
@@ -187,7 +189,7 @@ j/k r p d q quit ? help | native | read-only
 		{
 			name: "disabled action preview open",
 			model: snapshotModel(func(model *Model) {
-				action := actionDescriptors()[0]
+				action := actionDescriptors()[3]
 				model.actionPreview = &action
 				model.width = 100
 				model.height = 32

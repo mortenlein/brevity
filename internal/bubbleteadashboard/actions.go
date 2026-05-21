@@ -1,6 +1,8 @@
 package bubbleteadashboard
 
 import (
+	"context"
+	"path/filepath"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -20,11 +22,13 @@ const (
 type ActionID string
 
 const (
-	ActionRefreshState ActionID = "refresh-state"
-	ActionStartTask    ActionID = "start-task"
-	ActionRunWorker    ActionID = "run-worker"
-	ActionMergeTask    ActionID = "merge-task"
-	ActionCleanupTask  ActionID = "cleanup-task"
+	ActionRefreshState   ActionID = "refresh-state"
+	ActionProviderStatus ActionID = "provider-status"
+	ActionTaskStatus     ActionID = "task-status"
+	ActionStartTask      ActionID = "start-task"
+	ActionRunWorker      ActionID = "run-worker"
+	ActionMergeTask      ActionID = "merge-task"
+	ActionCleanupTask    ActionID = "cleanup-task"
 )
 
 type ActionDescriptor struct {
@@ -44,6 +48,7 @@ type ActionDescriptor struct {
 // actions should be added here before they are enabled in the palette.
 type DashboardCommandBridge interface {
 	RefreshRuntimeState() (contracts.RuntimeState, error)
+	ExecuteReadOnlyAction(action ActionDescriptor) pscontract.ExecutionResult
 }
 
 type RuntimeClientCommandBridge struct {
@@ -56,6 +61,28 @@ func (bridge RuntimeClientCommandBridge) RefreshRuntimeState() (contracts.Runtim
 		return contracts.RuntimeState{}, err
 	}
 	return contracts.ParseRuntimeState(output)
+}
+
+func (bridge RuntimeClientCommandBridge) ExecuteReadOnlyAction(action ActionDescriptor) pscontract.ExecutionResult {
+	return pscontract.PowerShellCommandRunner{ScriptPath: bridge.scriptPath()}.Run(context.Background(), action.Command)
+}
+
+func (bridge RuntimeClientCommandBridge) scriptPath() string {
+	switch client := bridge.Client.(type) {
+	case runtimeclient.PowerShellClient:
+		return client.ScriptPath
+	case *runtimeclient.PowerShellClient:
+		return client.ScriptPath
+	case runtimeclient.NativeClient:
+		if client.RepoRoot != "" {
+			return filepath.Join(client.RepoRoot, "brevity.ps1")
+		}
+	case *runtimeclient.NativeClient:
+		if client.RepoRoot != "" {
+			return filepath.Join(client.RepoRoot, "brevity.ps1")
+		}
+	}
+	return `.\\brevity.ps1`
 }
 
 func actionDescriptors() []ActionDescriptor {
@@ -72,10 +99,13 @@ func actionDescriptors() []ActionDescriptor {
 			ExecutesViaBridge:    true,
 			Command:              descriptor,
 		}
-		if descriptor.ActionID == pscontract.ActionRefreshState {
+		if !descriptor.Mutating && descriptor.Enabled {
 			action.Kind = ActionKindReadOnly
-			action.Description = "enter refreshes state"
-			action.Shortcut = "r"
+			action.Description = "executable read-only"
+			if descriptor.ActionID == pscontract.ActionRefreshState {
+				action.Description = "enter refreshes state"
+				action.Shortcut = "r"
+			}
 		} else if descriptor.Mutating {
 			action.Kind = ActionKindMutating
 		}
@@ -91,6 +121,8 @@ func (model Model) commandForAction(action ActionDescriptor) tea.Cmd {
 	switch action.ID {
 	case ActionRefreshState:
 		return model.refreshCmd()
+	case ActionProviderStatus, ActionTaskStatus:
+		return model.executeReadOnlyCmd(action)
 	default:
 		return nil
 	}
@@ -103,6 +135,12 @@ func (model Model) refreshCmd() tea.Cmd {
 			return refreshMsg{err: err, at: time.Now()}
 		}
 		return refreshMsg{state: state, at: time.Now()}
+	}
+}
+
+func (model Model) executeReadOnlyCmd(action ActionDescriptor) tea.Cmd {
+	return func() tea.Msg {
+		return commandResultMsg{result: model.dashboardCommandBridge().ExecuteReadOnlyAction(action)}
 	}
 }
 

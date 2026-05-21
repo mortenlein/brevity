@@ -8,12 +8,12 @@ import (
 )
 
 func TestDashboardDescriptorsKeepMutatingActionsDisabled(t *testing.T) {
-	var refreshCount int
+	readOnly := map[ActionID]bool{}
 	for _, descriptor := range DashboardDescriptors() {
-		if descriptor.ActionID == ActionRefreshState {
-			refreshCount++
+		if descriptor.ActionID == ActionRefreshState || descriptor.ActionID == ActionProviderStatus || descriptor.ActionID == ActionTaskStatus {
+			readOnly[descriptor.ActionID] = true
 			if !descriptor.Enabled || descriptor.Mutating || descriptor.RequiresConfirmation {
-				t.Fatalf("refresh descriptor = %#v, want enabled read-only without confirmation", descriptor)
+				t.Fatalf("%s descriptor = %#v, want enabled read-only without confirmation", descriptor.ActionID, descriptor)
 			}
 			continue
 		}
@@ -30,8 +30,10 @@ func TestDashboardDescriptorsKeepMutatingActionsDisabled(t *testing.T) {
 			t.Fatalf("%s DisabledReason = %q, want not-enabled explanation", descriptor.ActionID, descriptor.DisabledReason)
 		}
 	}
-	if refreshCount != 1 {
-		t.Fatalf("refresh descriptors = %d, want 1", refreshCount)
+	for _, id := range []ActionID{ActionRefreshState, ActionProviderStatus, ActionTaskStatus} {
+		if !readOnly[id] {
+			t.Fatalf("missing read-only descriptor %s", id)
+		}
 	}
 }
 

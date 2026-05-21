@@ -37,6 +37,10 @@ type refreshMsg struct {
 
 type tickMsg time.Time
 
+type commandResultMsg struct {
+	result pscontract.ExecutionResult
+}
+
 type Model struct {
 	client          runtimeclient.Client
 	commandBridge   DashboardCommandBridge
@@ -120,10 +124,14 @@ func runLineFallback(stdout io.Writer, input io.Reader, client runtimeclient.Cli
 	scanner := bufio.NewScanner(input)
 	for scanner.Scan() {
 		key := strings.TrimSpace(scanner.Text())
-		updated, _ := model.Update(lineKeyMsg(key))
+		updated, cmd := model.Update(lineKeyMsg(key))
 		model = updated.(Model)
 		if key == "q" {
 			return nil
+		}
+		if cmd != nil {
+			updated, _ = model.Update(cmd())
+			model = updated.(Model)
 		}
 		fmt.Fprint(stdout, model.View())
 	}
@@ -132,7 +140,7 @@ func runLineFallback(stdout io.Writer, input io.Reader, client runtimeclient.Cli
 
 func lineKeyMsg(key string) tea.KeyMsg {
 	switch strings.ToLower(key) {
-	case "":
+	case "", "enter":
 		return tea.KeyMsg{Type: tea.KeyEnter}
 	case "esc":
 		return tea.KeyMsg{Type: tea.KeyEsc}
@@ -173,6 +181,9 @@ func (model Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return model, nil
 	case tickMsg:
 		return model, tea.Batch(model.refreshCmd(), model.tickCmd())
+	case commandResultMsg:
+		model.commandResult = &msg.result
+		return model, nil
 	default:
 		return model, nil
 	}
@@ -1004,10 +1015,11 @@ func (model Model) renderHelpOverlay(usedRows ...int) string {
 	lines := []string{
 		"  navigate with up/down or j/k; d toggles selected details",
 		"  r refreshes runtime state through the command bridge",
-		"  p opens actions; disabled mutations show a dry-run command preview",
-		"  confirmation UI is modeled for future enabled descriptors only",
-		"  Go is a read-only dashboard; PowerShell is authoritative",
-		"  only Refresh is executable today",
+		"  p opens actions; read-only actions can execute PowerShell commands",
+		"  mutating actions are disabled and show a blocked command preview",
+		"  PowerShell remains authoritative for Brevity state",
+		"  Go does not write .brevity or start providers/workers",
+		"  executable today: Refresh state, Provider status, Task status",
 		"  esc, q, p, or ? closes panels without running commands",
 	}
 	var body strings.Builder
@@ -1076,14 +1088,42 @@ func (model Model) renderCommandResult(usedRows ...int) string {
 		"  exit code     " + fmt.Sprint(result.ExitCode),
 		"  message       " + result.OperatorMessage(),
 	}
+	if result.TimedOut {
+		lines = append(lines, "  timeout       command exceeded its read-only timeout")
+	}
+	if result.Canceled {
+		lines = append(lines, "  canceled      command was canceled")
+	}
+	if stdout := strings.TrimSpace(result.Stdout); stdout != "" {
+		lines = append(lines, commandOutputLines("stdout", stdout)...)
+	} else if result.Success() {
+		lines = append(lines, "  stdout        (empty)")
+	}
 	if stderr := strings.TrimSpace(result.Stderr); stderr != "" {
-		lines = append(lines, "  stderr        "+stderr)
+		lines = append(lines, commandOutputLines("stderr", stderr)...)
+	}
+	if result.Error != "" && strings.TrimSpace(result.Stderr) == "" {
+		lines = append(lines, "  error         "+result.Error)
 	}
 	if result.ShouldRefresh() {
 		lines = append(lines, "  follow-up     press r to refresh runtime state")
 	}
 	lines = append(lines, "  close         esc or q closes result")
 	return model.renderPanel("Command Result", lines, detailTruncatedIndicator, usedRows...)
+}
+
+func commandOutputLines(label string, value string) []string {
+	lines := strings.Split(strings.ReplaceAll(value, "\r\n", "\n"), "\n")
+	output := make([]string, 0, len(lines))
+	for index, line := range lines {
+		line = strings.TrimRight(line, "\r")
+		if index == 0 {
+			output = append(output, fmt.Sprintf("  %-12s  %s", label, fallback(line, "(empty)")))
+			continue
+		}
+		output = append(output, "                "+line)
+	}
+	return output
 }
 
 func (model Model) renderPanel(title string, lines []string, indicator string, usedRows ...int) string {
@@ -1162,7 +1202,7 @@ func (model Model) renderActionPalette(usedRows ...int) string {
 		fmt.Fprintln(&output, model.renderPaletteActionRow(action, index == selected))
 	}
 	if model.shouldRenderActionPaletteHelp(usedRows...) {
-		fmt.Fprintln(&output, dashboardStyles.help.Render(model.renderLine("  enter runs Refresh only | esc closes | p toggles")))
+		fmt.Fprintln(&output, dashboardStyles.help.Render(model.renderLine("  enter runs read-only actions | esc closes | p toggles")))
 	}
 	return output.String()
 }

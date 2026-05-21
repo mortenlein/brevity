@@ -50,11 +50,24 @@ type fakeCommandBridge struct {
 	state        contracts.RuntimeState
 	err          error
 	refreshCalls int
+	result       pscontract.ExecutionResult
+	executeCalls int
 }
 
 func (bridge *fakeCommandBridge) RefreshRuntimeState() (contracts.RuntimeState, error) {
 	bridge.refreshCalls++
 	return bridge.state, bridge.err
+}
+
+func (bridge *fakeCommandBridge) ExecuteReadOnlyAction(action ActionDescriptor) pscontract.ExecutionResult {
+	bridge.executeCalls++
+	if bridge.result.CommandDisplayLabel == "" {
+		bridge.result.CommandDisplayLabel = action.Label
+	}
+	if bridge.result.ActionID == "" {
+		bridge.result.ActionID = pscontract.ActionID(action.ID)
+	}
+	return bridge.result
 }
 
 func TestNewModelDefaultsRefreshInterval(t *testing.T) {
@@ -109,13 +122,15 @@ func TestActionPaletteOpensWithShortcut(t *testing.T) {
 	output := plainView(model.View())
 	for _, want := range []string{
 		"Actions",
-		"> Start task",
+		"> Refresh state",
+		"Provider status   executable read-only",
+		"Task status       executable read-only",
 		"Start task        future PowerShell action; confirmation required; not enabled yet",
 		"Run worker        future PowerShell action; confirmation required; not enabled yet",
 		"Merge task        future PowerShell action; confirmation required; not enabled yet",
 		"Cleanup task      future PowerShell action; confirmation required; not enabled yet",
 		"Refresh state     enter refreshes state",
-		"enter runs Refresh only | esc closes | p toggles",
+		"enter runs read-only actions | esc closes | p toggles",
 	} {
 		if !strings.Contains(output, want) {
 			t.Fatalf("palette output missing %q:\n%s", want, output)
@@ -198,7 +213,7 @@ func TestActionPaletteEnterOnRefreshPollsRuntimeStateOnce(t *testing.T) {
 	model.state = bubbleState()
 	model.hasState = true
 	model.paletteOpen = true
-	model.paletteSelected = 4
+	model.paletteSelected = 0
 
 	updated, cmd := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	model = updated.(Model)
@@ -218,13 +233,20 @@ func TestActionPaletteEnterOnRefreshPollsRuntimeStateOnce(t *testing.T) {
 	}
 }
 
+func TestLineFallbackMapsEnterTextToEnterKey(t *testing.T) {
+	key := lineKeyMsg("enter")
+	if key.Type != tea.KeyEnter {
+		t.Fatalf("lineKeyMsg enter = %v, want KeyEnter", key.Type)
+	}
+}
+
 func TestActionPaletteEnterOnDisabledActionDoesNotPollRuntimeState(t *testing.T) {
 	client := &fakeClient{}
 	model := NewModelWithSource(client, time.Second, "native")
 	model.state = bubbleState()
 	model.hasState = true
 	model.paletteOpen = true
-	model.paletteSelected = 0
+	model.paletteSelected = 3
 
 	updated, cmd := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	model = updated.(Model)
@@ -257,7 +279,7 @@ func TestActionPaletteEnterOnDisabledActionDoesNotPollRuntimeState(t *testing.T)
 func TestActionPreviewCloseKeysReturnToDashboard(t *testing.T) {
 	for _, key := range []tea.KeyMsg{{Type: tea.KeyEsc}, {Type: tea.KeyRunes, Runes: []rune("q")}, {Type: tea.KeyRunes, Runes: []rune("p")}} {
 		t.Run(key.String(), func(t *testing.T) {
-			action := actionDescriptors()[0]
+			action := actionDescriptors()[3]
 			model := NewModelWithSource(&fakeClient{}, time.Second, "native")
 			model.state = bubbleState()
 			model.hasState = true
@@ -292,28 +314,28 @@ func TestActionPaletteRowsStayWithinNarrowWidth(t *testing.T) {
 	assertLinesWithinWidth(t, output, model.width)
 }
 
-func TestActionDescriptorsKeepOnlyRefreshExecutable(t *testing.T) {
+func TestActionDescriptorsKeepReadOnlyActionsExecutable(t *testing.T) {
 	actions := actionDescriptors()
 	if len(actions) == 0 {
 		t.Fatal("actionDescriptors returned no actions")
 	}
 
-	var refreshCount int
+	executableReadOnly := map[ActionID]bool{}
 	for _, action := range actions {
 		switch action.ID {
-		case ActionRefreshState:
-			refreshCount++
+		case ActionRefreshState, ActionProviderStatus, ActionTaskStatus:
+			executableReadOnly[action.ID] = true
 			if !action.Enabled {
-				t.Fatal("refresh action is disabled, want enabled")
+				t.Fatalf("%s action is disabled, want enabled", action.ID)
 			}
 			if action.Kind != ActionKindReadOnly {
-				t.Fatalf("refresh kind = %q, want %q", action.Kind, ActionKindReadOnly)
+				t.Fatalf("%s kind = %q, want %q", action.ID, action.Kind, ActionKindReadOnly)
 			}
 			if !action.ExecutesViaBridge {
-				t.Fatal("refresh should execute via command bridge")
+				t.Fatalf("%s should execute via command bridge", action.ID)
 			}
 			if action.ConfirmationRequired {
-				t.Fatal("refresh should not require confirmation")
+				t.Fatalf("%s should not require confirmation", action.ID)
 			}
 		default:
 			if action.Enabled {
@@ -327,8 +349,10 @@ func TestActionDescriptorsKeepOnlyRefreshExecutable(t *testing.T) {
 			}
 		}
 	}
-	if refreshCount != 1 {
-		t.Fatalf("refresh action count = %d, want 1", refreshCount)
+	for _, id := range []ActionID{ActionRefreshState, ActionProviderStatus, ActionTaskStatus} {
+		if !executableReadOnly[id] {
+			t.Fatalf("missing executable read-only action %s", id)
+		}
 	}
 }
 
@@ -390,7 +414,7 @@ func TestDisabledActionsCannotEnterConfirmation(t *testing.T) {
 	model.state = bubbleState()
 	model.hasState = true
 	model.paletteOpen = true
-	model.paletteSelected = 3
+	model.paletteSelected = 6
 
 	updated, cmd := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	model = updated.(Model)
@@ -428,6 +452,38 @@ func TestRefreshActionUsesMockCommandBridge(t *testing.T) {
 	}
 	if refresh.state.RepoRoot != `C:\repo` {
 		t.Fatalf("refresh state repo = %q, want C:\\repo", refresh.state.RepoRoot)
+	}
+}
+
+func TestProviderAndTaskStatusUseMockCommandBridge(t *testing.T) {
+	for _, id := range []ActionID{ActionProviderStatus, ActionTaskStatus} {
+		t.Run(string(id), func(t *testing.T) {
+			bridge := &fakeCommandBridge{result: pscontract.ExecutionResult{ExitCode: 0, Stdout: "real read-only output"}}
+			model := NewModelWithSource(&fakeClient{}, time.Second, "native")
+			model.commandBridge = bridge
+
+			var action ActionDescriptor
+			for _, candidate := range actionDescriptors() {
+				if candidate.ID == id {
+					action = candidate
+				}
+			}
+			cmd := model.commandForAction(action)
+			if cmd == nil {
+				t.Fatalf("%s action returned nil command", id)
+			}
+			msg := cmd()
+			result, ok := msg.(commandResultMsg)
+			if !ok {
+				t.Fatalf("message type = %T, want commandResultMsg", msg)
+			}
+			if result.result.Stdout != "real read-only output" {
+				t.Fatalf("stdout = %q", result.result.Stdout)
+			}
+			if bridge.executeCalls != 1 {
+				t.Fatalf("execute calls = %d, want 1", bridge.executeCalls)
+			}
+		})
 	}
 }
 
@@ -487,13 +543,13 @@ func TestActionPaletteHelperOnlyRendersWhenSpaceAllows(t *testing.T) {
 	model.height = 24
 
 	output := plainView(model.View())
-	if strings.Contains(output, "enter runs Refresh only") {
+	if strings.Contains(output, "enter runs read-only actions") {
 		t.Fatalf("height-constrained palette rendered helper:\n%s", output)
 	}
 
 	model.height = 30
 	output = plainView(model.View())
-	if !strings.Contains(output, "enter runs Refresh only | esc closes | p toggles") {
+	if !strings.Contains(output, "enter runs read-only actions | esc closes | p toggles") {
 		t.Fatalf("roomy palette omitted helper:\n%s", output)
 	}
 }
@@ -1639,8 +1695,8 @@ func TestHelpOverlayOpensClosesAndDoesNotExecuteCommands(t *testing.T) {
 			output := plainView(model.View())
 			for _, want := range []string{
 				"Help",
-				"PowerShell is authoritative",
-				"only Refresh is executable",
+				"PowerShell remains authoritative",
+				"read-only actions can execute PowerShell commands",
 			} {
 				if !strings.Contains(output, want) {
 					t.Fatalf("help overlay missing %q:\n%s", want, output)

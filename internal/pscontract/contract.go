@@ -12,11 +12,13 @@ import (
 type ActionID string
 
 const (
-	ActionRefreshState ActionID = "refresh-state"
-	ActionStartTask    ActionID = "start-task"
-	ActionRunWorker    ActionID = "run-worker"
-	ActionMergeTask    ActionID = "merge-task"
-	ActionCleanupTask  ActionID = "cleanup-task"
+	ActionRefreshState   ActionID = "refresh-state"
+	ActionProviderStatus ActionID = "provider-status"
+	ActionTaskStatus     ActionID = "task-status"
+	ActionStartTask      ActionID = "start-task"
+	ActionRunWorker      ActionID = "run-worker"
+	ActionMergeTask      ActionID = "merge-task"
+	ActionCleanupTask    ActionID = "cleanup-task"
 )
 
 type ResultMode string
@@ -53,6 +55,40 @@ type CommandDescriptor struct {
 
 func DashboardDescriptors() []CommandDescriptor {
 	return []CommandDescriptor{
+		{
+			ActionID:            ActionRefreshState,
+			Label:               "Refresh state",
+			Command:             commands.RuntimeState,
+			Arguments:           []string{"--json"},
+			Enabled:             true,
+			ResultMode:          ResultModeJSON,
+			TimeoutCategory:     TimeoutShort,
+			SafetyWarning:       "Refresh reads runtime state only.",
+			DisabledReason:      "",
+			RefreshAfterSuccess: false,
+		},
+		{
+			ActionID:            ActionProviderStatus,
+			Label:               "Provider status",
+			Command:             commands.ProviderStatus,
+			Enabled:             true,
+			ResultMode:          ResultModeText,
+			TimeoutCategory:     TimeoutShort,
+			SafetyWarning:       "Provider status reads provider health only.",
+			DisabledReason:      "",
+			RefreshAfterSuccess: false,
+		},
+		{
+			ActionID:            ActionTaskStatus,
+			Label:               "Task status",
+			Command:             commands.TaskStatus,
+			Enabled:             true,
+			ResultMode:          ResultModeText,
+			TimeoutCategory:     TimeoutShort,
+			SafetyWarning:       "Task status reads task metadata and worktree state only.",
+			DisabledReason:      "",
+			RefreshAfterSuccess: false,
+		},
 		{
 			ActionID:             ActionStartTask,
 			Label:                "Start task",
@@ -107,18 +143,6 @@ func DashboardDescriptors() []CommandDescriptor {
 			SafetyWarning:        "PowerShell remains authoritative; cleanup may remove worktrees, metadata, or branches.",
 			DisabledReason:       "future PowerShell action; confirmation required; not enabled yet",
 			RefreshAfterSuccess:  true,
-		},
-		{
-			ActionID:            ActionRefreshState,
-			Label:               "Refresh state",
-			Command:             commands.RuntimeState,
-			Arguments:           []string{"--json"},
-			Enabled:             true,
-			ResultMode:          ResultModeJSON,
-			TimeoutCategory:     TimeoutShort,
-			SafetyWarning:       "Refresh reads runtime state only.",
-			DisabledReason:      "",
-			RefreshAfterSuccess: false,
 		},
 	}
 }
@@ -178,6 +202,9 @@ type ExecutionResult struct {
 	ExitCode            int
 	Stdout              string
 	Stderr              string
+	TimedOut            bool
+	Canceled            bool
+	Error               string
 	StartedAt           time.Time
 	CompletedAt         time.Time
 	RefreshAfter        bool
@@ -191,6 +218,15 @@ func (result ExecutionResult) OperatorMessage() string {
 	label := strings.TrimSpace(result.CommandDisplayLabel)
 	if label == "" {
 		label = string(result.ActionID)
+	}
+	if result.TimedOut {
+		return label + " timed out"
+	}
+	if result.Canceled {
+		return label + " was canceled"
+	}
+	if message := strings.TrimSpace(result.Error); message != "" {
+		return fmt.Sprintf("%s failed: %s", label, message)
 	}
 	if result.Success() {
 		return label + " succeeded"
