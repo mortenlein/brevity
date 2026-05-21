@@ -52,6 +52,30 @@ func TestPowerShellCommandRunnerBlocksMutatingDescriptor(t *testing.T) {
 	}
 }
 
+func TestPowerShellCommandRunnerExecutesConfirmedStartTaskWithArgv(t *testing.T) {
+	script := tempScript(t)
+	process := &fakeProcessRunner{result: ProcessResult{Stdout: "started", ExitCode: 0}}
+	descriptor := findDescriptor(t, ActionStartTask)
+	descriptor.Enabled = true
+
+	result := PowerShellCommandRunner{
+		Executable: "pwsh-test.exe",
+		ScriptPath: script,
+		Process:    process,
+	}.RunMutating(context.Background(), descriptor, []string{"task-one"})
+
+	if !result.Success() || result.Stdout != "started" {
+		t.Fatalf("result = %#v, want success with stdout", result)
+	}
+	wantArgs := []string{"-NoProfile", "-ExecutionPolicy", "Bypass", "-File", script, "task", "start", "task-one", "--json"}
+	if process.executable != "pwsh-test.exe" {
+		t.Fatalf("executable = %q", process.executable)
+	}
+	if !reflect.DeepEqual(process.args, wantArgs) {
+		t.Fatalf("args = %#v, want %#v", process.args, wantArgs)
+	}
+}
+
 func TestPowerShellCommandRunnerReportsMissingScript(t *testing.T) {
 	result := PowerShellCommandRunner{ScriptPath: "missing-brevity.ps1"}.Run(context.Background(), findDescriptor(t, ActionTaskStatus))
 	if result.Success() || result.Error == "" {

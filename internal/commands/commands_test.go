@@ -42,7 +42,8 @@ func TestDiscoveredPowerShellCommandShapes(t *testing.T) {
 	}{
 		{name: "runtime state json", command: RuntimeState, extra: []string{"--json"}, want: []string{"runtime", "state", "--json"}},
 		{name: "task status list", command: TaskStatus, want: []string{"task", "status"}},
-		{name: "task start", command: TaskNew, extra: []string{"my-task"}, want: []string{"task", "new", "my-task"}},
+		{name: "task new", command: TaskNew, extra: []string{"my-task"}, want: []string{"task", "new", "my-task"}},
+		{name: "task start", command: TaskStart, extra: []string{"my-task"}, want: []string{"task", "start", "my-task"}},
 		{name: "task run", command: TaskRun, extra: []string{"my-task", "--execute", "--profile", "default", "--smoke"}, want: []string{"task", "run", "my-task", "--execute", "--profile", "default", "--smoke"}},
 		{name: "task merge", command: TaskMerge, extra: []string{"my-task"}, want: []string{"task", "merge", "my-task"}},
 		{name: "task cleanup", command: TaskCleanup, extra: []string{"my-task", "--force"}, want: []string{"task", "cleanup", "my-task", "--force"}},

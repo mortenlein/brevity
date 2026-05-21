@@ -16,6 +16,7 @@ const (
 	TaskCleanupID        ID = "task-cleanup"
 	TaskMergeID          ID = "task-merge"
 	TaskNewID            ID = "task-new"
+	TaskStartID          ID = "task-start"
 	TaskRunID            ID = "task-run"
 	TaskRuntimeInfoID    ID = "task-runtime-info"
 	TaskRunsID           ID = "task-runs"
@@ -85,6 +86,11 @@ var (
 		Words: []string{"task", "new"},
 		Usage: "brevity task new <slug>",
 	}
+	TaskStart = Command{
+		ID:    TaskStartID,
+		Words: []string{"task", "start"},
+		Usage: "brevity task start <slug>",
+	}
 	TaskStatus = Command{
 		ID:    TaskStatusID,
 		Words: []string{"task", "status"},
@@ -142,6 +148,7 @@ var UsageCommands = []Command{
 	TaskContextRefresh,
 	TaskStatus,
 	TaskNew,
+	TaskStart,
 	TaskRun,
 	TaskRuntimeInfo,
 	TaskRuns,

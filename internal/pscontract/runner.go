@@ -57,6 +57,14 @@ type PowerShellCommandRunner struct {
 }
 
 func (runner PowerShellCommandRunner) Run(ctx context.Context, descriptor CommandDescriptor) ExecutionResult {
+	return runner.run(ctx, descriptor, nil, false)
+}
+
+func (runner PowerShellCommandRunner) RunMutating(ctx context.Context, descriptor CommandDescriptor, commandArgs []string) ExecutionResult {
+	return runner.run(ctx, descriptor, commandArgs, true)
+}
+
+func (runner PowerShellCommandRunner) run(ctx context.Context, descriptor CommandDescriptor, commandArgs []string, allowMutating bool) ExecutionResult {
 	started := time.Now()
 	result := ExecutionResult{
 		ActionID:            descriptor.ActionID,
@@ -66,8 +74,18 @@ func (runner PowerShellCommandRunner) Run(ctx context.Context, descriptor Comman
 		RefreshAfter:        descriptor.RefreshAfterSuccess,
 	}
 
-	if descriptor.Mutating || !descriptor.Enabled {
+	if descriptor.Mutating && !allowMutating {
 		result.Error = "action is not an enabled read-only command"
+		result.CompletedAt = time.Now()
+		return result
+	}
+	if !descriptor.Enabled {
+		result.Error = "action is not enabled"
+		result.CompletedAt = time.Now()
+		return result
+	}
+	if allowMutating && (!descriptor.Mutating || !descriptor.RequiresConfirmation) {
+		result.Error = "mutating bridge requires a confirmed mutating action"
 		result.CompletedAt = time.Now()
 		return result
 	}
@@ -86,7 +104,7 @@ func (runner PowerShellCommandRunner) Run(ctx context.Context, descriptor Comman
 		return result
 	}
 
-	invocation, err := BuildInvocation(descriptor, scriptPath, nil, false)
+	invocation, err := BuildInvocation(descriptor, scriptPath, commandArgs, false)
 	if err != nil {
 		result.Error = err.Error()
 		result.CompletedAt = time.Now()

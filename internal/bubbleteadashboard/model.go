@@ -85,6 +85,8 @@ type Model struct {
 	helpOpen        bool
 	actionPreview   *ActionDescriptor
 	confirmation    *pscontract.ConfirmationState
+	confirmAction   *ActionDescriptor
+	confirmArgs     []string
 	commandRun      *commandRunState
 	activities      []commandActivity
 	nextCommandID   int
@@ -235,7 +237,10 @@ func (model Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return model, tea.Batch(cmds...)
 	case commandResultMsg:
-		model.completeCommand(msg.id, msg.result)
+		shouldRefresh := model.completeCommand(msg.id, msg.result)
+		if shouldRefresh && !model.polling {
+			return model, func() tea.Msg { return refreshStartedMsg{} }
+		}
 		return model, nil
 	default:
 		return model, nil
@@ -255,8 +260,24 @@ func (model Model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	if model.confirmation != nil {
 		switch msg.String() {
+		case "enter":
+			action := model.confirmAction
+			model.confirmation = nil
+			model.confirmAction = nil
+			model.confirmArgs = nil
+			if action == nil {
+				return model, nil
+			}
+			cmd := model.commandForAction(*action)
+			if cmd == nil {
+				return model, nil
+			}
+			model.startCommandRun(*action)
+			return model, cmd
 		case "esc", "q", "n":
 			model.confirmation = nil
+			model.confirmAction = nil
+			model.confirmArgs = nil
 			return model, nil
 		default:
 			return model, nil
@@ -318,10 +339,25 @@ func (model Model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			model.movePaletteSelection(-1)
 			return model, nil
 		case "enter":
-			action := actionDescriptors()[model.clampedPaletteSelection()]
+			action := model.actionDescriptors()[model.clampedPaletteSelection()]
 			if !action.Enabled {
 				model.paletteOpen = false
 				model.actionPreview = &action
+				return model, nil
+			}
+			if action.ConfirmationRequired {
+				confirmation, ok := model.confirmationForAction(action)
+				if !ok {
+					model.paletteOpen = false
+					model.actionPreview = &action
+					return model, nil
+				}
+				model.paletteOpen = false
+				model.confirmation = &confirmation
+				model.confirmAction = &action
+				if slug, ok := model.selectedStartableTaskSlug(); ok && action.ID == ActionStartTask {
+					model.confirmArgs = []string{slug}
+				}
 				return model, nil
 			}
 			cmd := model.commandForAction(action)
@@ -330,19 +366,7 @@ func (model Model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 			model.paletteOpen = false
 			if action.ID == ActionProviderStatus || action.ID == ActionTaskStatus {
-				model.nextCommandID++
-				model.commandRun = &commandRunState{
-					id:        model.nextCommandID,
-					action:    action,
-					status:    commandRunning,
-					startedAt: time.Now(),
-				}
-				model.addActivity(commandActivity{
-					id:      model.nextCommandID,
-					action:  action.Label,
-					status:  commandRunning,
-					summary: "started",
-				})
+				model.startCommandRun(action)
 			}
 			return model, cmd
 		default:
@@ -936,6 +960,23 @@ func (model Model) selectableItems() []dashboard.SelectionItem {
 	return out
 }
 
+func (model Model) selectedStartableTaskSlug() (string, bool) {
+	items := model.selectableItems()
+	if len(items) == 0 {
+		return "", false
+	}
+	selected := clampInt(model.selection.SelectedIndex, 0, len(items)-1)
+	item := items[selected]
+	if item.Kind != dashboard.SelectionTask {
+		return "", false
+	}
+	slug := strings.TrimSpace(item.Task.Slug)
+	if slug == "" {
+		return "", false
+	}
+	return slug, true
+}
+
 func (model Model) paneWidths() (int, int) {
 	width := model.contentWidth()
 	separatorWidth := visibleWidth(paneSeparator)
@@ -1150,6 +1191,9 @@ func (model Model) renderHelpOverlay(usedRows ...int) string {
 		"  PowerShell remains authoritative for Brevity state",
 		"  Go does not write .brevity or start providers/workers",
 		"  p opens actions; read-only actions can execute PowerShell commands",
+		"  Start task requires a selected task row and confirmation",
+		"  Start task changes task state through PowerShell only",
+		"  Run worker, Merge, and Cleanup remain disabled future actions",
 		"  command results scroll with up/down or j/k; esc closes finished results",
 		"  recent command activity is session-only and read-only",
 		"  mutating actions are disabled and show a blocked command preview",
@@ -1171,7 +1215,7 @@ func (model Model) renderActionPreview(usedRows ...int) string {
 	}
 	lines := []string{
 		"  action        " + action.Label,
-		"  status        disabled / future",
+		"  status        disabled / blocked",
 		"  command       " + model.previewCommandShape(*action),
 		"  blocked       " + fallback(action.Command.DisabledReason, "descriptor is not enabled"),
 		"  confirm       confirmation required before any future execution",
@@ -1182,11 +1226,37 @@ func (model Model) renderActionPreview(usedRows ...int) string {
 }
 
 func (model Model) previewCommandShape(action ActionDescriptor) string {
-	invocation, err := pscontract.BuildInvocation(action.Command, `.\\brevity.ps1`, nil, true)
+	var args []string
+	if action.ID == ActionStartTask {
+		if slug, ok := model.selectedStartableTaskSlug(); ok {
+			args = []string{slug}
+		} else {
+			args = []string{"<selected-task-slug>"}
+		}
+	}
+	invocation, err := pscontract.BuildInvocation(action.Command, `.\\brevity.ps1`, args, true)
 	if err != nil {
 		return "(unavailable)"
 	}
 	return invocation.Display()
+}
+
+func (model Model) confirmationForAction(action ActionDescriptor) (pscontract.ConfirmationState, bool) {
+	confirmation, ok := pscontract.NewConfirmationState(action.Command)
+	if !ok {
+		return pscontract.ConfirmationState{}, false
+	}
+	if action.ID == ActionStartTask {
+		slug, startable := model.selectedStartableTaskSlug()
+		if !startable {
+			return pscontract.ConfirmationState{}, false
+		}
+		confirmation.Prompt = fmt.Sprintf(
+			"Start task %s changes task state through PowerShell. Go will not write .brevity directly.",
+			slug,
+		)
+	}
+	return confirmation, true
 }
 
 func (model Model) renderConfirmation(usedRows ...int) string {
@@ -1194,15 +1264,27 @@ func (model Model) renderConfirmation(usedRows ...int) string {
 		return ""
 	}
 	state := *model.confirmation
+	actionLabel := string(state.ActionID)
+	command := "(unavailable)"
+	if model.confirmAction != nil {
+		actionLabel = model.confirmAction.Label
+		invocation, err := pscontract.BuildInvocation(model.confirmAction.Command, `.\\brevity.ps1`, model.confirmArgs, false)
+		if err == nil {
+			command = invocation.Display()
+		}
+	}
 	lines := []string{
-		"  action        " + string(state.ActionID),
+		"  action        " + actionLabel,
 		"  status        not executable unless enabled by command descriptor",
+		"  command       " + command,
 		"  prompt        " + state.Prompt,
 		"  authority     PowerShell is authoritative; Go does not mutate task state",
+		"  warning       this changes task state",
 	}
 	if state.Strength == pscontract.ConfirmationDestructive {
 		lines = append(lines, "  warning       destructive action; cleanup can remove branches or worktrees")
 	}
+	lines = append(lines, "  confirm       enter confirms")
 	lines = append(lines, "  cancel        esc, q, or n cancels")
 	return model.renderPanel("Confirm Action", lines, helpTruncatedIndicator, usedRows...)
 }
@@ -1218,7 +1300,7 @@ func (model Model) renderCommandResult(usedRows ...int) string {
 	}
 	if run.status == commandRunning {
 		lines = append(lines,
-			"  message       running read-only PowerShell command",
+			"  message       running PowerShell command",
 			"  cancel        wait for timeout or completion; esc is disabled while running",
 		)
 		return model.renderPanel("Command Result", lines, detailTruncatedIndicator, usedRows...)
@@ -1249,7 +1331,7 @@ func (model Model) renderCommandResult(usedRows ...int) string {
 		lines = append(lines, "  error         "+result.Error)
 	}
 	if result.ShouldRefresh() {
-		lines = append(lines, "  follow-up     press r to refresh runtime state")
+		lines = append(lines, "  follow-up     automatic runtime refresh requested")
 	}
 	lines = append(lines, "  close         esc or q closes result")
 	return model.renderScrollablePanel("Command Result", lines, run.scroll, detailTruncatedIndicator, usedRows...)
@@ -1269,9 +1351,9 @@ func commandOutputLines(label string, value string) []string {
 	return output
 }
 
-func (model *Model) completeCommand(id int, result pscontract.ExecutionResult) {
+func (model *Model) completeCommand(id int, result pscontract.ExecutionResult) bool {
 	if model.commandRun == nil || model.commandRun.id != id {
-		return
+		return false
 	}
 	status := commandFailed
 	if result.Canceled {
@@ -1291,6 +1373,23 @@ func (model *Model) completeCommand(id int, result pscontract.ExecutionResult) {
 		completedAt: result.CompletedAt,
 		summary:     commandResultSummary(result),
 		result:      &result,
+	})
+	return result.ShouldRefresh()
+}
+
+func (model *Model) startCommandRun(action ActionDescriptor) {
+	model.nextCommandID++
+	model.commandRun = &commandRunState{
+		id:        model.nextCommandID,
+		action:    action,
+		status:    commandRunning,
+		startedAt: time.Now(),
+	}
+	model.addActivity(commandActivity{
+		id:      model.nextCommandID,
+		action:  action.Label,
+		status:  commandRunning,
+		summary: "started",
 	})
 }
 
@@ -1485,7 +1584,7 @@ func (model Model) renderActionPalette(usedRows ...int) string {
 	fmt.Fprintln(&output)
 	renderSection(&output, "Actions")
 	selected := model.clampedPaletteSelection()
-	for index, action := range actionDescriptors() {
+	for index, action := range model.actionDescriptors() {
 		fmt.Fprintln(&output, model.renderPaletteActionRow(action, index == selected))
 	}
 	if model.shouldRenderActionPaletteHelp(usedRows...) {
@@ -1533,12 +1632,12 @@ func (model Model) shouldRenderActionPaletteHelp(usedRows ...int) bool {
 		used = usedRows[0]
 	}
 	footerRows := renderedRows(model.renderFooter())
-	paletteRowsWithHelp := 1 + 1 + len(actionDescriptors()) + 1
+	paletteRowsWithHelp := 1 + 1 + len(model.actionDescriptors()) + 1
 	return used+paletteRowsWithHelp+footerRows <= model.height
 }
 
 func (model *Model) movePaletteSelection(delta int) {
-	actionCount := len(actionDescriptors())
+	actionCount := len(model.actionDescriptors())
 	if actionCount == 0 {
 		model.paletteSelected = 0
 		return
@@ -1547,7 +1646,7 @@ func (model *Model) movePaletteSelection(delta int) {
 }
 
 func (model Model) clampedPaletteSelection() int {
-	actionCount := len(actionDescriptors())
+	actionCount := len(model.actionDescriptors())
 	if actionCount == 0 {
 		return 0
 	}

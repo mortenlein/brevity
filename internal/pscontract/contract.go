@@ -92,14 +92,15 @@ func DashboardDescriptors() []CommandDescriptor {
 		{
 			ActionID:             ActionStartTask,
 			Label:                "Start task",
-			Command:              commands.TaskNew,
+			Command:              commands.TaskStart,
 			Mutating:             true,
 			RequiresConfirmation: true,
 			Enabled:              false,
 			ResultMode:           ResultModeJSON,
 			TimeoutCategory:      TimeoutNormal,
-			SafetyWarning:        "PowerShell remains authoritative for task creation and Brevity state.",
-			DisabledReason:       "future PowerShell action; confirmation required; not enabled yet",
+			SafetyWarning:        "PowerShell remains authoritative for task state changes.",
+			DisabledReason:       "not enabled yet; select a task row to enable Start task",
+			RefreshAfterSuccess:  true,
 		},
 		{
 			ActionID:             ActionRunWorker,

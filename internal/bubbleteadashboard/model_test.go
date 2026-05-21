@@ -52,6 +52,9 @@ type fakeCommandBridge struct {
 	refreshCalls int
 	result       pscontract.ExecutionResult
 	executeCalls int
+	mutateCalls  int
+	mutateArgs   []string
+	mutateAction ActionDescriptor
 }
 
 func (bridge *fakeCommandBridge) RefreshRuntimeState() (contracts.RuntimeState, error) {
@@ -61,6 +64,19 @@ func (bridge *fakeCommandBridge) RefreshRuntimeState() (contracts.RuntimeState, 
 
 func (bridge *fakeCommandBridge) ExecuteReadOnlyAction(action ActionDescriptor) pscontract.ExecutionResult {
 	bridge.executeCalls++
+	if bridge.result.CommandDisplayLabel == "" {
+		bridge.result.CommandDisplayLabel = action.Label
+	}
+	if bridge.result.ActionID == "" {
+		bridge.result.ActionID = pscontract.ActionID(action.ID)
+	}
+	return bridge.result
+}
+
+func (bridge *fakeCommandBridge) ExecuteMutatingAction(action ActionDescriptor, commandArgs []string) pscontract.ExecutionResult {
+	bridge.mutateCalls++
+	bridge.mutateAction = action
+	bridge.mutateArgs = append([]string{}, commandArgs...)
 	if bridge.result.CommandDisplayLabel == "" {
 		bridge.result.CommandDisplayLabel = action.Label
 	}
@@ -125,7 +141,7 @@ func TestActionPaletteOpensWithShortcut(t *testing.T) {
 		"> Refresh state",
 		"Provider status   executable read-only",
 		"Task status       executable read-only",
-		"Start task        future PowerShell action; confirmation required; not enabled yet",
+		"Start task        future PowerShell action; select a task row to enable",
 		"Run worker        future PowerShell action; confirmation required; not enabled yet",
 		"Merge task        future PowerShell action; confirmation required; not enabled yet",
 		"Cleanup task      future PowerShell action; confirmation required; not enabled yet",
@@ -429,6 +445,185 @@ func TestDisabledActionsCannotEnterConfirmation(t *testing.T) {
 	}
 }
 
+func TestSelectedStartableTaskSlugOnlyComesFromTaskRows(t *testing.T) {
+	tests := []struct {
+		name          string
+		configure     func(*Model)
+		wantStartable bool
+	}{
+		{
+			name: "task row with slug",
+			configure: func(model *Model) {
+				model.selection.SelectedIndex = 1
+			},
+			wantStartable: true,
+		},
+		{
+			name: "provider row",
+			configure: func(model *Model) {
+				model.selection.SelectedIndex = 0
+			},
+		},
+		{
+			name: "cleanup row",
+			configure: func(model *Model) {
+				model.selection.SelectedIndex = 2
+			},
+		},
+		{
+			name: "missing slug",
+			configure: func(model *Model) {
+				model.state.Tasks[0].Slug = ""
+				model.selection.SelectedIndex = 1
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			model := NewModelWithSource(&fakeClient{}, time.Second, "native")
+			model.state = bubbleState()
+			model.hasState = true
+			tt.configure(&model)
+
+			slug, startable := model.selectedStartableTaskSlug()
+			if startable != tt.wantStartable {
+				t.Fatalf("startable = %t, want %t (slug %q)", startable, tt.wantStartable, slug)
+			}
+			var startAction ActionDescriptor
+			for _, action := range model.actionDescriptors() {
+				if action.ID == ActionStartTask {
+					startAction = action
+				}
+			}
+			if startAction.Enabled != tt.wantStartable {
+				t.Fatalf("Start task enabled = %t, want %t", startAction.Enabled, tt.wantStartable)
+			}
+		})
+	}
+}
+
+func TestStartTaskConfirmationOpensAndCancelDoesNotExecute(t *testing.T) {
+	bridge := &fakeCommandBridge{result: pscontract.ExecutionResult{ExitCode: 0, Stdout: "started"}}
+	model := NewModelWithSource(&fakeClient{}, time.Second, "native")
+	model.commandBridge = bridge
+	model.state = bubbleState()
+	model.hasState = true
+	model.selection.SelectedIndex = 1
+	model.paletteOpen = true
+	model.paletteSelected = 3
+
+	updated, cmd := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model = updated.(Model)
+	if cmd != nil {
+		t.Fatal("opening Start task confirmation returned command, want nil")
+	}
+	if model.confirmation == nil {
+		t.Fatal("Start task did not open confirmation")
+	}
+	output := plainView(model.View())
+	for _, want := range []string{"Start task", "task-one", "task start...", "PowerShell is authoritative", "this changes task state"} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("confirmation missing %q:\n%s", want, output)
+		}
+	}
+
+	updated, cmd = model.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	model = updated.(Model)
+	if cmd != nil || bridge.mutateCalls != 0 {
+		t.Fatalf("cancel executed command: cmd=%v mutateCalls=%d", cmd, bridge.mutateCalls)
+	}
+	if model.confirmation != nil {
+		t.Fatal("cancel left confirmation open")
+	}
+}
+
+func TestConfirmingStartTaskExecutesBridgeAddsActivityAndRefreshesOnSuccess(t *testing.T) {
+	refreshed := bubbleState()
+	refreshed.GeneratedAt = "2026-05-21T08:00:00Z"
+	bridge := &fakeCommandBridge{
+		state:  refreshed,
+		result: pscontract.ExecutionResult{ActionID: pscontract.ActionStartTask, CommandDisplayLabel: "Start task", ExitCode: 0, Stdout: "started", RefreshAfter: true},
+	}
+	model := NewModelWithSource(&fakeClient{}, time.Second, "native")
+	model.commandBridge = bridge
+	model.state = bubbleState()
+	model.hasState = true
+	model.selection.SelectedIndex = 1
+	model.paletteOpen = true
+	model.paletteSelected = 3
+
+	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model = updated.(Model)
+	updated, cmd := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model = updated.(Model)
+	if cmd == nil {
+		t.Fatal("confirming Start task returned nil command")
+	}
+	if model.commandRun == nil || model.commandRun.status != commandRunning {
+		t.Fatalf("commandRun = %#v, want running", model.commandRun)
+	}
+
+	updated, followup := model.Update(cmd())
+	model = updated.(Model)
+	if bridge.mutateCalls != 1 {
+		t.Fatalf("mutateCalls = %d, want 1", bridge.mutateCalls)
+	}
+	if got := strings.Join(bridge.mutateArgs, " "); got != "task-one" {
+		t.Fatalf("mutating args = %q, want task-one", got)
+	}
+	if bridge.mutateAction.ID != ActionStartTask {
+		t.Fatalf("mutating action = %s, want %s", bridge.mutateAction.ID, ActionStartTask)
+	}
+	if model.commandRun.status != commandSucceeded {
+		t.Fatalf("status = %s, want succeeded", model.commandRun.status)
+	}
+	if len(model.activities) == 0 || model.activities[0].status != commandSucceeded {
+		t.Fatalf("activity not added: %#v", model.activities)
+	}
+	if followup == nil {
+		t.Fatal("successful Start task did not schedule refresh")
+	}
+
+	updated, refreshCmd := model.Update(followup())
+	model = updated.(Model)
+	if refreshCmd == nil || !model.polling {
+		t.Fatalf("follow-up did not enter refresh path: cmd=%v polling=%t", refreshCmd, model.polling)
+	}
+	updated, _ = model.Update(refreshCmd())
+	model = updated.(Model)
+	if bridge.refreshCalls != 1 {
+		t.Fatalf("refreshCalls = %d, want 1", bridge.refreshCalls)
+	}
+	if model.state.GeneratedAt != refreshed.GeneratedAt {
+		t.Fatalf("state GeneratedAt = %q, want %q", model.state.GeneratedAt, refreshed.GeneratedAt)
+	}
+}
+
+func TestFailedStartTaskDoesNotScheduleRefresh(t *testing.T) {
+	bridge := &fakeCommandBridge{result: pscontract.ExecutionResult{ActionID: pscontract.ActionStartTask, CommandDisplayLabel: "Start task", ExitCode: 2, Stderr: "failed", RefreshAfter: true}}
+	model := NewModelWithSource(&fakeClient{}, time.Second, "native")
+	model.commandBridge = bridge
+	model.state = bubbleState()
+	model.hasState = true
+	model.selection.SelectedIndex = 1
+	model.paletteOpen = true
+	model.paletteSelected = 3
+
+	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model = updated.(Model)
+	updated, cmd := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model = updated.(Model)
+	updated, followup := model.Update(cmd())
+	model = updated.(Model)
+	if model.commandRun.status != commandFailed {
+		t.Fatalf("status = %s, want failed", model.commandRun.status)
+	}
+	if followup != nil {
+		t.Fatal("failed Start task scheduled refresh")
+	}
+}
+
 func TestRefreshActionUsesMockCommandBridge(t *testing.T) {
 	bridge := &fakeCommandBridge{state: bubbleState()}
 	model := NewModelWithSource(&fakeClient{}, time.Second, "native")
@@ -506,7 +701,7 @@ func TestCommandResultPanelsRenderSuccessFailureAndStderr(t *testing.T) {
 		{
 			name:   "refresh follow up",
 			result: pscontract.ExecutionResult{ActionID: pscontract.ActionCleanupTask, CommandDisplayLabel: "Cleanup task", ExitCode: 0, RefreshAfter: true},
-			want:   []string{"follow-up     press r to refresh runtime state"},
+			want:   []string{"follow-up     automatic runtime refresh requested"},
 		},
 	}
 
