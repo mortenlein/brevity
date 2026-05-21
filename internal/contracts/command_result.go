@@ -147,9 +147,17 @@ type TaskRuntimeInfoPayload struct {
 	Status          string                      `json:"status"`
 	NormalizedState string                      `json:"normalizedState"`
 	TaskExists      bool                        `json:"taskExists"`
+	Provider        string                      `json:"provider,omitempty"`
+	Profile         string                      `json:"profile,omitempty"`
+	RunCount        int                         `json:"runCount"`
 	Worktree        TaskRuntimeWorktreePayload  `json:"worktree"`
 	Context         TaskRuntimeContextPayload   `json:"context"`
 	Execution       TaskRuntimeExecutionPayload `json:"execution"`
+	LatestRun       *TaskRunPayload             `json:"latestRun,omitempty"`
+	Stale           bool                        `json:"stale"`
+	Incomplete      bool                        `json:"incomplete"`
+	LogPath         string                      `json:"logPath,omitempty"`
+	Interpretation  string                      `json:"interpretation,omitempty"`
 }
 
 type TaskRuntimeWorktreePayload struct {
@@ -163,9 +171,15 @@ type TaskRuntimeContextPayload struct {
 }
 
 type TaskRuntimeExecutionPayload struct {
-	Status      string `json:"status"`
-	LastRunID   string `json:"lastRunId"`
-	LastLogPath string `json:"lastLogPath"`
+	Status            string `json:"status"`
+	LastRunID         string `json:"lastRunId"`
+	LastRunStartedAt  string `json:"lastRunStartedAt,omitempty"`
+	LastRunFinishedAt string `json:"lastRunFinishedAt,omitempty"`
+	LastExitCode      any    `json:"lastExitCode,omitempty"`
+	LastFailureType   string `json:"lastFailureType,omitempty"`
+	LastLogPath       string `json:"lastLogPath"`
+	LastProvider      string `json:"lastProvider,omitempty"`
+	LastProfile       string `json:"lastProfile,omitempty"`
 }
 
 type TaskRunsPayload struct {
@@ -175,12 +189,19 @@ type TaskRunsPayload struct {
 }
 
 type TaskRunPayload struct {
-	RunID        string `json:"runId"`
-	WorkerStatus string `json:"workerStatus"`
-	ExitCode     any    `json:"exitCode"`
-	Provider     string `json:"provider"`
-	Profile      string `json:"profile"`
-	LogPath      string `json:"logPath"`
+	RunID         string   `json:"runId"`
+	WorkerStatus  string   `json:"workerStatus"`
+	ExitCode      any      `json:"exitCode"`
+	Provider      string   `json:"provider"`
+	Profile       string   `json:"profile"`
+	StartedAt     string   `json:"startedAt,omitempty"`
+	FinishedAt    string   `json:"finishedAt,omitempty"`
+	FailureType   string   `json:"failureType,omitempty"`
+	LogPath       string   `json:"logPath"`
+	Incomplete    bool     `json:"incomplete,omitempty"`
+	Stale         bool     `json:"stale,omitempty"`
+	RunAgeMinutes *float64 `json:"runAgeMinutes,omitempty"`
+	Source        string   `json:"source,omitempty"`
 }
 
 type TaskRunsReconcilePayload struct {

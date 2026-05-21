@@ -98,6 +98,18 @@ For example, a command could return exit code `0` for success, a non-zero exit
 code for fatal failure, and still include warnings in a successful JSON result.
 The exact exit code map should be defined when implementation begins.
 
+## Current Native Read Adoption
+
+The Go CLI emits `brevity.command-result.v1` for native read-only task runtime
+inspection:
+
+- `go run ./cmd/brevity task runs <slug> --json`
+- `go run ./cmd/brevity task runtime-info <slug> --json`
+
+The non-JSON forms render the same payloads for operators. These commands read
+`.brevity\tasks.json` and `.brevity\runs.jsonl` only. They do not start
+workers, mutate task metadata, merge branches, or clean up worktrees.
+
 ## Initial Adoption Candidates
 
 The first commands to adopt structured results should be the commands a TUI is

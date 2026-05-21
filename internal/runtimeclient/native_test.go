@@ -139,6 +139,105 @@ func TestNativeRuntimeStateParsesRunsJSONL(t *testing.T) {
 	}
 }
 
+func TestNativeTaskRunsReturnsNewestFirst(t *testing.T) {
+	repoRoot := nativeTestRepo(t)
+	writeNativeTestFile(t, repoRoot, ".brevity/provider-health.json", `{}`)
+	writeNativeTestFile(t, repoRoot, ".brevity/tasks.json", `[{"slug":"my-task","status":"ready-for-worker"}]`)
+	writeNativeTestFile(t, repoRoot, ".brevity/runs.jsonl",
+		"{\"slug\":\"my-task\",\"runId\":\"old\",\"finishedAt\":\"2026-05-19T08:01:00Z\",\"workerStatus\":\"failed\",\"exitCode\":1}\n"+
+			"{\"slug\":\"my-task\",\"runId\":\"new\",\"finishedAt\":\"2026-05-19T09:01:00Z\",\"workerStatus\":\"succeeded\",\"exitCode\":0}\n")
+
+	result := nativeCommandResult(t, repoRoot, func(client NativeClient) ([]byte, error) {
+		return client.TaskRunsJSON("my-task")
+	})
+	payload, err := contracts.ParseTaskRunsPayload(result)
+	if err != nil {
+		t.Fatalf("ParseTaskRunsPayload returned error: %v", err)
+	}
+	if payload.Count != 2 || len(payload.Runs) != 2 || payload.Runs[0].RunID != "new" || payload.Runs[1].RunID != "old" {
+		t.Fatalf("payload = %#v, want newest-first runs", payload)
+	}
+}
+
+func TestNativeTaskRunsHandlesNoRuns(t *testing.T) {
+	repoRoot := nativeTestRepo(t)
+	writeNativeTestFile(t, repoRoot, ".brevity/provider-health.json", `{}`)
+	writeNativeTestFile(t, repoRoot, ".brevity/tasks.json", `[{"slug":"my-task","status":"ready-for-worker"}]`)
+
+	result := nativeCommandResult(t, repoRoot, func(client NativeClient) ([]byte, error) {
+		return client.TaskRunsJSON("my-task")
+	})
+	payload, err := contracts.ParseTaskRunsPayload(result)
+	if err != nil {
+		t.Fatalf("ParseTaskRunsPayload returned error: %v", err)
+	}
+	if payload.Count != 0 || len(payload.Runs) != 0 {
+		t.Fatalf("payload = %#v, want empty runs", payload)
+	}
+}
+
+func TestNativeTaskRunsMissingTaskReturnsStructuredError(t *testing.T) {
+	repoRoot := nativeTestRepo(t)
+	writeNativeTestFile(t, repoRoot, ".brevity/provider-health.json", `{}`)
+	writeNativeTestFile(t, repoRoot, ".brevity/tasks.json", `[]`)
+
+	result := nativeCommandResult(t, repoRoot, func(client NativeClient) ([]byte, error) {
+		return client.TaskRunsJSON("missing")
+	})
+	if result.Success || len(result.Errors) != 1 || result.Errors[0].Code != "task-not-found" {
+		t.Fatalf("result = %#v, want structured task-not-found", result)
+	}
+}
+
+func TestNativeTaskRunsMalformedHistoryReturnsError(t *testing.T) {
+	repoRoot := nativeTestRepo(t)
+	writeNativeTestFile(t, repoRoot, ".brevity/provider-health.json", `{}`)
+	writeNativeTestFile(t, repoRoot, ".brevity/tasks.json", `[{"slug":"my-task","status":"ready-for-worker"}]`)
+	writeNativeTestFile(t, repoRoot, ".brevity/runs.jsonl", "{not-json}\n")
+
+	client := NativeClient{RepoRoot: repoRoot}
+	_, err := client.TaskRunsJSON("my-task")
+	if err == nil {
+		t.Fatal("TaskRunsJSON returned nil error")
+	}
+}
+
+func TestNativeTaskRuntimeInfoReportsLatestRun(t *testing.T) {
+	repoRoot := nativeTestRepo(t)
+	writeNativeTestFile(t, repoRoot, ".brevity/provider-health.json", `{}`)
+	writeNativeTestFile(t, repoRoot, ".brevity/tasks.json", `[{"slug":"my-task","status":"ready-for-worker","normalizedState":"ready-for-worker","provider":"codex","profile":"default"}]`)
+	writeNativeTestFile(t, repoRoot, ".brevity/runs.jsonl", "{\"slug\":\"my-task\",\"runId\":\"run-1\",\"workerStatus\":\"failed\",\"startedAt\":\"2026-05-19T09:00:00Z\",\"finishedAt\":\"2026-05-19T09:01:00Z\",\"exitCode\":1,\"failureType\":\"worker-exit-failed\",\"logPath\":\"run-1.log\"}\n")
+
+	result := nativeCommandResult(t, repoRoot, func(client NativeClient) ([]byte, error) {
+		return client.TaskRuntimeInfoJSON("my-task")
+	})
+	payload, err := contracts.ParseTaskRuntimeInfoPayload(result)
+	if err != nil {
+		t.Fatalf("ParseTaskRuntimeInfoPayload returned error: %v", err)
+	}
+	if payload.RunCount != 1 || payload.Execution.LastRunID != "run-1" || payload.Execution.Status != "failed" || payload.LogPath != "run-1.log" {
+		t.Fatalf("payload = %#v, want latest failed run", payload)
+	}
+}
+
+func TestNativeTaskRuntimeInfoReportsStaleIncompleteRun(t *testing.T) {
+	repoRoot := nativeTestRepo(t)
+	writeNativeTestFile(t, repoRoot, ".brevity/provider-health.json", `{}`)
+	writeNativeTestFile(t, repoRoot, ".brevity/tasks.json", `[{"slug":"my-task","status":"ready-for-worker"}]`)
+	writeNativeTestFile(t, repoRoot, ".brevity/runs.jsonl", "{\"slug\":\"my-task\",\"runId\":\"stale\",\"workerStatus\":\"running\",\"startedAt\":\"2026-05-19T09:00:00Z\"}\n")
+
+	result := nativeCommandResult(t, repoRoot, func(client NativeClient) ([]byte, error) {
+		return client.TaskRuntimeInfoJSON("my-task")
+	})
+	payload, err := contracts.ParseTaskRuntimeInfoPayload(result)
+	if err != nil {
+		t.Fatalf("ParseTaskRuntimeInfoPayload returned error: %v", err)
+	}
+	if !payload.Stale || !payload.Incomplete || payload.Execution.Status != "stale" {
+		t.Fatalf("payload = %#v, want stale incomplete latest run", payload)
+	}
+}
+
 func TestNativeRuntimeStateMissingFiles(t *testing.T) {
 	repoRoot := nativeTestRepo(t)
 
@@ -329,6 +428,25 @@ func nativeState(t *testing.T, repoRoot string) contracts.RuntimeState {
 		t.Fatalf("unmarshal runtime state: %v", err)
 	}
 	return state
+}
+
+func nativeCommandResult(t *testing.T, repoRoot string, call func(NativeClient) ([]byte, error)) contracts.CommandResult {
+	t.Helper()
+	client := NativeClient{
+		RepoRoot: repoRoot,
+		Now: func() time.Time {
+			return time.Date(2026, 5, 19, 10, 0, 0, 0, time.UTC)
+		},
+	}
+	output, err := call(client)
+	if err != nil {
+		t.Fatalf("native command returned error: %v", err)
+	}
+	result, err := contracts.ParseCommandResult(output)
+	if err != nil {
+		t.Fatalf("ParseCommandResult returned error: %v", err)
+	}
+	return result
 }
 
 func nativeTestRepo(t *testing.T) string {

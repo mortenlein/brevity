@@ -67,3 +67,34 @@ reported as clear read errors with the line number. Latest run selection is
 deterministic: records sort by `finishedAt`, then `startedAt`, then later JSONL
 line. If `finishedAt` is absent, the run is incomplete; runs older than the
 worker stale threshold are reported as stale.
+
+## Native Task Run Inspection Commands
+
+Go now owns the read-only task run-history inspection path:
+
+```powershell
+go run ./cmd/brevity task runs <slug>
+go run ./cmd/brevity task runs <slug> --json
+go run ./cmd/brevity task runtime-info <slug>
+go run ./cmd/brevity task runtime-info <slug> --json
+```
+
+These commands read `.brevity\tasks.json` and `.brevity\runs.jsonl`. They do
+not mutate task metadata, write provider state, start workers, merge branches,
+or clean up worktrees. PowerShell remains present as legacy/reference behavior
+for broader command coverage, especially mutation commands and provider/worker
+execution.
+
+`task runs <slug> --json` emits a `brevity.command-result.v1` envelope whose
+payload includes `slug`, `count`, and a newest-first `runs` array. Each run may
+include `runId`, `workerStatus`, `exitCode`, `provider`, `profile`,
+`startedAt`, `finishedAt`, `failureType`, `logPath`, `incomplete`, `stale`,
+`runAgeMinutes`, and `source`.
+
+`runs` is an empty array when the task exists but has no run history. Missing
+tasks return `success: false` with a `task-not-found` error. Malformed run
+history returns a read error with the JSONL line number.
+
+`task runtime-info <slug> --json` emits the same command-result envelope with a
+payload containing task metadata, `runCount`, latest run metadata, stale and
+incomplete booleans, log path, and a short operator interpretation when useful.

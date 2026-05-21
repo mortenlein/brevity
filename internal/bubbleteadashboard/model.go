@@ -1949,6 +1949,8 @@ func (model Model) renderDetails(output io.Writer, items []dashboard.SelectionIt
 		model.detailPath(output, "worktree", fallback(taskWorktreePath(task), "(unknown)"))
 		model.detailText(output, "worktree exists", optionalTaskBool(task.WorktreeExists, task.Worktree))
 		model.detailText(output, "latest run", fallback(taskLatestRun(task), "(none)"))
+		detail(output, "run count", "%d", task.RunCount)
+		model.detailText(output, "run flags", taskRunFlags(task))
 		if task.Context != nil {
 			detail(output, "context", "%d materialized, %d missing", task.Context.MaterializedFileCount, len(task.Context.MissingFiles))
 		} else {
@@ -2150,6 +2152,20 @@ func taskLatestRun(task contracts.TaskSummary) string {
 		}
 	}
 	return strings.Join(parts, " ")
+}
+
+func taskRunFlags(task contracts.TaskSummary) string {
+	flags := []string{}
+	if task.LatestRunStale {
+		flags = append(flags, "stale")
+	}
+	if task.LatestRunIncomplete {
+		flags = append(flags, "incomplete")
+	}
+	if len(flags) == 0 {
+		return "(none)"
+	}
+	return strings.Join(flags, ", ")
 }
 
 func optionalBool(value *bool) string {

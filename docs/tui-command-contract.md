@@ -32,9 +32,12 @@ Read-only commands inspect state and must not change files, worktrees, branches,
 provider health, or runtime memory. Examples:
 
 - `.\brevity.ps1 runtime state --json`
+- `go run ./cmd/brevity runtime state --json`
 - `.\brevity.ps1 doctor`
 - `.\brevity.ps1 logs recent`
 - `.\brevity.ps1 task runtime-info <slug>`
+- `go run ./cmd/brevity task runtime-info <slug> [--json]`
+- `go run ./cmd/brevity task runs <slug> [--json]`
 
 Safe dry-run commands compute intended changes without applying them. They may
 read runtime files and Git state, but they should leave the workspace unchanged.
@@ -76,6 +79,19 @@ than from optimistic local edits to runtime files.
 The TUI may offer buttons, menus, and confirmations, but Brevity CLI commands
 remain the write boundary. Runtime JSON is an observation contract; command
 execution is the mutation contract.
+
+## Native Read Commands
+
+The Go CLI is authoritative for current task metadata, runtime state, task
+status, and task run-history read paths. `task runs <slug> --json` and
+`task runtime-info <slug> --json` return `brevity.command-result.v1` JSON for
+machine consumers. Their human output is operator-oriented and may evolve, but
+the JSON payloads are intended to change additively.
+
+PowerShell remains the legacy/reference implementation for commands that mutate
+task state or invoke providers/workers. The TUI should continue treating worker
+execution, task creation, cleanup, merge, and other mutations as explicit
+command-boundary operations.
 
 ## Go Dashboard Contract
 

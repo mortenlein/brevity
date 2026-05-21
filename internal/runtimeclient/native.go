@@ -151,10 +151,18 @@ func (client NativeClient) TaskRunPlanJSON(slug string, profile string) ([]byte,
 	return nil, nativeUnsupported("task run plan")
 }
 func (client NativeClient) TaskRuntimeInfoJSON(slug string) ([]byte, error) {
-	return nil, nativeUnsupported("task runtime-info")
+	result, err := client.TaskRuntimeInfo(slug)
+	if err != nil {
+		return nil, err
+	}
+	return json.Marshal(result)
 }
 func (client NativeClient) TaskRunsJSON(slug string) ([]byte, error) {
-	return nil, nativeUnsupported("task runs")
+	result, err := client.TaskRuns(slug)
+	if err != nil {
+		return nil, err
+	}
+	return json.Marshal(result)
 }
 func (client NativeClient) TaskRunsReconcileJSON() ([]byte, error) {
 	return nil, nativeUnsupported("task runs reconcile")
@@ -168,6 +176,200 @@ func (client NativeClient) TaskRunsCompactJSON() ([]byte, error) {
 
 func nativeUnsupported(command string) error {
 	return fmt.Errorf("native json source is read-only and does not support %s; use powershell", command)
+}
+
+func (client NativeClient) TaskRuns(slug string) (contracts.CommandResult, error) {
+	store, now, err := client.storeAndNow()
+	if err != nil {
+		return contracts.CommandResult{}, err
+	}
+	tasks, _, err := state.LoadTasks(store)
+	if err != nil {
+		return contracts.CommandResult{}, err
+	}
+	if _, ok := findTask(tasks, slug); !ok {
+		return commandResult("task runs", false, "error", contracts.TaskRunsPayload{Slug: slug, Runs: []contracts.TaskRunPayload{}}, taskNotFound(slug)), nil
+	}
+	history, _, err := state.LoadRuns(store, now)
+	if err != nil {
+		return contracts.CommandResult{}, err
+	}
+	runs := runsForTask(history, slug)
+	payload := contracts.TaskRunsPayload{Slug: slug, Count: len(runs), Runs: runs}
+	return commandResult("task runs", true, "info", payload, nil), nil
+}
+
+func (client NativeClient) TaskRuntimeInfo(slug string) (contracts.CommandResult, error) {
+	store, now, err := client.storeAndNow()
+	if err != nil {
+		return contracts.CommandResult{}, err
+	}
+	tasks, _, err := state.LoadTasks(store)
+	if err != nil {
+		return contracts.CommandResult{}, err
+	}
+	task, ok := findTask(tasks, slug)
+	if !ok {
+		payload := contracts.TaskRuntimeInfoPayload{Slug: slug, TaskExists: false}
+		return commandResult("task runtime-info", false, "error", payload, taskNotFound(slug)), nil
+	}
+	history, _, err := state.LoadRuns(store, now)
+	if err != nil {
+		return contracts.CommandResult{}, err
+	}
+	runs := runsForTask(history, slug)
+	summary := task.ToContract()
+	payload := contracts.TaskRuntimeInfoPayload{
+		Slug:            summary.Slug,
+		Status:          summary.Status,
+		NormalizedState: summary.NormalizedState,
+		TaskExists:      true,
+		Provider:        firstNonEmpty(summary.Provider, summary.LastProvider),
+		Profile:         firstNonEmpty(summary.Profile, summary.LastProfile),
+		RunCount:        len(runs),
+		Worktree: contracts.TaskRuntimeWorktreePayload{
+			Exists: summary.WorktreeExists != nil && *summary.WorktreeExists,
+			Path:   summary.WorktreePath,
+		},
+		Execution: contracts.TaskRuntimeExecutionPayload{
+			Status:            firstNonEmpty(summary.WorkerStatus, summary.LatestRunWorkerStatus),
+			LastRunID:         firstNonEmpty(summary.LastRunID, summary.LatestRunID),
+			LastRunStartedAt:  summary.LatestRunStartedAt,
+			LastRunFinishedAt: summary.LatestRunFinishedAt,
+			LastExitCode:      firstNonNil(summary.LastExitCode, summary.LatestRunExitCode),
+			LastFailureType:   summary.LatestRunFailureType,
+			LastLogPath:       firstNonEmpty(summary.LastLogPath, summary.LatestRunLogPath),
+			LastProvider:      firstNonEmpty(summary.LastProvider, summary.LatestRunProvider),
+			LastProfile:       firstNonEmpty(summary.LastProfile, summary.LatestRunProfile),
+		},
+	}
+	if summary.Context != nil {
+		payload.Context.MaterializedFileCount = summary.Context.MaterializedFileCount
+		payload.Context.MissingFiles = append([]string{}, summary.Context.MissingFiles...)
+	}
+	if len(runs) > 0 {
+		latest := runs[0]
+		payload.LatestRun = &latest
+		payload.RunCount = len(runs)
+		payload.Execution.Status = firstNonEmpty(latest.WorkerStatus, payload.Execution.Status)
+		payload.Execution.LastRunID = firstNonEmpty(latest.RunID, payload.Execution.LastRunID)
+		payload.Execution.LastRunStartedAt = firstNonEmpty(latest.StartedAt, payload.Execution.LastRunStartedAt)
+		payload.Execution.LastRunFinishedAt = firstNonEmpty(latest.FinishedAt, payload.Execution.LastRunFinishedAt)
+		payload.Execution.LastExitCode = firstNonNil(latest.ExitCode, payload.Execution.LastExitCode)
+		payload.Execution.LastFailureType = firstNonEmpty(latest.FailureType, payload.Execution.LastFailureType)
+		payload.Execution.LastLogPath = firstNonEmpty(latest.LogPath, payload.Execution.LastLogPath)
+		payload.Execution.LastProvider = firstNonEmpty(latest.Provider, payload.Execution.LastProvider)
+		payload.Execution.LastProfile = firstNonEmpty(latest.Profile, payload.Execution.LastProfile)
+		payload.Provider = firstNonEmpty(payload.Provider, latest.Provider)
+		payload.Profile = firstNonEmpty(payload.Profile, latest.Profile)
+		payload.Stale = latest.Stale
+		payload.Incomplete = latest.Incomplete
+		payload.LogPath = latest.LogPath
+	}
+	payload.Interpretation = runtimeInterpretation(payload)
+	return commandResult("task runtime-info", true, "info", payload, nil), nil
+}
+
+func (client NativeClient) storeAndNow() (state.Store, time.Time, error) {
+	repoRoot := client.RepoRoot
+	if repoRoot == "" {
+		wd, err := os.Getwd()
+		if err != nil {
+			return state.Store{}, time.Time{}, fmt.Errorf("get working directory: %w", err)
+		}
+		repoRoot = wd
+	}
+	now := time.Now
+	if client.Now != nil {
+		now = client.Now
+	}
+	store, err := state.NewStore(repoRoot)
+	return store, now().UTC(), err
+}
+
+func findTask(tasks state.Tasks, slug string) (state.Task, bool) {
+	for _, task := range tasks.Items {
+		if task.Key() == slug {
+			return task, true
+		}
+	}
+	return state.Task{}, false
+}
+
+func runsForTask(history state.RunHistory, slug string) []contracts.TaskRunPayload {
+	runs := []contracts.TaskRunPayload{}
+	for _, run := range history.Items {
+		if strings.TrimSpace(run.Slug) != slug {
+			continue
+		}
+		runs = append(runs, contracts.TaskRunPayload{
+			RunID:         run.RunID,
+			WorkerStatus:  run.WorkerStatus,
+			ExitCode:      run.ExitCode,
+			Provider:      run.Provider,
+			Profile:       run.Profile,
+			StartedAt:     run.StartedAt,
+			FinishedAt:    run.FinishedAt,
+			FailureType:   run.FailureType,
+			LogPath:       run.LogPath,
+			Incomplete:    run.Incomplete,
+			Stale:         run.Stale,
+			RunAgeMinutes: run.RunAgeMinutes,
+			Source:        run.Source,
+		})
+	}
+	return runs
+}
+
+func commandResult(command string, success bool, severity string, payload any, resultErr *contracts.ResultMessage) contracts.CommandResult {
+	payloadJSON, _ := json.Marshal(payload)
+	result := contracts.CommandResult{
+		Schema:               contracts.CommandResultSchema,
+		Command:              command,
+		Success:              success,
+		Severity:             severity,
+		Warnings:             []contracts.ResultMessage{},
+		Errors:               []contracts.ResultMessage{},
+		SuggestedNextActions: []string{},
+		Payload:              payloadJSON,
+	}
+	if resultErr != nil {
+		result.Errors = append(result.Errors, *resultErr)
+	}
+	return result
+}
+
+func taskNotFound(slug string) *contracts.ResultMessage {
+	return &contracts.ResultMessage{
+		Code:    "task-not-found",
+		Message: "Task not found: " + slug,
+		Details: map[string]any{
+			"slug": slug,
+		},
+	}
+}
+
+func runtimeInterpretation(payload contracts.TaskRuntimeInfoPayload) string {
+	if !payload.TaskExists {
+		return "Task metadata was not found."
+	}
+	if payload.RunCount == 0 {
+		return "No task runs recorded yet."
+	}
+	if payload.Stale {
+		return "Latest run is incomplete and stale; inspect the log before retrying."
+	}
+	if payload.Incomplete {
+		return "Latest run is incomplete; it may still be running or may need inspection."
+	}
+	switch strings.ToLower(strings.TrimSpace(payload.Execution.Status)) {
+	case "succeeded":
+		return "Latest run completed successfully."
+	case "failed":
+		return "Latest run failed; inspect the log path."
+	default:
+		return ""
+	}
 }
 
 func readGitWorktrees(repoRoot string) ([]contracts.WorktreeRecord, error) {

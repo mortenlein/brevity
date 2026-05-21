@@ -582,6 +582,16 @@ func TestParseOptionsAcceptsTaskRuntimeInfo(t *testing.T) {
 	}
 }
 
+func TestParseOptionsAcceptsTaskRuntimeInfoJSON(t *testing.T) {
+	options, err := parseOptions([]string{"task", "runtime-info", "my-task", "--json"})
+	if err != nil {
+		t.Fatalf("parseOptions returned error: %v", err)
+	}
+	if options.kind != commandTaskRuntimeInfo || options.slug != "my-task" || !options.json {
+		t.Fatalf("options = %#v, want task runtime-info json", options)
+	}
+}
+
 func TestParseOptionsAcceptsTaskRuns(t *testing.T) {
 	options, err := parseOptions([]string{"task", "runs", "my-task"})
 	if err != nil {
@@ -593,6 +603,16 @@ func TestParseOptionsAcceptsTaskRuns(t *testing.T) {
 	}
 	if options.slug != "my-task" {
 		t.Fatalf("slug = %q, want my-task", options.slug)
+	}
+}
+
+func TestParseOptionsAcceptsTaskRunsJSON(t *testing.T) {
+	options, err := parseOptions([]string{"task", "runs", "my-task", "--json"})
+	if err != nil {
+		t.Fatalf("parseOptions returned error: %v", err)
+	}
+	if options.kind != commandTaskRuns || options.slug != "my-task" || !options.json {
+		t.Fatalf("options = %#v, want task runs json", options)
 	}
 }
 
@@ -794,10 +814,12 @@ func TestRunDoctorUsesClientAndRendersResult(t *testing.T) {
 	}
 }
 
-func TestRunTaskRuntimeInfoUsesClientAndRendersResult(t *testing.T) {
-	client := &fakeRuntimeClient{
-		runtimeInfo: []byte(`{"schema":"brevity.command-result.v1","command":"task runtime-info","success":true,"severity":"info","payload":{"slug":"my-task","status":"ready-for-worker","normalizedState":"ready-for-worker","worktree":{"exists":true,"path":"C:\\repo\\worktrees\\active\\brevity-my-task"},"context":{"materializedFileCount":3,"missingFiles":["runtime.md"]},"execution":{"status":"succeeded","lastRunId":"run-abc","lastLogPath":"C:\\repo\\.brevity\\logs\\my-task\\run-abc.log"}}}`),
-	}
+func TestRunTaskRuntimeInfoUsesNativeStateAndRendersResult(t *testing.T) {
+	repoRoot := tempRepoWithTasksAndRuns(t,
+		`[{"slug":"my-task","status":"ready-for-worker","normalizedState":"ready-for-worker","worktreePath":"C:\\repo\\worktrees\\active\\brevity-my-task","worktree":{"exists":true,"path":"C:\\repo\\worktrees\\active\\brevity-my-task"},"context":{"materializedFileCount":3,"missingFiles":["runtime.md"]}}]`,
+		`{"slug":"my-task","runId":"run-abc","workerStatus":"succeeded","startedAt":"2026-05-19T09:00:00Z","finishedAt":"2026-05-19T09:01:00Z","exitCode":0,"provider":"codex","profile":"default","logPath":"C:\\repo\\.brevity\\logs\\my-task\\run-abc.log"}`+"\n")
+	t.Chdir(repoRoot)
+	client := &fakeRuntimeClient{}
 
 	var stdout bytes.Buffer
 	err := runWithOptions(&stdout, client, cliOptions{kind: commandTaskRuntimeInfo, slug: "my-task"})
@@ -805,8 +827,8 @@ func TestRunTaskRuntimeInfoUsesClientAndRendersResult(t *testing.T) {
 		t.Fatalf("runWithOptions returned error: %v", err)
 	}
 
-	if len(client.calls) != 1 || client.calls[0] != "runtime-info:my-task" {
-		t.Fatalf("calls = %#v, want runtime info only", client.calls)
+	if len(client.calls) != 0 {
+		t.Fatalf("calls = %#v, want no PowerShell client calls", client.calls)
 	}
 
 	output := stdout.String()
@@ -821,6 +843,8 @@ func TestRunTaskRuntimeInfoUsesClientAndRendersResult(t *testing.T) {
 		"contextMissingCount: 1",
 		"executionStatus: succeeded",
 		"latestRunId: run-abc",
+		"runCount: 1",
+		"logPath: C:\\repo\\.brevity\\logs\\my-task\\run-abc.log",
 	} {
 		if !strings.Contains(output, want) {
 			t.Fatalf("output missing %q:\n%s", want, output)
@@ -829,9 +853,9 @@ func TestRunTaskRuntimeInfoUsesClientAndRendersResult(t *testing.T) {
 }
 
 func TestRunTaskRuntimeInfoReturnsErrorWhenResultFails(t *testing.T) {
-	client := &fakeRuntimeClient{
-		runtimeInfo: []byte(`{"schema":"brevity.command-result.v1","command":"task runtime-info","success":false,"severity":"error","errors":[{"code":"task-not-found","message":"Task not found.","details":{"slug":"nope"}}],"payload":{}}`),
-	}
+	repoRoot := tempRepoWithTasks(t, `[]`)
+	t.Chdir(repoRoot)
+	client := &fakeRuntimeClient{}
 
 	var stdout bytes.Buffer
 	err := runWithOptions(&stdout, client, cliOptions{kind: commandTaskRuntimeInfo, slug: "nope"})
@@ -841,15 +865,17 @@ func TestRunTaskRuntimeInfoReturnsErrorWhenResultFails(t *testing.T) {
 	if !strings.Contains(err.Error(), "task runtime-info reported success=false") {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if !strings.Contains(stdout.String(), "error: task-not-found: Task not found.") {
+	if !strings.Contains(stdout.String(), "error: task-not-found: Task not found: nope") {
 		t.Fatalf("output missing structured error:\n%s", stdout.String())
 	}
 }
 
-func TestRunTaskRunsUsesClientAndRendersResult(t *testing.T) {
-	client := &fakeRuntimeClient{
-		taskRuns: []byte(`{"schema":"brevity.command-result.v1","command":"task runs","success":true,"severity":"info","payload":{"slug":"my-task","count":1,"runs":[{"runId":"run-abc","workerStatus":"failed","exitCode":"1","provider":"codex","profile":"default","logPath":"C:\\repo\\.brevity\\logs\\my-task\\run-abc.log"}]}}`),
-	}
+func TestRunTaskRunsUsesNativeStateAndRendersResult(t *testing.T) {
+	repoRoot := tempRepoWithTasksAndRuns(t,
+		`[{"slug":"my-task","status":"ready-for-worker"}]`,
+		`{"slug":"my-task","runId":"run-abc","workerStatus":"failed","startedAt":"2026-05-19T09:00:00Z","finishedAt":"2026-05-19T09:01:00Z","exitCode":1,"failureType":"worker-exit-failed","provider":"codex","profile":"default","logPath":"C:\\repo\\.brevity\\logs\\my-task\\run-abc.log"}`+"\n")
+	t.Chdir(repoRoot)
+	client := &fakeRuntimeClient{}
 
 	var stdout bytes.Buffer
 	err := runWithOptions(&stdout, client, cliOptions{kind: commandTaskRuns, slug: "my-task"})
@@ -857,8 +883,8 @@ func TestRunTaskRunsUsesClientAndRendersResult(t *testing.T) {
 		t.Fatalf("runWithOptions returned error: %v", err)
 	}
 
-	if len(client.calls) != 1 || client.calls[0] != "task-runs:my-task" {
-		t.Fatalf("calls = %#v, want task runs only", client.calls)
+	if len(client.calls) != 0 {
+		t.Fatalf("calls = %#v, want no PowerShell client calls", client.calls)
 	}
 
 	output := stdout.String()
@@ -871,6 +897,9 @@ func TestRunTaskRunsUsesClientAndRendersResult(t *testing.T) {
 		"exitCode: 1",
 		"provider: codex",
 		"profile: default",
+		"startedAt: 2026-05-19T09:00:00Z",
+		"finishedAt: 2026-05-19T09:01:00Z",
+		"failureType: worker-exit-failed",
 		"logPath: C:\\repo\\.brevity\\logs\\my-task\\run-abc.log",
 	} {
 		if !strings.Contains(output, want) {
@@ -1321,6 +1350,15 @@ func tempRepoWithTasks(t *testing.T, tasks string) string {
 	}
 	if err := os.WriteFile(filepath.Join(brevityRoot, "provider-health.json"), []byte(`{"codex":{"status":"healthy"}}`+"\n"), 0o644); err != nil {
 		t.Fatalf("WriteFile provider health returned error: %v", err)
+	}
+	return repoRoot
+}
+
+func tempRepoWithTasksAndRuns(t *testing.T, tasks string, runs string) string {
+	t.Helper()
+	repoRoot := tempRepoWithTasks(t, tasks)
+	if err := os.WriteFile(filepath.Join(repoRoot, ".brevity", "runs.jsonl"), []byte(runs), 0o644); err != nil {
+		t.Fatalf("WriteFile runs returned error: %v", err)
 	}
 	return repoRoot
 }

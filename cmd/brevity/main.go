@@ -320,22 +320,34 @@ func parseTaskRunOptions(args []string) (cliOptions, error) {
 }
 
 func parseTaskRuntimeInfoOptions(args []string) (cliOptions, error) {
-	if len(args) != 3 || args[2] == "" {
+	if len(args) < 3 || args[2] == "" {
 		return cliOptions{}, usageError(commands.TaskRuntimeInfo)
 	}
-
-	return cliOptions{kind: commandTaskRuntimeInfo, slug: args[2]}, nil
+	options := cliOptions{kind: commandTaskRuntimeInfo, slug: args[2]}
+	for _, arg := range args[3:] {
+		if arg != "--json" {
+			return cliOptions{}, usageError(commands.TaskRuntimeInfo)
+		}
+		options.json = true
+	}
+	return options, nil
 }
 
 func parseTaskRunsOptions(args []string) (cliOptions, error) {
 	if len(args) >= 3 && (args[2] == "reconcile" || args[2] == "retention" || args[2] == "compact") {
 		return parseTaskRunsMaintenanceOptions(args)
 	}
-	if len(args) != 3 || args[2] == "" {
+	if len(args) < 3 || args[2] == "" {
 		return cliOptions{}, usageError(commands.TaskRuns)
 	}
-
-	return cliOptions{kind: commandTaskRuns, slug: args[2]}, nil
+	options := cliOptions{kind: commandTaskRuns, slug: args[2]}
+	for _, arg := range args[3:] {
+		if arg != "--json" {
+			return cliOptions{}, usageError(commands.TaskRuns)
+		}
+		options.json = true
+	}
+	return options, nil
 }
 
 func parseTaskRunsMaintenanceOptions(args []string) (cliOptions, error) {
@@ -955,12 +967,9 @@ func runTaskRun(stdout io.Writer, client runtimeclient.Client, options cliOption
 }
 
 func runTaskRuntimeInfo(stdout io.Writer, client runtimeclient.Client, options cliOptions) error {
-	return runPowerShellAction(stdout, actionSpec{
-		call: func() ([]byte, error) {
-			return client.TaskRuntimeInfoJSON(options.slug)
-		},
-		render: actions.RenderTaskRuntimeInfoResult,
-	})
+	return runNativeInspection(stdout, options, func(native runtimeclient.NativeClient) ([]byte, error) {
+		return native.TaskRuntimeInfoJSON(options.slug)
+	}, actions.RenderTaskRuntimeInfoResult)
 }
 
 func isWorkerFailure(result contracts.CommandResult) bool {
@@ -979,12 +988,31 @@ func isWorkerFailure(result contracts.CommandResult) bool {
 }
 
 func runTaskRuns(stdout io.Writer, client runtimeclient.Client, options cliOptions) error {
-	return runPowerShellAction(stdout, actionSpec{
-		call: func() ([]byte, error) {
-			return client.TaskRunsJSON(options.slug)
-		},
-		render: actions.RenderTaskRunsResult,
-	})
+	return runNativeInspection(stdout, options, func(native runtimeclient.NativeClient) ([]byte, error) {
+		return native.TaskRunsJSON(options.slug)
+	}, actions.RenderTaskRunsResult)
+}
+
+func runNativeInspection(stdout io.Writer, options cliOptions, call func(runtimeclient.NativeClient) ([]byte, error), render actionRenderer) error {
+	output, err := call(runtimeclient.NewNativeClient(""))
+	if err != nil {
+		return err
+	}
+	if options.json {
+		_, writeErr := stdout.Write(append(output, '\n'))
+		return writeErr
+	}
+	result, parseErr := contracts.ParseCommandResult(output)
+	if parseErr != nil {
+		return parseErr
+	}
+	if renderErr := render(stdout, result); renderErr != nil {
+		return renderErr
+	}
+	if !result.Success {
+		return fmt.Errorf("%s reported success=false", result.Command)
+	}
+	return nil
 }
 
 func runTaskCleanup(stdout io.Writer, client runtimeclient.Client, options cliOptions) error {

@@ -104,12 +104,12 @@ var (
 	TaskRuntimeInfo = Command{
 		ID:    TaskRuntimeInfoID,
 		Words: []string{"task", "runtime-info"},
-		Usage: "brevity task runtime-info <slug>",
+		Usage: "brevity task runtime-info <slug> [--json]",
 	}
 	TaskRuns = Command{
 		ID:    TaskRunsID,
 		Words: []string{"task", "runs"},
-		Usage: "brevity task runs <slug>",
+		Usage: "brevity task runs <slug> [--json]",
 	}
 	TaskRunsReconcile = Command{
 		ID:    TaskRunsReconcileID,

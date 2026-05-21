@@ -25,6 +25,18 @@ func RenderTaskRuntimeInfoResult(stdout io.Writer, result contracts.CommandResul
 	fmt.Fprintf(stdout, "contextMissingCount: %d\n", len(payload.Context.MissingFiles))
 	fmt.Fprintf(stdout, "executionStatus: %s\n", emptyAsUnknown(payload.Execution.Status))
 	fmt.Fprintf(stdout, "latestRunId: %s\n", emptyAsUnknown(payload.Execution.LastRunID))
+	fmt.Fprintf(stdout, "provider: %s\n", emptyAsUnknown(payload.Provider))
+	fmt.Fprintf(stdout, "profile: %s\n", emptyAsUnknown(payload.Profile))
+	fmt.Fprintf(stdout, "runCount: %d\n", payload.RunCount)
+	fmt.Fprintf(stdout, "latestRunStatus: %s\n", emptyAsUnknown(payload.Execution.Status))
+	fmt.Fprintf(stdout, "latestRunStartedAt: %s\n", emptyAsUnknown(payload.Execution.LastRunStartedAt))
+	fmt.Fprintf(stdout, "latestRunFinishedAt: %s\n", emptyAsUnknown(payload.Execution.LastRunFinishedAt))
+	fmt.Fprintf(stdout, "stale: %t\n", payload.Stale)
+	fmt.Fprintf(stdout, "incomplete: %t\n", payload.Incomplete)
+	fmt.Fprintf(stdout, "logPath: %s\n", emptyAsUnknown(payload.LogPath))
+	if payload.Interpretation != "" {
+		fmt.Fprintf(stdout, "interpretation: %s\n", payload.Interpretation)
+	}
 
 	renderMessages(stdout, result)
 	return nil
@@ -51,6 +63,9 @@ func RenderTaskRunsResult(stdout io.Writer, result contracts.CommandResult) erro
 			fmt.Fprintf(stdout, "  exitCode: %s\n", formatOptional(run.ExitCode))
 			fmt.Fprintf(stdout, "  provider: %s\n", emptyAsUnknown(run.Provider))
 			fmt.Fprintf(stdout, "  profile: %s\n", emptyAsUnknown(run.Profile))
+			fmt.Fprintf(stdout, "  startedAt: %s\n", emptyAsUnknown(run.StartedAt))
+			fmt.Fprintf(stdout, "  finishedAt: %s\n", emptyAsUnknown(run.FinishedAt))
+			fmt.Fprintf(stdout, "  failureType: %s\n", emptyAsUnknown(run.FailureType))
 			fmt.Fprintf(stdout, "  logPath: %s\n", emptyAsUnknown(run.LogPath))
 		}
 	}
