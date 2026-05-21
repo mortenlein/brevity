@@ -141,11 +141,43 @@ Selected Detail
   select a row, then press d for details
 
 Actions
-  Start task        read-only preview
-  Run worker        read-only preview
-  Merge task        read-only preview
-  Cleanup task      read-only preview
+  Start task        future via PowerShell
+  Run worker        future via PowerShell
+  Merge task        future via PowerShell
+  Cleanup task      future via PowerShell
 > Refresh state     enter refreshes state
+
+j/k r p d q quit ? help | native | read-only
+`,
+		},
+		{
+			name: "help overlay open",
+			model: snapshotModel(func(model *Model) {
+				model.helpOpen = true
+			}),
+			want: `
+Brevity | native | read-only | alerts !3 | p:1 t:1 c:1
+
+Runtime Summary
+  repo      C:\repo
+  generated (unknown)
+  status    1 providers | 1 degraded | 0 unavailable | 0 runnable | 1 cleanu... !3
+  tasks     1 tracked | 0 runnable | 1 blocked | 0 stale | 0 gated | 0 review !1
+  cleanup   1 candidates | 1 inspect !1
+
+Runtime Signals
+> prov  codex    degraded !
+  task  task-one  blocked !
+  clean inspect  orphan-branch:task-old !
+  next  inspect  state.
+
+Selected Detail
+  select a row, then press d for details
+
+Help
+  navigate with up/down or j/k; d toggles selected details
+  r refreshes runtime state through the command bridge
+  ... help truncated
 
 j/k r p d q quit ? help | native | read-only
 `,

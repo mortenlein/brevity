@@ -45,6 +45,17 @@ func (client *fakeClient) TaskRunsReconcileJSON() ([]byte, error)          { ret
 func (client *fakeClient) TaskRunsRetentionJSON() ([]byte, error)          { return nil, nil }
 func (client *fakeClient) TaskRunsCompactJSON() ([]byte, error)            { return nil, nil }
 
+type fakeCommandBridge struct {
+	state        contracts.RuntimeState
+	err          error
+	refreshCalls int
+}
+
+func (bridge *fakeCommandBridge) RefreshRuntimeState() (contracts.RuntimeState, error) {
+	bridge.refreshCalls++
+	return bridge.state, bridge.err
+}
+
 func TestNewModelDefaultsRefreshInterval(t *testing.T) {
 	model := NewModel(&fakeClient{}, 0)
 
@@ -98,10 +109,10 @@ func TestActionPaletteOpensWithShortcut(t *testing.T) {
 	for _, want := range []string{
 		"Actions",
 		"> Start task",
-		"Start task        read-only preview",
-		"Run worker        read-only preview",
-		"Merge task        read-only preview",
-		"Cleanup task      read-only preview",
+		"Start task        future via PowerShell",
+		"Run worker        future via PowerShell",
+		"Merge task        future via PowerShell",
+		"Cleanup task      future via PowerShell",
 		"Refresh state     enter refreshes state",
 		"enter runs Refresh only | esc closes | p toggles",
 	} {
@@ -236,12 +247,96 @@ func TestActionPaletteRowsStayWithinNarrowWidth(t *testing.T) {
 
 	output := plainView(model.renderActionPalette())
 
-	for _, want := range []string{"Actions", "read-only", "..."} {
+	for _, want := range []string{"Actions", "future", "..."} {
 		if !strings.Contains(output, want) {
 			t.Fatalf("narrow palette missing %q:\n%s", want, output)
 		}
 	}
 	assertLinesWithinWidth(t, output, model.width)
+}
+
+func TestActionDescriptorsKeepOnlyRefreshExecutable(t *testing.T) {
+	actions := actionDescriptors()
+	if len(actions) == 0 {
+		t.Fatal("actionDescriptors returned no actions")
+	}
+
+	var refreshCount int
+	for _, action := range actions {
+		switch action.ID {
+		case ActionRefreshState:
+			refreshCount++
+			if !action.Enabled {
+				t.Fatal("refresh action is disabled, want enabled")
+			}
+			if action.Kind != ActionKindReadOnly {
+				t.Fatalf("refresh kind = %q, want %q", action.Kind, ActionKindReadOnly)
+			}
+			if !action.ExecutesViaBridge {
+				t.Fatal("refresh should execute via command bridge")
+			}
+			if action.ConfirmationRequired {
+				t.Fatal("refresh should not require confirmation")
+			}
+		default:
+			if action.Enabled {
+				t.Fatalf("future action %q is enabled, want disabled", action.ID)
+			}
+			if !action.ConfirmationRequired {
+				t.Fatalf("future action %q should require confirmation before it is ever enabled", action.ID)
+			}
+			if !action.ExecutesViaBridge {
+				t.Fatalf("future action %q should be modeled as bridge-only", action.ID)
+			}
+		}
+	}
+	if refreshCount != 1 {
+		t.Fatalf("refresh action count = %d, want 1", refreshCount)
+	}
+}
+
+func TestDisabledActionDescriptorsDoNotCallCommandBridge(t *testing.T) {
+	bridge := &fakeCommandBridge{state: bubbleState()}
+	model := NewModelWithSource(&fakeClient{}, time.Second, "native")
+	model.commandBridge = bridge
+
+	for _, action := range actionDescriptors() {
+		if action.Enabled {
+			continue
+		}
+		if cmd := model.commandForAction(action); cmd != nil {
+			t.Fatalf("disabled action %q returned command, want nil", action.ID)
+		}
+	}
+	if bridge.refreshCalls != 0 {
+		t.Fatalf("disabled actions called bridge %d times, want 0", bridge.refreshCalls)
+	}
+}
+
+func TestRefreshActionUsesMockCommandBridge(t *testing.T) {
+	bridge := &fakeCommandBridge{state: bubbleState()}
+	model := NewModelWithSource(&fakeClient{}, time.Second, "native")
+	model.commandBridge = bridge
+
+	action := ActionDescriptor{ID: ActionRefreshState, Enabled: true}
+	cmd := model.commandForAction(action)
+	if cmd == nil {
+		t.Fatal("refresh action returned nil command")
+	}
+	msg := cmd()
+	refresh, ok := msg.(refreshMsg)
+	if !ok {
+		t.Fatalf("message type = %T, want refreshMsg", msg)
+	}
+	if refresh.err != nil {
+		t.Fatalf("refresh error = %v", refresh.err)
+	}
+	if bridge.refreshCalls != 1 {
+		t.Fatalf("bridge refresh calls = %d, want 1", bridge.refreshCalls)
+	}
+	if refresh.state.RepoRoot != `C:\repo` {
+		t.Fatalf("refresh state repo = %q, want C:\\repo", refresh.state.RepoRoot)
+	}
 }
 
 func TestActionPaletteHelperOnlyRendersWhenSpaceAllows(t *testing.T) {
@@ -1377,6 +1472,76 @@ func TestModelViewRendersTaskCleanupAndActionDetails(t *testing.T) {
 	}
 }
 
+func TestHelpOverlayOpensClosesAndDoesNotExecuteCommands(t *testing.T) {
+	closeKeys := []tea.KeyMsg{
+		{Type: tea.KeyEsc},
+		{Type: tea.KeyRunes, Runes: []rune("q")},
+		{Type: tea.KeyRunes, Runes: []rune("?")},
+	}
+
+	for _, key := range closeKeys {
+		t.Run(key.String(), func(t *testing.T) {
+			bridge := &fakeCommandBridge{state: bubbleState()}
+			model := NewModelWithSource(&fakeClient{}, time.Second, "native")
+			model.commandBridge = bridge
+			model.state = bubbleState()
+			model.hasState = true
+			model.width = 72
+			model.height = 28
+
+			updated, cmd := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("?")})
+			model = updated.(Model)
+			if cmd != nil {
+				t.Fatal("? returned command, want nil")
+			}
+			if !model.helpOpen {
+				t.Fatal("? did not open help overlay")
+			}
+			output := plainView(model.View())
+			for _, want := range []string{
+				"Help",
+				"PowerShell is authoritative",
+				"only Refresh is executable",
+			} {
+				if !strings.Contains(output, want) {
+					t.Fatalf("help overlay missing %q:\n%s", want, output)
+				}
+			}
+			assertLinesWithinWidth(t, output, model.width)
+
+			updated, cmd = model.Update(key)
+			model = updated.(Model)
+			if cmd != nil {
+				t.Fatalf("close key %q returned command, want nil", key.String())
+			}
+			if model.helpOpen {
+				t.Fatalf("close key %q left help overlay open", key.String())
+			}
+			if bridge.refreshCalls != 0 {
+				t.Fatalf("help overlay called command bridge %d times, want 0", bridge.refreshCalls)
+			}
+		})
+	}
+}
+
+func TestHelpOverlayIsWidthAndHeightSafe(t *testing.T) {
+	model := NewModelWithSource(&fakeClient{}, time.Second, "native")
+	model.state = bubbleStateWithManyTasks(8)
+	model.hasState = true
+	model.width = 36
+	model.height = 18
+	model.helpOpen = true
+
+	output := plainView(model.View())
+	if !strings.Contains(output, "Help") {
+		t.Fatalf("height-constrained help overlay missing title:\n%s", output)
+	}
+	if !strings.Contains(output, "... help truncated") {
+		t.Fatalf("height-constrained help overlay missing truncation marker:\n%s", output)
+	}
+	assertLinesWithinWidth(t, output, model.width)
+}
+
 func TestActivitySignalRowsHaveStableRenderAndDetailsScaffold(t *testing.T) {
 	model := NewModelWithSource(&fakeClient{}, time.Second, "native")
 	model.width = 64
@@ -1494,6 +1659,49 @@ func TestProviderDetailWarningsStayReadable(t *testing.T) {
 			}
 			if strings.Contains(output, tt.duplicate) {
 				t.Fatalf("provider detail duplicated warning wording %q:\n%s", tt.duplicate, output)
+			}
+		})
+	}
+}
+
+func TestProviderDetailCoversOperatorHealthStatuses(t *testing.T) {
+	tests := []struct {
+		status     string
+		wantAction string
+		wantImpact string
+	}{
+		{status: "healthy", wantAction: "(none)", wantImpact: "no known task execution impact"},
+		{status: "degraded", wantAction: "provider is degraded; treat worker readiness with caution", wantImpact: "affects task execution"},
+		{status: "capacity-degraded", wantAction: "provider is degraded; treat worker readiness with caution", wantImpact: "affects task execution"},
+		{status: "quota-exhausted", wantAction: "provider quota is constrained; choose another profile before starting work", wantImpact: "affects task execution"},
+		{status: "unavailable", wantAction: "provider is unavailable; PowerShell remains the authority for changes", wantImpact: "affects task execution"},
+		{status: "unknown", wantAction: "(none)", wantImpact: "no known task execution impact"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.status, func(t *testing.T) {
+			state := bubbleStateWithProvider("codex", tt.status)
+			state.Providers.Health["codex"] = contracts.ProviderHealth{
+				Status:    tt.status,
+				UpdatedAt: "2026-05-20T10:00:00Z",
+				Note:      "operator note",
+			}
+			output := detailPaneView(state, 0)
+
+			for _, detail := range []struct {
+				label string
+				value string
+			}{
+				{"provider", "codex"},
+				{"reason", "operator note"},
+				{"updated", "2026-05-20T10:00:00Z"},
+				{"action", tt.wantAction},
+				{"task impact", tt.wantImpact},
+				{"type", "provider"},
+			} {
+				if !containsDetail(output, detail.label, detail.value) {
+					t.Fatalf("provider detail for %q missing %q=%q:\n%s", tt.status, detail.label, detail.value, output)
+				}
 			}
 		})
 	}

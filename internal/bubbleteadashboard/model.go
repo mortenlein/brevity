@@ -38,11 +38,13 @@ type tickMsg time.Time
 
 type Model struct {
 	client          runtimeclient.Client
+	commandBridge   DashboardCommandBridge
 	selection       dashboard.InteractiveModel
 	state           contracts.RuntimeState
 	hasState        bool
 	paletteOpen     bool
 	paletteSelected int
+	helpOpen        bool
 	width           int
 	height          int
 	hasWindowSize   bool
@@ -65,6 +67,7 @@ func NewModelWithSource(client runtimeclient.Client, refreshInterval time.Durati
 	}
 	return Model{
 		client:          client,
+		commandBridge:   RuntimeClientCommandBridge{Client: client},
 		refreshInterval: refreshInterval,
 		source:          source,
 	}
@@ -172,6 +175,16 @@ func (model Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (model Model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	if model.helpOpen {
+		switch msg.String() {
+		case "esc", "q", "?":
+			model.helpOpen = false
+			return model, nil
+		default:
+			return model, nil
+		}
+	}
+
 	if model.paletteOpen {
 		switch msg.String() {
 		case "esc", "q", "p", "ctrl+p":
@@ -184,12 +197,13 @@ func (model Model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			model.movePaletteSelection(-1)
 			return model, nil
 		case "enter":
-			action := paletteActions()[model.clampedPaletteSelection()]
-			if !action.enabled {
+			action := actionDescriptors()[model.clampedPaletteSelection()]
+			cmd := model.commandForAction(action)
+			if cmd == nil {
 				return model, nil
 			}
 			model.paletteOpen = false
-			return model, model.refreshCmd()
+			return model, cmd
 		default:
 			return model, nil
 		}
@@ -213,7 +227,7 @@ func (model Model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		model.selection.ToggleDetails()
 		return model, nil
 	case "?":
-		model.selection.ToggleHelp()
+		model.helpOpen = true
 		return model, nil
 	case "r":
 		return model, model.refreshCmd()
@@ -242,6 +256,9 @@ func (model Model) View() string {
 	}
 	if model.paletteOpen {
 		output.WriteString(model.renderActionPalette(renderedRows(output.String())))
+	}
+	if model.helpOpen {
+		output.WriteString(model.renderHelpOverlay(renderedRows(output.String())))
 	}
 	return model.renderWithPinnedFooter(output.String())
 }
@@ -916,6 +933,41 @@ func (model Model) renderHelp(maxRows int) string {
 	return truncateRows(output.String(), maxRows, helpTruncatedIndicator, model.contentWidth())
 }
 
+func (model Model) renderHelpOverlay(usedRows ...int) string {
+	if model.height > 0 && model.height <= ultraSmallHeightThreshold {
+		return ""
+	}
+
+	maxRows := maxInt
+	if model.height > 0 {
+		used := 0
+		if len(usedRows) > 0 {
+			used = usedRows[0]
+		}
+		maxRows = model.height - used - renderedRows(model.renderFooter()) - 2
+		if maxRows < 1 {
+			maxRows = 1
+		}
+	}
+
+	var output strings.Builder
+	fmt.Fprintln(&output)
+	renderSection(&output, "Help")
+	lines := []string{
+		"  navigate with up/down or j/k; d toggles selected details",
+		"  r refreshes runtime state through the command bridge",
+		"  p opens actions; only Refresh is executable today",
+		"  Go is a read-only frontend; PowerShell is authoritative",
+		"  esc, q, or ? closes help without running commands",
+	}
+	var body strings.Builder
+	for _, line := range lines {
+		fmt.Fprintln(&body, dashboardStyles.help.Render(model.renderLine(line)))
+	}
+	output.WriteString(truncateRows(body.String(), maxRows, helpTruncatedIndicator, model.contentWidth()))
+	return output.String()
+}
+
 func truncateRows(value string, maxRows int, indicator string, width int) string {
 	if maxRows <= 0 {
 		return ""
@@ -962,7 +1014,7 @@ func (model Model) renderActionPalette(usedRows ...int) string {
 	fmt.Fprintln(&output)
 	renderSection(&output, "Actions")
 	selected := model.clampedPaletteSelection()
-	for index, action := range paletteActions() {
+	for index, action := range actionDescriptors() {
 		fmt.Fprintln(&output, model.renderPaletteActionRow(action, index == selected))
 	}
 	if model.shouldRenderActionPaletteHelp(usedRows...) {
@@ -971,29 +1023,13 @@ func (model Model) renderActionPalette(usedRows ...int) string {
 	return output.String()
 }
 
-type paletteAction struct {
-	label   string
-	status  string
-	enabled bool
-}
-
-func paletteActions() []paletteAction {
-	return []paletteAction{
-		{label: "Start task", status: "read-only preview"},
-		{label: "Run worker", status: "read-only preview"},
-		{label: "Merge task", status: "read-only preview"},
-		{label: "Cleanup task", status: "read-only preview"},
-		{label: "Refresh state", status: "enter refreshes state", enabled: true},
-	}
-}
-
-func (model Model) renderPaletteActionRow(action paletteAction, selected bool) string {
+func (model Model) renderPaletteActionRow(action ActionDescriptor, selected bool) string {
 	cursor := " "
 	if selected {
 		cursor = ">"
 	}
-	status := action.status
-	if !action.enabled {
+	status := action.Description
+	if !action.Enabled {
 		status = dashboardStyles.disabledAction.Render(status)
 	} else {
 		status = dashboardStyles.enabledAction.Render(status)
@@ -1009,7 +1045,7 @@ func (model Model) renderPaletteActionRow(action paletteAction, selected bool) s
 	if statusWidth < 6 {
 		statusWidth = 6
 	}
-	line := prefix + padRight(action.label, labelWidth) + "  " + truncateValue(status, statusWidth)
+	line := prefix + padRight(action.Label, labelWidth) + "  " + truncateValue(status, statusWidth)
 	line = model.renderLine(line)
 	if selected {
 		return model.selectedRow(line)
@@ -1026,12 +1062,12 @@ func (model Model) shouldRenderActionPaletteHelp(usedRows ...int) bool {
 		used = usedRows[0]
 	}
 	footerRows := renderedRows(model.renderFooter())
-	paletteRowsWithHelp := 1 + 1 + len(paletteActions()) + 1
+	paletteRowsWithHelp := 1 + 1 + len(actionDescriptors()) + 1
 	return used+paletteRowsWithHelp+footerRows <= model.height
 }
 
 func (model *Model) movePaletteSelection(delta int) {
-	actionCount := len(paletteActions())
+	actionCount := len(actionDescriptors())
 	if actionCount == 0 {
 		model.paletteSelected = 0
 		return
@@ -1040,25 +1076,11 @@ func (model *Model) movePaletteSelection(delta int) {
 }
 
 func (model Model) clampedPaletteSelection() int {
-	actionCount := len(paletteActions())
+	actionCount := len(actionDescriptors())
 	if actionCount == 0 {
 		return 0
 	}
 	return clampInt(model.paletteSelected, 0, actionCount-1)
-}
-
-func (model Model) refreshCmd() tea.Cmd {
-	return func() tea.Msg {
-		output, err := model.client.RuntimeStateJSON()
-		if err != nil {
-			return refreshMsg{err: err, at: time.Now()}
-		}
-		state, err := contracts.ParseRuntimeState(output)
-		if err != nil {
-			return refreshMsg{err: err, at: time.Now()}
-		}
-		return refreshMsg{state: state, at: time.Now()}
-	}
 }
 
 func (model Model) tickCmd() tea.Cmd {
@@ -1108,7 +1130,7 @@ func itemWarning(item dashboard.SelectionItem) string {
 	switch item.Kind {
 	case dashboard.SelectionProvider:
 		status := strings.ToLower(strings.TrimSpace(item.ProviderHealth.Status))
-		if status == "degraded" || status == "capacity-degraded" || status == "unavailable" || status == "down" || status == "offline" {
+		if status == "degraded" || status == "capacity-degraded" || status == "quota" || status == "quota-exhausted" || status == "rate-limited" || status == "unavailable" || status == "down" || status == "offline" {
 			if status == "unavailable" || status == "down" || status == "offline" {
 				return warningMarkerSuffix("error")
 			}
@@ -1151,6 +1173,7 @@ func (model Model) renderDetails(output io.Writer, items []dashboard.SelectionIt
 		model.detailText(output, "provider", fallback(item.ProviderName, "(unknown)"))
 		model.detailText(output, "reason", fallback(health.Note, "(none)"))
 		model.detailText(output, "action", providerGuidance(health))
+		model.detailText(output, "task impact", providerTaskImpact(health))
 		detailBreak(output)
 		model.detailText(output, "updated", fallback(health.UpdatedAt, "(unknown)"))
 		model.detailText(output, "type", "provider")
@@ -1202,10 +1225,21 @@ func providerGuidance(health contracts.ProviderHealth) string {
 	switch strings.ToLower(strings.TrimSpace(health.Status)) {
 	case "degraded", "capacity-degraded":
 		return "provider is degraded; treat worker readiness with caution"
+	case "quota", "quota-exhausted", "rate-limited":
+		return "provider quota is constrained; choose another profile before starting work"
 	case "unavailable", "down", "offline":
 		return "provider is unavailable; PowerShell remains the authority for changes"
 	default:
 		return "(none)"
+	}
+}
+
+func providerTaskImpact(health contracts.ProviderHealth) string {
+	switch strings.ToLower(strings.TrimSpace(health.Status)) {
+	case "degraded", "capacity-degraded", "quota", "quota-exhausted", "rate-limited", "unavailable", "down", "offline":
+		return "affects task execution"
+	default:
+		return "no known task execution impact"
 	}
 }
 
