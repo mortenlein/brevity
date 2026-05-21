@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	nativecleanup "github.com/mortenlein/brevity/internal/cleanup"
 	"github.com/mortenlein/brevity/internal/contracts"
 	"github.com/mortenlein/brevity/internal/diagnostics"
 	"github.com/mortenlein/brevity/internal/state"
@@ -102,31 +103,100 @@ func (client NativeClient) RuntimeState() (contracts.RuntimeState, error) {
 	runtimeState.TaskCounts = countTasks(tasks)
 	runtimeState.Groups = groupTasks(tasks)
 
-	worktrees, err := readGitWorktrees(repoRoot)
-	if err != nil {
-		runtimeState.SuggestedNextActions = append(runtimeState.SuggestedNextActions, fmt.Sprintf("Native worktree scan skipped: %v.", err))
-	} else {
-		runtimeState.ActiveWorktrees = worktrees
+	report := nativecleanup.Detect(nativecleanup.DetectOptions{RepoRoot: repoRoot, Tasks: taskStore, Runs: runHistory})
+	for _, warning := range report.Warnings {
+		runtimeState.SuggestedNextActions = append(runtimeState.SuggestedNextActions, fmt.Sprintf("Native cleanup inspection warning: %s.", warning))
+	}
+	worktrees, err := nativecleanup.GitInspector{}.Worktrees(repoRoot)
+	if err == nil {
+		runtimeState.ActiveWorktrees = cleanupWorktreesToContracts(worktrees)
 		runtimeState.ActiveWorktreeCount = len(worktrees)
-		runtimeState.OrphanedTaskWorktrees = orphanedTaskWorktrees(tasks, worktrees)
-		branches, err := readGitBranches(repoRoot)
-		if err != nil {
-			runtimeState.SuggestedNextActions = append(runtimeState.SuggestedNextActions, fmt.Sprintf("Native branch scan skipped: %v.", err))
-		}
-		orphanedBranches := orphanedTaskBranches(tasks, worktrees, branches)
-		worktreeCandidates := cleanupCandidatesForOrphanedTaskWorktrees(runtimeState.OrphanedTaskWorktrees)
-		branchCandidates := cleanupCandidatesForOrphanedTaskBranches(orphanedBranches)
-		if len(worktreeCandidates)+len(branchCandidates) > 0 {
-			runtimeState.Cleanup = &contracts.Cleanup{
-				Summary:               cleanupSummary(worktreeCandidates, branchCandidates),
-				OrphanedTaskWorktrees: worktreeCandidates,
-				OrphanedTaskBranches:  branchCandidates,
-			}
-			runtimeState.SuggestedNextActions = append(runtimeState.SuggestedNextActions, "Review native orphaned task cleanup findings with PowerShell before cleanup; native Go remains read-only.")
-		}
+	}
+	runtimeState.OrphanedTaskWorktrees = cleanupReportOrphanWorktrees(report)
+	if report.Summary.Total > 0 {
+		runtimeState.Cleanup = cleanupReportToRuntimeCleanup(report)
+		runtimeState.SuggestedNextActions = append(runtimeState.SuggestedNextActions, "Review native cleanup inspection findings before cleanup; native Go executed no cleanup.")
 	}
 
 	return runtimeState, nil
+}
+
+func (client NativeClient) CleanupInspectJSON() ([]byte, error) {
+	store, now, err := client.storeAndNow()
+	if err != nil {
+		return nil, err
+	}
+	tasks, _, err := state.LoadTasks(store)
+	if err != nil {
+		return nil, err
+	}
+	runs, _, err := state.LoadRuns(store, now)
+	if err != nil {
+		return nil, err
+	}
+	report := nativecleanup.Detect(nativecleanup.DetectOptions{RepoRoot: store.RepoRoot, Tasks: tasks, Runs: runs})
+	return json.Marshal(report)
+}
+
+func cleanupWorktreesToContracts(worktrees []nativecleanup.Worktree) []contracts.WorktreeRecord {
+	records := make([]contracts.WorktreeRecord, 0, len(worktrees))
+	for _, worktree := range worktrees {
+		records = append(records, contracts.WorktreeRecord{
+			Path:     worktree.Path,
+			Branch:   worktree.Branch,
+			Head:     worktree.Head,
+			Bare:     worktree.Bare,
+			Detached: worktree.Detached,
+		})
+	}
+	return records
+}
+
+func cleanupReportOrphanWorktrees(report nativecleanup.Report) []contracts.WorktreeRecord {
+	records := []contracts.WorktreeRecord{}
+	for _, candidate := range report.Candidates {
+		if candidate.Kind != nativecleanup.KindOrphanWorktree {
+			continue
+		}
+		records = append(records, contracts.WorktreeRecord{Path: candidate.WorktreePath, Branch: candidate.Branch})
+	}
+	return records
+}
+
+func cleanupReportToRuntimeCleanup(report nativecleanup.Report) *contracts.Cleanup {
+	worktrees := []contracts.CleanupCandidate{}
+	branches := []contracts.CleanupCandidate{}
+	for _, candidate := range report.Candidates {
+		runtimeCandidate := cleanupCandidateToContract(candidate)
+		switch candidate.Kind {
+		case nativecleanup.KindOrphanBranch:
+			branches = append(branches, runtimeCandidate)
+		default:
+			worktrees = append(worktrees, runtimeCandidate)
+		}
+	}
+	return &contracts.Cleanup{
+		Summary:               cleanupSummary(worktrees, branches),
+		OrphanedTaskWorktrees: worktrees,
+		OrphanedTaskBranches:  branches,
+	}
+}
+
+func cleanupCandidateToContract(candidate nativecleanup.Candidate) contracts.CleanupCandidate {
+	removable := candidate.Removable
+	destructive := candidate.Destructive
+	return contracts.CleanupCandidate{
+		ID:                    candidate.ID,
+		Severity:              string(candidate.Severity),
+		Category:              string(candidate.Kind),
+		Path:                  candidate.WorktreePath,
+		Branch:                candidate.Branch,
+		Dirty:                 candidate.Dirty,
+		DirtyReasons:          []string{candidate.Reason},
+		SuggestedCommands:     []string{candidate.SuggestedAction, "No cleanup was executed."},
+		RemovableByExecute:    &removable,
+		DestructiveIfUnmerged: &destructive,
+	}
 }
 
 func (client NativeClient) DoctorJSON() ([]byte, error) {

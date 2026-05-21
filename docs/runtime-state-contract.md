@@ -55,6 +55,27 @@ Cleanup candidates are read-only inspection records. They should remain concise;
 future expensive cleanup detail should be summarized or moved behind an explicit
 command instead of fully expanding inside runtime state.
 
+## Native Cleanup Inspection
+
+Go owns read-only cleanup/orphan inspection:
+
+```powershell
+go run ./cmd/brevity cleanup inspect
+go run ./cmd/brevity cleanup inspect --json
+```
+
+The JSON form emits `brevity.cleanup-inspection.v1` with summary counts and a
+stable candidate list. Candidates can describe tracked task worktree issues,
+missing worktrees, orphan task worktrees, orphan task branches, dirty worktrees,
+stale runs, or unknown inspection cases. Each record includes severity,
+available task/branch/worktree identity, dirty/removable/destructive flags,
+reason, suggested action, and source.
+
+This command is observational only. It lists Git worktrees, local branches, path
+existence, and dirty status where safe. It does not remove worktrees, delete
+branches, run `git clean`, mutate task state, launch providers, or execute
+cleanup. PowerShell remains the authority for cleanup execution.
+
 ## Native Run History Shape
 
 Native Go reads `.brevity\runs.jsonl` as an append-only JSONL index. Each record

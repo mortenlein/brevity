@@ -15,6 +15,7 @@ import (
 
 	"github.com/mortenlein/brevity/internal/actions"
 	"github.com/mortenlein/brevity/internal/bubbleteadashboard"
+	nativecleanup "github.com/mortenlein/brevity/internal/cleanup"
 	"github.com/mortenlein/brevity/internal/commands"
 	"github.com/mortenlein/brevity/internal/contracts"
 	"github.com/mortenlein/brevity/internal/dashboard"
@@ -50,6 +51,7 @@ const (
 	commandRunsReconcile   commandKind = commandKind(commands.TaskRunsReconcileID)
 	commandRunsRetention   commandKind = commandKind(commands.TaskRunsRetentionID)
 	commandRunsCompact     commandKind = commandKind(commands.TaskRunsCompactID)
+	commandCleanupInspect  commandKind = commandKind(commands.CleanupInspectID)
 )
 
 type cliOptions struct {
@@ -108,6 +110,9 @@ func parseOptions(args []string) (cliOptions, error) {
 	if len(args) > 0 && args[0] == "task" {
 		return parseTaskOptions(args)
 	}
+	if len(args) > 0 && args[0] == "cleanup" {
+		return parseCleanupOptions(args)
+	}
 
 	flags := flag.NewFlagSet("brevity", flag.ContinueOnError)
 	flags.SetOutput(io.Discard)
@@ -146,6 +151,20 @@ func parseOptions(args []string) (cliOptions, error) {
 		return cliOptions{}, fmt.Errorf("unexpected argument: %s", flags.Arg(0))
 	}
 
+	return options, nil
+}
+
+func parseCleanupOptions(args []string) (cliOptions, error) {
+	if len(args) < 2 || args[1] != "inspect" {
+		return cliOptions{}, usageError(commands.CleanupInspect)
+	}
+	options := cliOptions{kind: commandCleanupInspect}
+	for _, arg := range args[2:] {
+		if arg != "--json" {
+			return cliOptions{}, usageError(commands.CleanupInspect)
+		}
+		options.json = true
+	}
 	return options, nil
 }
 
@@ -449,6 +468,8 @@ func runWithContextOptions(ctx context.Context, stdout io.Writer, client runtime
 		return routeTaskCommand(stdout, client, options)
 	case commandTaskRuns, commandRunsReconcile, commandRunsRetention, commandRunsCompact:
 		return routeTaskRunsCommand(stdout, client, options)
+	case commandCleanupInspect:
+		return routeCleanupInspectCommand(stdout, options)
 	default:
 		if options.bubble {
 			if options.refresh <= 0 {
@@ -468,6 +489,52 @@ func runWithContextOptions(ctx context.Context, stdout io.Writer, client runtime
 		}
 		return routeDashboardCommand(stdout, client)
 	}
+}
+
+func routeCleanupInspectCommand(stdout io.Writer, options cliOptions) error {
+	output, err := runtimeclient.NewNativeClient("").CleanupInspectJSON()
+	if err != nil {
+		return err
+	}
+	if options.json {
+		_, err := stdout.Write(append(output, '\n'))
+		return err
+	}
+	var report nativecleanup.Report
+	if err := json.Unmarshal(output, &report); err != nil {
+		return err
+	}
+	fmt.Fprintln(stdout, "Cleanup inspection")
+	fmt.Fprintf(stdout, "Candidates: %d total, %d removable, %d destructive\n", report.Summary.Total, report.Summary.Removable, report.Summary.Destructive)
+	fmt.Fprintln(stdout, "No cleanup executed.")
+	if len(report.Warnings) > 0 {
+		fmt.Fprintln(stdout)
+		for _, warning := range report.Warnings {
+			fmt.Fprintf(stdout, "warning: %s\n", warning)
+		}
+	}
+	if len(report.Candidates) == 0 {
+		fmt.Fprintln(stdout)
+		fmt.Fprintln(stdout, "No cleanup candidates found.")
+		return nil
+	}
+	fmt.Fprintln(stdout)
+	for _, candidate := range report.Candidates {
+		fmt.Fprintf(stdout, "- %s [%s] %s\n", candidate.ID, candidate.Severity, candidate.Kind)
+		if candidate.TaskSlug != "" {
+			fmt.Fprintf(stdout, "  task: %s\n", candidate.TaskSlug)
+		}
+		if candidate.Branch != "" {
+			fmt.Fprintf(stdout, "  branch: %s\n", candidate.Branch)
+		}
+		if candidate.WorktreePath != "" {
+			fmt.Fprintf(stdout, "  worktree: %s\n", candidate.WorktreePath)
+		}
+		fmt.Fprintf(stdout, "  dirty: %t removable: %t destructive: %t\n", candidate.Dirty, candidate.Removable, candidate.Destructive)
+		fmt.Fprintf(stdout, "  reason: %s\n", candidate.Reason)
+		fmt.Fprintf(stdout, "  suggestedAction: %s\n", candidate.SuggestedAction)
+	}
+	return nil
 }
 
 func routeDashboardCommand(stdout io.Writer, client runtimeclient.Client) error {
