@@ -13,6 +13,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/mortenlein/brevity/internal/contracts"
 	"github.com/mortenlein/brevity/internal/dashboard"
+	"github.com/mortenlein/brevity/internal/pscontract"
 )
 
 type fakeClient struct {
@@ -233,8 +234,44 @@ func TestActionPaletteEnterOnDisabledActionDoesNotPollRuntimeState(t *testing.T)
 	if client.calls != 0 {
 		t.Fatalf("runtime polls = %d, want 0", client.calls)
 	}
-	if !model.paletteOpen {
-		t.Fatal("enter on disabled action closed palette")
+	if model.paletteOpen {
+		t.Fatal("enter on disabled action left palette open")
+	}
+	if model.actionPreview == nil {
+		t.Fatal("enter on disabled action did not open preview")
+	}
+
+	output := plainView(model.View())
+	for _, want := range []string{
+		"Command Preview",
+		"action        Start task",
+		"blocked       future PowerShell action",
+		"PowerShell is authoritative",
+	} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("disabled preview missing %q:\n%s", want, output)
+		}
+	}
+}
+
+func TestActionPreviewCloseKeysReturnToDashboard(t *testing.T) {
+	for _, key := range []tea.KeyMsg{{Type: tea.KeyEsc}, {Type: tea.KeyRunes, Runes: []rune("q")}, {Type: tea.KeyRunes, Runes: []rune("p")}} {
+		t.Run(key.String(), func(t *testing.T) {
+			action := actionDescriptors()[0]
+			model := NewModelWithSource(&fakeClient{}, time.Second, "native")
+			model.state = bubbleState()
+			model.hasState = true
+			model.actionPreview = &action
+
+			updated, cmd := model.Update(key)
+			model = updated.(Model)
+			if cmd != nil {
+				t.Fatalf("preview close key %q returned command, want nil", key.String())
+			}
+			if model.actionPreview != nil {
+				t.Fatalf("preview close key %q left preview open", key.String())
+			}
+		})
 	}
 }
 
@@ -313,6 +350,61 @@ func TestDisabledActionDescriptorsDoNotCallCommandBridge(t *testing.T) {
 	}
 }
 
+func TestConfirmationViewRendersConstructedStateAndCancels(t *testing.T) {
+	state := pscontract.ConfirmationState{
+		ActionID: pscontract.ActionCleanupTask,
+		Prompt:   "Cleanup task is a PowerShell-authoritative action. Go will not write .brevity or mutate task state directly.",
+		Strength: pscontract.ConfirmationDestructive,
+	}
+	model := NewModelWithSource(&fakeClient{}, time.Second, "native")
+	model.state = bubbleState()
+	model.hasState = true
+	model.width = 100
+	model.confirmation = &state
+
+	output := plainView(model.View())
+	for _, want := range []string{
+		"Confirm Action",
+		"not executable unless enabled by command descriptor",
+		"destructive action; cleanup can remove branches or worktrees",
+		"PowerShell is authoritative",
+	} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("confirmation output missing %q:\n%s", want, output)
+		}
+	}
+	assertLinesWithinWidth(t, output, model.width)
+
+	updated, cmd := model.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	model = updated.(Model)
+	if cmd != nil {
+		t.Fatal("confirmation cancel returned command, want nil")
+	}
+	if model.confirmation != nil {
+		t.Fatal("confirmation cancel left state open")
+	}
+}
+
+func TestDisabledActionsCannotEnterConfirmation(t *testing.T) {
+	model := NewModelWithSource(&fakeClient{}, time.Second, "native")
+	model.state = bubbleState()
+	model.hasState = true
+	model.paletteOpen = true
+	model.paletteSelected = 3
+
+	updated, cmd := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model = updated.(Model)
+	if cmd != nil {
+		t.Fatal("disabled cleanup returned command, want nil")
+	}
+	if model.confirmation != nil {
+		t.Fatal("disabled cleanup entered confirmation")
+	}
+	if model.actionPreview == nil {
+		t.Fatal("disabled cleanup should open preview")
+	}
+}
+
 func TestRefreshActionUsesMockCommandBridge(t *testing.T) {
 	bridge := &fakeCommandBridge{state: bubbleState()}
 	model := NewModelWithSource(&fakeClient{}, time.Second, "native")
@@ -336,6 +428,53 @@ func TestRefreshActionUsesMockCommandBridge(t *testing.T) {
 	}
 	if refresh.state.RepoRoot != `C:\repo` {
 		t.Fatalf("refresh state repo = %q, want C:\\repo", refresh.state.RepoRoot)
+	}
+}
+
+func TestCommandResultPanelsRenderSuccessFailureAndStderr(t *testing.T) {
+	tests := []struct {
+		name   string
+		result pscontract.ExecutionResult
+		want   []string
+	}{
+		{
+			name:   "success",
+			result: pscontract.ExecutionResult{ActionID: pscontract.ActionRefreshState, CommandDisplayLabel: "Refresh state", ExitCode: 0},
+			want:   []string{"Command Result", "action        Refresh state", "status        success", "exit code     0", "Refresh state succeeded"},
+		},
+		{
+			name:   "failure with stderr",
+			result: pscontract.ExecutionResult{ActionID: pscontract.ActionRunWorker, CommandDisplayLabel: "Run worker", ExitCode: 2, Stderr: "worker failed", RefreshAfter: true},
+			want:   []string{"Command Result", "status        failure", "exit code     2", "stderr        worker failed", "Run worker failed with exit code 2"},
+		},
+		{
+			name:   "refresh follow up",
+			result: pscontract.ExecutionResult{ActionID: pscontract.ActionCleanupTask, CommandDisplayLabel: "Cleanup task", ExitCode: 0, RefreshAfter: true},
+			want:   []string{"follow-up     press r to refresh runtime state"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			model := NewModelWithSource(&fakeClient{}, time.Second, "native")
+			model.state = bubbleState()
+			model.hasState = true
+			model.width = 72
+			model.height = 34
+			model.commandResult = &tt.result
+
+			output := plainView(model.View())
+			for _, want := range tt.want {
+				if !strings.Contains(output, want) {
+					t.Fatalf("command result missing %q:\n%s", want, output)
+				}
+			}
+			lines := strings.Split(strings.TrimSuffix(output, "\n"), "\n")
+			if !strings.Contains(lines[len(lines)-1], "j/k r p d q quit ? help") {
+				t.Fatalf("footer was not pinned below command result:\n%s", output)
+			}
+			assertLinesWithinWidth(t, output, model.width)
+		})
 	}
 }
 
@@ -1593,7 +1732,12 @@ func TestDetailFieldsLeadWithOperatorCriticalContext(t *testing.T) {
 		{
 			name:     "provider",
 			selected: 0,
-			want:     []string{"status:", "provider:", "reason:", "action:", "updated:", "type:"},
+			want:     []string{"status:", "provider:", "reason:", "action:", "task impact:", "switch helps:", "updated:", "type:"},
+		},
+		{
+			name:     "task",
+			selected: 1,
+			want:     []string{"state:", "task:", "action:", "provider:", "branch:", "worktree:", "latest run:", "context:", "type:"},
 		},
 		{
 			name:     "cleanup",
@@ -1673,9 +1817,9 @@ func TestProviderDetailCoversOperatorHealthStatuses(t *testing.T) {
 		{status: "healthy", wantAction: "(none)", wantImpact: "no known task execution impact"},
 		{status: "degraded", wantAction: "provider is degraded; treat worker readiness with caution", wantImpact: "affects task execution"},
 		{status: "capacity-degraded", wantAction: "provider is degraded; treat worker readiness with caution", wantImpact: "affects task execution"},
-		{status: "quota-exhausted", wantAction: "provider quota is constrained; choose another profile before starting work", wantImpact: "affects task execution"},
+		{status: "quota-constrained", wantAction: "provider quota is constrained; choose another profile before starting work", wantImpact: "affects task execution"},
 		{status: "unavailable", wantAction: "provider is unavailable; PowerShell remains the authority for changes", wantImpact: "affects task execution"},
-		{status: "unknown", wantAction: "(none)", wantImpact: "no known task execution impact"},
+		{status: "unknown", wantAction: "provider health is unknown; refresh state before assuming readiness", wantImpact: "task execution readiness unknown"},
 	}
 
 	for _, tt := range tests {

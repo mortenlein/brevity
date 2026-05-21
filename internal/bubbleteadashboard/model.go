@@ -12,6 +12,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/mortenlein/brevity/internal/contracts"
 	"github.com/mortenlein/brevity/internal/dashboard"
+	"github.com/mortenlein/brevity/internal/pscontract"
 	"github.com/mortenlein/brevity/internal/runtimeclient"
 	"golang.org/x/term"
 )
@@ -45,6 +46,9 @@ type Model struct {
 	paletteOpen     bool
 	paletteSelected int
 	helpOpen        bool
+	actionPreview   *ActionDescriptor
+	confirmation    *pscontract.ConfirmationState
+	commandResult   *pscontract.ExecutionResult
 	width           int
 	height          int
 	hasWindowSize   bool
@@ -175,6 +179,36 @@ func (model Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (model Model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	if model.actionPreview != nil {
+		switch msg.String() {
+		case "esc", "q", "p", "ctrl+p":
+			model.actionPreview = nil
+			return model, nil
+		default:
+			return model, nil
+		}
+	}
+
+	if model.confirmation != nil {
+		switch msg.String() {
+		case "esc", "q", "n":
+			model.confirmation = nil
+			return model, nil
+		default:
+			return model, nil
+		}
+	}
+
+	if model.commandResult != nil {
+		switch msg.String() {
+		case "esc", "q":
+			model.commandResult = nil
+			return model, nil
+		default:
+			return model, nil
+		}
+	}
+
 	if model.helpOpen {
 		switch msg.String() {
 		case "esc", "q", "?":
@@ -198,6 +232,11 @@ func (model Model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return model, nil
 		case "enter":
 			action := actionDescriptors()[model.clampedPaletteSelection()]
+			if !action.Enabled {
+				model.paletteOpen = false
+				model.actionPreview = &action
+				return model, nil
+			}
 			cmd := model.commandForAction(action)
 			if cmd == nil {
 				return model, nil
@@ -256,6 +295,15 @@ func (model Model) View() string {
 	}
 	if model.paletteOpen {
 		output.WriteString(model.renderActionPalette(renderedRows(output.String())))
+	}
+	if model.actionPreview != nil {
+		output.WriteString(model.renderActionPreview(renderedRows(output.String())))
+	}
+	if model.confirmation != nil {
+		output.WriteString(model.renderConfirmation(renderedRows(output.String())))
+	}
+	if model.commandResult != nil {
+		output.WriteString(model.renderCommandResult(renderedRows(output.String())))
 	}
 	if model.helpOpen {
 		output.WriteString(model.renderHelpOverlay(renderedRows(output.String())))
@@ -956,15 +1004,111 @@ func (model Model) renderHelpOverlay(usedRows ...int) string {
 	lines := []string{
 		"  navigate with up/down or j/k; d toggles selected details",
 		"  r refreshes runtime state through the command bridge",
-		"  p opens actions; only Refresh is executable today",
-		"  Go is a read-only frontend; PowerShell is authoritative",
-		"  esc, q, or ? closes help without running commands",
+		"  p opens actions; disabled mutations show a dry-run command preview",
+		"  confirmation UI is modeled for future enabled descriptors only",
+		"  Go is a read-only dashboard; PowerShell is authoritative",
+		"  only Refresh is executable today",
+		"  esc, q, p, or ? closes panels without running commands",
 	}
 	var body strings.Builder
 	for _, line := range lines {
 		fmt.Fprintln(&body, dashboardStyles.help.Render(model.renderLine(line)))
 	}
 	output.WriteString(truncateRows(body.String(), maxRows, helpTruncatedIndicator, model.contentWidth()))
+	return output.String()
+}
+
+func (model Model) renderActionPreview(usedRows ...int) string {
+	action := model.actionPreview
+	if action == nil {
+		return ""
+	}
+	lines := []string{
+		"  action        " + action.Label,
+		"  status        disabled / future",
+		"  command       " + model.previewCommandShape(*action),
+		"  blocked       " + fallback(action.Command.DisabledReason, "descriptor is not enabled"),
+		"  confirm       confirmation required before any future execution",
+		"  authority     PowerShell is authoritative; Go will not write .brevity",
+		"  close         esc, q, or p returns to the dashboard",
+	}
+	return model.renderPanel("Command Preview", lines, helpTruncatedIndicator, usedRows...)
+}
+
+func (model Model) previewCommandShape(action ActionDescriptor) string {
+	invocation, err := pscontract.BuildInvocation(action.Command, `.\\brevity.ps1`, nil, true)
+	if err != nil {
+		return "(unavailable)"
+	}
+	return invocation.Display()
+}
+
+func (model Model) renderConfirmation(usedRows ...int) string {
+	if model.confirmation == nil {
+		return ""
+	}
+	state := *model.confirmation
+	lines := []string{
+		"  action        " + string(state.ActionID),
+		"  status        not executable unless enabled by command descriptor",
+		"  prompt        " + state.Prompt,
+		"  authority     PowerShell is authoritative; Go does not mutate task state",
+	}
+	if state.Strength == pscontract.ConfirmationDestructive {
+		lines = append(lines, "  warning       destructive action; cleanup can remove branches or worktrees")
+	}
+	lines = append(lines, "  cancel        esc, q, or n cancels")
+	return model.renderPanel("Confirm Action", lines, helpTruncatedIndicator, usedRows...)
+}
+
+func (model Model) renderCommandResult(usedRows ...int) string {
+	if model.commandResult == nil {
+		return ""
+	}
+	result := *model.commandResult
+	status := "success"
+	if !result.Success() {
+		status = "failure"
+	}
+	lines := []string{
+		"  action        " + fallback(result.CommandDisplayLabel, string(result.ActionID)),
+		"  status        " + status,
+		"  exit code     " + fmt.Sprint(result.ExitCode),
+		"  message       " + result.OperatorMessage(),
+	}
+	if stderr := strings.TrimSpace(result.Stderr); stderr != "" {
+		lines = append(lines, "  stderr        "+stderr)
+	}
+	if result.ShouldRefresh() {
+		lines = append(lines, "  follow-up     press r to refresh runtime state")
+	}
+	lines = append(lines, "  close         esc or q closes result")
+	return model.renderPanel("Command Result", lines, detailTruncatedIndicator, usedRows...)
+}
+
+func (model Model) renderPanel(title string, lines []string, indicator string, usedRows ...int) string {
+	if model.height > 0 && model.height <= ultraSmallHeightThreshold {
+		return ""
+	}
+	maxRows := maxInt
+	if model.height > 0 {
+		used := 0
+		if len(usedRows) > 0 {
+			used = usedRows[0]
+		}
+		maxRows = model.height - used - renderedRows(model.renderFooter()) - 2
+		if maxRows < 1 {
+			maxRows = 1
+		}
+	}
+	var output strings.Builder
+	fmt.Fprintln(&output)
+	renderSection(&output, title)
+	var body strings.Builder
+	for _, line := range lines {
+		fmt.Fprintln(&body, dashboardStyles.help.Render(model.renderLine(line)))
+	}
+	output.WriteString(truncateRows(body.String(), maxRows, indicator, model.contentWidth()))
 	return output.String()
 }
 
@@ -1174,6 +1318,7 @@ func (model Model) renderDetails(output io.Writer, items []dashboard.SelectionIt
 		model.detailText(output, "reason", fallback(health.Note, "(none)"))
 		model.detailText(output, "action", providerGuidance(health))
 		model.detailText(output, "task impact", providerTaskImpact(health))
+		model.detailText(output, "switch helps", providerSwitchHelps(health))
 		detailBreak(output)
 		model.detailText(output, "updated", fallback(health.UpdatedAt, "(unknown)"))
 		model.detailText(output, "type", "provider")
@@ -1225,10 +1370,12 @@ func providerGuidance(health contracts.ProviderHealth) string {
 	switch strings.ToLower(strings.TrimSpace(health.Status)) {
 	case "degraded", "capacity-degraded":
 		return "provider is degraded; treat worker readiness with caution"
-	case "quota", "quota-exhausted", "rate-limited":
+	case "quota", "quota-exhausted", "quota-constrained", "rate-limited":
 		return "provider quota is constrained; choose another profile before starting work"
 	case "unavailable", "down", "offline":
 		return "provider is unavailable; PowerShell remains the authority for changes"
+	case "unknown", "":
+		return "provider health is unknown; refresh state before assuming readiness"
 	default:
 		return "(none)"
 	}
@@ -1236,10 +1383,23 @@ func providerGuidance(health contracts.ProviderHealth) string {
 
 func providerTaskImpact(health contracts.ProviderHealth) string {
 	switch strings.ToLower(strings.TrimSpace(health.Status)) {
-	case "degraded", "capacity-degraded", "quota", "quota-exhausted", "rate-limited", "unavailable", "down", "offline":
+	case "degraded", "capacity-degraded", "quota", "quota-exhausted", "quota-constrained", "rate-limited", "unavailable", "down", "offline":
 		return "affects task execution"
+	case "unknown", "":
+		return "task execution readiness unknown"
 	default:
 		return "no known task execution impact"
+	}
+}
+
+func providerSwitchHelps(health contracts.ProviderHealth) string {
+	switch strings.ToLower(strings.TrimSpace(health.Status)) {
+	case "degraded", "capacity-degraded", "quota", "quota-exhausted", "quota-constrained", "rate-limited", "unavailable", "down", "offline":
+		return "yes, if another healthy provider/profile is available"
+	case "unknown", "":
+		return "maybe; refresh or inspect provider health first"
+	default:
+		return "not indicated by current state"
 	}
 }
 
