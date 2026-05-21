@@ -30,6 +30,7 @@ const (
 	ActionProviderStatus ActionID = "provider-status"
 	ActionTaskStatus     ActionID = "task-status"
 	ActionStartTask      ActionID = "start-task"
+	ActionRefreshContext ActionID = "refresh-context"
 	ActionRunWorker      ActionID = "run-worker"
 	ActionMergeTask      ActionID = "merge-task"
 	ActionCleanupTask    ActionID = "cleanup-task"
@@ -55,6 +56,7 @@ type DashboardCommandBridge interface {
 	ExecuteReadOnlyAction(action ActionDescriptor) pscontract.ExecutionResult
 	ExecuteMutatingAction(action ActionDescriptor, commandArgs []string) pscontract.ExecutionResult
 	ExecuteTaskStart(slug string, repoRoot string) pscontract.ExecutionResult
+	ExecuteContextRefresh(slug string, repoRoot string) pscontract.ExecutionResult
 	LoadTaskRunPlan(slug string, profile string) pscontract.ExecutionResult
 }
 
@@ -94,6 +96,39 @@ func (bridge RuntimeClientCommandBridge) ExecuteTaskStart(slug string, repoRoot 
 		return result
 	}
 	commandResult, runErr := actions.TaskStartService{Store: store}.Start(slug)
+	output, marshalErr := json.Marshal(commandResult)
+	if marshalErr != nil {
+		result.ExitCode = 1
+		result.Error = marshalErr.Error()
+		return result
+	}
+	result.Stdout = string(output)
+	if runErr != nil || !commandResult.Success {
+		result.ExitCode = 1
+		if runErr != nil {
+			result.Error = runErr.Error()
+		}
+	}
+	result.CompletedAt = time.Now()
+	return result
+}
+
+func (bridge RuntimeClientCommandBridge) ExecuteContextRefresh(slug string, repoRoot string) pscontract.ExecutionResult {
+	started := time.Now()
+	store, err := state.NewStore(repoRoot)
+	result := pscontract.ExecutionResult{
+		ActionID:            pscontract.ActionRefreshContext,
+		CommandDisplayLabel: "Refresh context",
+		StartedAt:           started,
+		CompletedAt:         time.Now(),
+		RefreshAfter:        true,
+	}
+	if err != nil {
+		result.ExitCode = 1
+		result.Error = err.Error()
+		return result
+	}
+	commandResult, runErr := actions.TaskContextRefreshService{Store: store}.Refresh(slug)
 	output, marshalErr := json.Marshal(commandResult)
 	if marshalErr != nil {
 		result.ExitCode = 1
@@ -180,6 +215,7 @@ func (model Model) actionDescriptors() []ActionDescriptor {
 	actions := actionDescriptors()
 	startSlug, startable := model.selectedStartableTaskSlug()
 	runTask, runnable := model.selectedRunnableTask()
+	refreshSlug, refreshable := model.selectedTaskSlug()
 	for index := range actions {
 		switch actions[index].ID {
 		case ActionStartTask:
@@ -194,6 +230,18 @@ func (model Model) actionDescriptors() []ActionDescriptor {
 				actions[index].Description = "select a task row to enable"
 				actions[index].Command.Enabled = false
 				actions[index].Command.DisabledReason = "select a task row with a slug to enable Start task"
+			}
+		case ActionRefreshContext:
+			if refreshable {
+				actions[index].Enabled = true
+				actions[index].Description = "native prompt/context refresh for " + refreshSlug
+				actions[index].Command.Enabled = true
+				actions[index].Command.DisabledReason = ""
+			} else {
+				actions[index].Enabled = false
+				actions[index].Description = "select a task row to enable"
+				actions[index].Command.Enabled = false
+				actions[index].Command.DisabledReason = "select a task row with a slug to enable Refresh context"
 			}
 		case ActionRunWorker:
 			if runnable {
@@ -237,6 +285,15 @@ func (model Model) commandForAction(action ActionDescriptor) tea.Cmd {
 			return nil
 		}
 		return model.executeTaskStartCmd(slug)
+	case ActionRefreshContext:
+		if model.commandRun != nil && model.commandRun.status == commandRunning {
+			return nil
+		}
+		slug, ok := model.selectedTaskSlug()
+		if !ok {
+			return nil
+		}
+		return model.executeContextRefreshCmd(slug)
 	case ActionRunWorker:
 		if model.commandRun != nil && model.commandRun.status == commandRunning {
 			return nil
@@ -281,6 +338,14 @@ func (model Model) executeTaskStartCmd(slug string) tea.Cmd {
 	repoRoot := model.state.RepoRoot
 	return func() tea.Msg {
 		return commandResultMsg{id: runID, result: model.dashboardCommandBridge().ExecuteTaskStart(slug, repoRoot)}
+	}
+}
+
+func (model Model) executeContextRefreshCmd(slug string) tea.Cmd {
+	runID := model.nextCommandID + 1
+	repoRoot := model.state.RepoRoot
+	return func() tea.Msg {
+		return commandResultMsg{id: runID, result: model.dashboardCommandBridge().ExecuteContextRefresh(slug, repoRoot)}
 	}
 }
 

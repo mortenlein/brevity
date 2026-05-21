@@ -245,7 +245,7 @@ func parseProviderOptions(args []string) (cliOptions, error) {
 
 func parseTaskOptions(args []string) (cliOptions, error) {
 	if len(args) < 2 {
-		return cliOptions{}, fmt.Errorf("missing task command: supported commands: status, context refresh, runtime-info, detail, runs, new, start, run, cleanup, preflight")
+		return cliOptions{}, fmt.Errorf("missing task command: supported commands: status, refresh-context, context refresh, runtime-info, detail, runs, new, start, run, cleanup, preflight")
 	}
 	if args[1] == "status" {
 		if len(args) != 2 {
@@ -254,14 +254,33 @@ func parseTaskOptions(args []string) (cliOptions, error) {
 		return cliOptions{kind: commandTaskStatus}, nil
 	}
 	if args[1] == "context" {
-		if len(args) != 4 || args[2] != "refresh" {
+		if len(args) < 4 || args[2] != "refresh" {
 			return cliOptions{}, usageError(commands.TaskContextRefresh)
 		}
 		if args[3] == "" {
 			return cliOptions{}, usageError(commands.TaskContextRefresh)
 		}
-
-		return cliOptions{kind: commandContextRefresh, slug: args[3]}, nil
+		options := cliOptions{kind: commandContextRefresh, slug: args[3]}
+		for _, arg := range args[4:] {
+			if arg != "--json" {
+				return cliOptions{}, usageError(commands.TaskContextRefresh)
+			}
+			options.json = true
+		}
+		return options, nil
+	}
+	if args[1] == "refresh-context" {
+		if len(args) < 3 || args[2] == "" {
+			return cliOptions{}, usageError(commands.TaskContextRefresh)
+		}
+		options := cliOptions{kind: commandContextRefresh, slug: args[2]}
+		for _, arg := range args[3:] {
+			if arg != "--json" {
+				return cliOptions{}, usageError(commands.TaskContextRefresh)
+			}
+			options.json = true
+		}
+		return options, nil
 	}
 	if args[1] == "cleanup" {
 		return parseTaskCleanupOptions(args)
@@ -288,7 +307,7 @@ func parseTaskOptions(args []string) (cliOptions, error) {
 		return parseTaskRunsOptions(args)
 	}
 
-	return cliOptions{}, fmt.Errorf("unsupported task command %q: supported commands: status, context refresh, runtime-info, detail, runs, new, start, run, cleanup, preflight", args[1])
+	return cliOptions{}, fmt.Errorf("unsupported task command %q: supported commands: status, refresh-context, context refresh, runtime-info, detail, runs, new, start, run, cleanup, preflight", args[1])
 }
 
 func parseTaskPreflightOptions(args []string) (cliOptions, error) {
@@ -1241,12 +1260,30 @@ func runTaskCleanup(stdout io.Writer, client runtimeclient.Client, options cliOp
 }
 
 func runTaskContextRefresh(stdout io.Writer, client runtimeclient.Client, options cliOptions) error {
-	return runPowerShellAction(stdout, actionSpec{
-		call: func() ([]byte, error) {
-			return client.TaskContextRefreshJSON(options.slug)
-		},
-		render: actions.RenderTaskContextRefreshResult,
-	})
+	store, err := state.NewStore("")
+	if err != nil {
+		return err
+	}
+	service := actions.TaskContextRefreshService{Store: store}
+	result, runErr := service.Refresh(options.slug)
+	if options.json {
+		output, err := json.Marshal(result)
+		if err != nil {
+			return err
+		}
+		if _, err := stdout.Write(append(output, '\n')); err != nil {
+			return err
+		}
+	} else if renderErr := actions.RenderTaskContextRefreshResult(stdout, result); renderErr != nil {
+		return renderErr
+	}
+	if runErr != nil {
+		return runErr
+	}
+	if !result.Success {
+		return fmt.Errorf("%s reported success=false", result.Command)
+	}
+	return nil
 }
 
 func writeUsage(stdout io.Writer) {

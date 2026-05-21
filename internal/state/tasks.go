@@ -29,6 +29,9 @@ type Task struct {
 	WorktreePath          string              `json:"worktreePath,omitempty"`
 	Worktree              *TaskWorktree       `json:"worktree,omitempty"`
 	PromptPath            string              `json:"promptPath,omitempty"`
+	SpecPath              string              `json:"specPath,omitempty"`
+	PromptRefreshedAt     string              `json:"promptRefreshedAt,omitempty"`
+	PromptRefreshStatus   string              `json:"promptRefreshStatus,omitempty"`
 	Prompt                *TaskPrompt         `json:"prompt,omitempty"`
 	Provider              string              `json:"provider,omitempty"`
 	Profile               string              `json:"profile,omitempty"`
@@ -314,6 +317,8 @@ func (task Task) ToContract() contracts.TaskSummary {
 		LatestRunAgeMinutes:   task.LatestRunAgeMinutes,
 		LatestRunSource:       task.LatestRunSource,
 		PromptPath:            promptPath,
+		PromptRefreshedAt:     task.PromptRefreshedAt,
+		PromptStatus:          task.PromptRefreshStatus,
 		ProviderHealth:        task.ProviderHealth,
 		ProviderGated:         task.ProviderGated,
 	}

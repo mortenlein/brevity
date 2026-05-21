@@ -660,18 +660,36 @@ Normal operator flow:
 
 ```powershell
 .\brevity.ps1 task new my-task
-.\brevity.ps1 task runtime-info my-task
-.\brevity.ps1 task context status my-task
-.\brevity.ps1 task context refresh my-task
+go run ./cmd/brevity task runtime-info my-task
+go run ./cmd/brevity task refresh-context my-task
+go run ./cmd/brevity task runtime-info my-task --json
 ```
 
-`task runtime-info` exposes the current context state, metadata `status`,
-derived `normalizedState`, and last known worker lifecycle state for the task.
-`task context status` reports the managed context files in the worktree, while `task
-context refresh` re-materializes them from vault memory. If a selected vault
-memory file does not exist, Brevity skips it safely. Refresh is useful when an
-operator wants to restore Brevity-managed context files before handing the task
-to a worker.
+`task runtime-info` exposes the current prompt path, prompt existence, prompt
+refresh status, metadata `status`, derived `normalizedState`, and last known
+worker lifecycle state for the task.
+
+Go owns prompt/context refresh. `task refresh-context` runs native preflight,
+loads task metadata from `.brevity\tasks.json`, reads configured vault memory
+when available, rewrites the task `prompt.md`, refreshes selected bounded
+context files under the worktree `.brevity\context\`, and records
+`promptRefreshedAt` plus `promptRefreshStatus` in task metadata. The legacy
+`task context refresh` command shape is kept as a compatibility alias in the Go
+CLI.
+
+The vault remains durable memory. Runtime state remains under `.brevity`.
+Refresh copies only selected vault files into the task worktree:
+`project.md`, `architecture.md`, `decisions.md`, `current-state.md`, and
+`roadmap.md`. Missing vault files are optional and reported as missing context;
+they do not make the vault a hard dependency. Workers read local materialized
+context instead of external vault paths, preserving the authority split between
+durable project memory and bounded execution context.
+
+The generated prompt is deterministic apart from task/vault inputs. It includes
+the task slug, state, embedded task spec when present, local context guidance,
+provider/profile hints when present, execution constraints, and operator
+acceptance guidance. Refresh does not launch providers or workers, does not
+merge branches, and does not clean up or create worktrees.
 
 ## Gemini Trust
 

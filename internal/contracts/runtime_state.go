@@ -67,6 +67,9 @@ type TaskSummary struct {
 	Worktree              *TaskWorktree       `json:"worktree,omitempty"`
 	Context               *TaskRuntimeContext `json:"context,omitempty"`
 	PromptPath            string              `json:"promptPath"`
+	PromptExists          bool                `json:"promptExists,omitempty"`
+	PromptStatus          string              `json:"promptStatus,omitempty"`
+	PromptRefreshedAt     string              `json:"promptRefreshedAt,omitempty"`
 	Execution             *TaskExecution      `json:"execution,omitempty"`
 	WorkerStatus          string              `json:"workerStatus"`
 	LastRunID             string              `json:"lastRunId"`

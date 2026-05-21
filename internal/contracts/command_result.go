@@ -70,12 +70,19 @@ type ProviderActionPayload struct {
 }
 
 type TaskContextRefreshPayload struct {
-	Slug            string `json:"slug"`
-	Refreshed       bool   `json:"refreshed"`
-	ContextPath     string `json:"contextPath"`
-	GeneratedAt     string `json:"generatedAt"`
-	LatestRunID     string `json:"latestRunId"`
-	NormalizedState string `json:"normalizedState"`
+	Slug                string   `json:"slug"`
+	Refreshed           bool     `json:"refreshed"`
+	ContextPath         string   `json:"contextPath"`
+	PromptPath          string   `json:"promptPath,omitempty"`
+	SpecPath            string   `json:"specPath,omitempty"`
+	GeneratedAt         string   `json:"generatedAt"`
+	LatestRunID         string   `json:"latestRunId"`
+	NormalizedState     string   `json:"normalizedState"`
+	MaterializedFiles   []string `json:"materializedFiles,omitempty"`
+	MissingFiles        []string `json:"missingFiles,omitempty"`
+	PromptRefreshStatus string   `json:"promptRefreshStatus,omitempty"`
+	NoProviderExecution bool     `json:"noProviderExecution,omitempty"`
+	NoWorkerExecution   bool     `json:"noWorkerExecution,omitempty"`
 }
 
 type TaskCleanupPayload struct {
@@ -155,23 +162,26 @@ type TaskRunWorkerCommand struct {
 }
 
 type TaskRuntimeInfoPayload struct {
-	Slug            string                      `json:"slug"`
-	Status          string                      `json:"status"`
-	NormalizedState string                      `json:"normalizedState"`
-	TaskExists      bool                        `json:"taskExists"`
-	Branch          string                      `json:"branch,omitempty"`
-	PromptPath      string                      `json:"promptPath,omitempty"`
-	Provider        string                      `json:"provider,omitempty"`
-	Profile         string                      `json:"profile,omitempty"`
-	RunCount        int                         `json:"runCount"`
-	Worktree        TaskRuntimeWorktreePayload  `json:"worktree"`
-	Context         TaskRuntimeContextPayload   `json:"context"`
-	Execution       TaskRuntimeExecutionPayload `json:"execution"`
-	LatestRun       *TaskRunPayload             `json:"latestRun,omitempty"`
-	Stale           bool                        `json:"stale"`
-	Incomplete      bool                        `json:"incomplete"`
-	LogPath         string                      `json:"logPath,omitempty"`
-	Interpretation  string                      `json:"interpretation,omitempty"`
+	Slug              string                      `json:"slug"`
+	Status            string                      `json:"status"`
+	NormalizedState   string                      `json:"normalizedState"`
+	TaskExists        bool                        `json:"taskExists"`
+	Branch            string                      `json:"branch,omitempty"`
+	PromptPath        string                      `json:"promptPath,omitempty"`
+	PromptExists      bool                        `json:"promptExists,omitempty"`
+	PromptStatus      string                      `json:"promptStatus,omitempty"`
+	PromptRefreshedAt string                      `json:"promptRefreshedAt,omitempty"`
+	Provider          string                      `json:"provider,omitempty"`
+	Profile           string                      `json:"profile,omitempty"`
+	RunCount          int                         `json:"runCount"`
+	Worktree          TaskRuntimeWorktreePayload  `json:"worktree"`
+	Context           TaskRuntimeContextPayload   `json:"context"`
+	Execution         TaskRuntimeExecutionPayload `json:"execution"`
+	LatestRun         *TaskRunPayload             `json:"latestRun,omitempty"`
+	Stale             bool                        `json:"stale"`
+	Incomplete        bool                        `json:"incomplete"`
+	LogPath           string                      `json:"logPath,omitempty"`
+	Interpretation    string                      `json:"interpretation,omitempty"`
 }
 
 type TaskRuntimeWorktreePayload struct {

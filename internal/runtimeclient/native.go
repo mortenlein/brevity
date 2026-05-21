@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/mortenlein/brevity/internal/actions"
 	nativecleanup "github.com/mortenlein/brevity/internal/cleanup"
 	"github.com/mortenlein/brevity/internal/contracts"
 	"github.com/mortenlein/brevity/internal/diagnostics"
@@ -86,6 +87,7 @@ func (client NativeClient) RuntimeState() (contracts.RuntimeState, error) {
 		return contracts.RuntimeState{}, err
 	}
 	tasks := taskStore.ToContracts()
+	attachPromptFiles(tasks)
 	if missingTasks {
 		runtimeState.SuggestedNextActions = append(runtimeState.SuggestedNextActions, "No .brevity\\tasks.json found.")
 	}
@@ -119,6 +121,13 @@ func (client NativeClient) RuntimeState() (contracts.RuntimeState, error) {
 	}
 
 	return runtimeState, nil
+}
+
+func attachPromptFiles(tasks []contracts.TaskSummary) {
+	for index := range tasks {
+		tasks[index].PromptExists = fileExists(tasks[index].PromptPath)
+		tasks[index].PromptStatus = promptStatus(tasks[index].PromptPath, tasks[index].PromptRefreshedAt)
+	}
 }
 
 func (client NativeClient) CleanupInspectJSON() ([]byte, error) {
@@ -213,7 +222,13 @@ func (client NativeClient) ProviderResetJSON(provider string) ([]byte, error) {
 	return nil, nativeUnsupported("provider reset")
 }
 func (client NativeClient) TaskContextRefreshJSON(slug string) ([]byte, error) {
-	return nil, nativeUnsupported("task context refresh")
+	store, err := state.NewStore(client.RepoRoot)
+	if err != nil {
+		return nil, err
+	}
+	service := actions.TaskContextRefreshService{Store: store, Now: client.Now}
+	result, _ := service.Refresh(slug)
+	return json.Marshal(result)
 }
 func (client NativeClient) TaskCleanupJSON(slug string) ([]byte, error) {
 	return nil, nativeUnsupported("task cleanup")
@@ -297,15 +312,18 @@ func (client NativeClient) TaskRuntimeInfo(slug string) (contracts.CommandResult
 	runs := runsForTask(history, slug)
 	summary := task.ToContract()
 	payload := contracts.TaskRuntimeInfoPayload{
-		Slug:            summary.Slug,
-		Status:          summary.Status,
-		NormalizedState: summary.NormalizedState,
-		TaskExists:      true,
-		Branch:          summary.Branch,
-		PromptPath:      summary.PromptPath,
-		Provider:        firstNonEmpty(summary.Provider, summary.LastProvider),
-		Profile:         firstNonEmpty(summary.Profile, summary.LastProfile),
-		RunCount:        len(runs),
+		Slug:              summary.Slug,
+		Status:            summary.Status,
+		NormalizedState:   summary.NormalizedState,
+		TaskExists:        true,
+		Branch:            summary.Branch,
+		PromptPath:        summary.PromptPath,
+		PromptExists:      fileExists(summary.PromptPath),
+		PromptStatus:      promptStatus(summary.PromptPath, task.PromptRefreshedAt),
+		PromptRefreshedAt: task.PromptRefreshedAt,
+		Provider:          firstNonEmpty(summary.Provider, summary.LastProvider),
+		Profile:           firstNonEmpty(summary.Profile, summary.LastProfile),
+		RunCount:          len(runs),
 		Worktree: contracts.TaskRuntimeWorktreePayload{
 			Exists: summary.WorktreeExists != nil && *summary.WorktreeExists,
 			Path:   summary.WorktreePath,
@@ -347,6 +365,35 @@ func (client NativeClient) TaskRuntimeInfo(slug string) (contracts.CommandResult
 	}
 	payload.Interpretation = runtimeInterpretation(payload)
 	return commandResult("task runtime-info", true, "info", payload, nil), nil
+}
+
+func fileExists(path string) bool {
+	if strings.TrimSpace(path) == "" {
+		return false
+	}
+	info, err := os.Stat(path)
+	return err == nil && !info.IsDir()
+}
+
+func promptStatus(path string, refreshedAt string) string {
+	if strings.TrimSpace(path) == "" {
+		return "missing-path"
+	}
+	info, err := os.Stat(path)
+	if err != nil || info.IsDir() {
+		return "missing"
+	}
+	if strings.TrimSpace(refreshedAt) == "" {
+		return "unknown"
+	}
+	refreshed, err := time.Parse(time.RFC3339Nano, refreshedAt)
+	if err != nil {
+		return "unknown"
+	}
+	if info.ModTime().After(refreshed.Add(1 * time.Second)) {
+		return "stale"
+	}
+	return "fresh"
 }
 
 func (client NativeClient) storeAndNow() (state.Store, time.Time, error) {
