@@ -64,7 +64,7 @@ var (
 	ProviderSet = Command{
 		ID:    ProviderSetID,
 		Words: []string{"provider", "set"},
-		Usage: "brevity provider set <provider> <status>",
+		Usage: "brevity provider set <provider> <status> [--note <note>]",
 	}
 	ProviderStatus = Command{
 		ID:    ProviderStatusID,

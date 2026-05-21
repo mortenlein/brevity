@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/mortenlein/brevity/internal/contracts"
+	"github.com/mortenlein/brevity/internal/state"
 )
 
 type NativeClient struct {
@@ -47,7 +48,7 @@ func (client NativeClient) RuntimeState() (contracts.RuntimeState, error) {
 		now = client.Now
 	}
 
-	state := contracts.RuntimeState{
+	runtimeState := contracts.RuntimeState{
 		Schema:      contracts.RuntimeStateSchema,
 		RepoRoot:    repoRoot,
 		GeneratedAt: now().UTC().Format(time.RFC3339),
@@ -63,14 +64,22 @@ func (client NativeClient) RuntimeState() (contracts.RuntimeState, error) {
 		},
 	}
 
-	providers, missingProviderHealth, err := readProviderHealth(filepath.Join(repoRoot, ".brevity", "provider-health.json"))
+	store, err := state.NewStore(repoRoot)
 	if err != nil {
 		return contracts.RuntimeState{}, err
 	}
-	state.Providers.Health = providers
-	state.Providers.Summary = summarizeProviders(providers)
+	providerState, missingProviderHealth, err := state.LoadProviderHealth(store)
+	if err != nil {
+		return contracts.RuntimeState{}, err
+	}
+	providers := map[string]contracts.ProviderHealth{}
+	for provider, health := range providerState {
+		providers[provider] = health.ToContract()
+	}
+	runtimeState.Providers.Health = providers
+	runtimeState.Providers.Summary = summarizeProviders(providers)
 	if missingProviderHealth {
-		state.SuggestedNextActions = append(state.SuggestedNextActions, "No .brevity\\provider-health.json found.")
+		runtimeState.SuggestedNextActions = append(runtimeState.SuggestedNextActions, "No .brevity\\provider-health.json found.")
 	}
 
 	tasks, missingTasks, err := readTasks(filepath.Join(repoRoot, ".brevity", "tasks.json"))
@@ -78,7 +87,7 @@ func (client NativeClient) RuntimeState() (contracts.RuntimeState, error) {
 		return contracts.RuntimeState{}, err
 	}
 	if missingTasks {
-		state.SuggestedNextActions = append(state.SuggestedNextActions, "No .brevity\\tasks.json found.")
+		runtimeState.SuggestedNextActions = append(runtimeState.SuggestedNextActions, "No .brevity\\tasks.json found.")
 	}
 
 	latestRuns, missingRuns, err := readLatestRuns(filepath.Join(repoRoot, ".brevity", "runs.jsonl"))
@@ -86,39 +95,39 @@ func (client NativeClient) RuntimeState() (contracts.RuntimeState, error) {
 		return contracts.RuntimeState{}, err
 	}
 	if missingRuns {
-		state.SuggestedNextActions = append(state.SuggestedNextActions, ".brevity\\runs.jsonl is absent; latest run data is unavailable.")
+		runtimeState.SuggestedNextActions = append(runtimeState.SuggestedNextActions, ".brevity\\runs.jsonl is absent; latest run data is unavailable.")
 	}
 	attachLatestRuns(tasks, latestRuns)
 
-	state.Tasks = tasks
-	state.TaskCounts = countTasks(tasks)
-	state.Groups = groupTasks(tasks)
+	runtimeState.Tasks = tasks
+	runtimeState.TaskCounts = countTasks(tasks)
+	runtimeState.Groups = groupTasks(tasks)
 
 	worktrees, err := readGitWorktrees(repoRoot)
 	if err != nil {
-		state.SuggestedNextActions = append(state.SuggestedNextActions, fmt.Sprintf("Native worktree scan skipped: %v.", err))
+		runtimeState.SuggestedNextActions = append(runtimeState.SuggestedNextActions, fmt.Sprintf("Native worktree scan skipped: %v.", err))
 	} else {
-		state.ActiveWorktrees = worktrees
-		state.ActiveWorktreeCount = len(worktrees)
-		state.OrphanedTaskWorktrees = orphanedTaskWorktrees(tasks, worktrees)
+		runtimeState.ActiveWorktrees = worktrees
+		runtimeState.ActiveWorktreeCount = len(worktrees)
+		runtimeState.OrphanedTaskWorktrees = orphanedTaskWorktrees(tasks, worktrees)
 		branches, err := readGitBranches(repoRoot)
 		if err != nil {
-			state.SuggestedNextActions = append(state.SuggestedNextActions, fmt.Sprintf("Native branch scan skipped: %v.", err))
+			runtimeState.SuggestedNextActions = append(runtimeState.SuggestedNextActions, fmt.Sprintf("Native branch scan skipped: %v.", err))
 		}
 		orphanedBranches := orphanedTaskBranches(tasks, worktrees, branches)
-		worktreeCandidates := cleanupCandidatesForOrphanedTaskWorktrees(state.OrphanedTaskWorktrees)
+		worktreeCandidates := cleanupCandidatesForOrphanedTaskWorktrees(runtimeState.OrphanedTaskWorktrees)
 		branchCandidates := cleanupCandidatesForOrphanedTaskBranches(orphanedBranches)
 		if len(worktreeCandidates)+len(branchCandidates) > 0 {
-			state.Cleanup = &contracts.Cleanup{
+			runtimeState.Cleanup = &contracts.Cleanup{
 				Summary:               cleanupSummary(worktreeCandidates, branchCandidates),
 				OrphanedTaskWorktrees: worktreeCandidates,
 				OrphanedTaskBranches:  branchCandidates,
 			}
-			state.SuggestedNextActions = append(state.SuggestedNextActions, "Review native orphaned task cleanup findings with PowerShell before cleanup; native Go remains read-only.")
+			runtimeState.SuggestedNextActions = append(runtimeState.SuggestedNextActions, "Review native orphaned task cleanup findings with PowerShell before cleanup; native Go remains read-only.")
 		}
 	}
 
-	return state, nil
+	return runtimeState, nil
 }
 
 func (client NativeClient) DoctorJSON() ([]byte, error) { return nil, nativeUnsupported("doctor") }
@@ -161,24 +170,6 @@ func (client NativeClient) TaskRunsCompactJSON() ([]byte, error) {
 
 func nativeUnsupported(command string) error {
 	return fmt.Errorf("native json source is read-only and does not support %s; use powershell", command)
-}
-
-func readProviderHealth(path string) (map[string]contracts.ProviderHealth, bool, error) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return map[string]contracts.ProviderHealth{}, true, nil
-		}
-		return nil, false, fmt.Errorf("read provider health: %w", err)
-	}
-	var health map[string]contracts.ProviderHealth
-	if err := json.Unmarshal(data, &health); err != nil {
-		return nil, false, fmt.Errorf("parse provider health: %w", err)
-	}
-	if health == nil {
-		health = map[string]contracts.ProviderHealth{}
-	}
-	return health, false, nil
 }
 
 func readTasks(path string) ([]contracts.TaskSummary, bool, error) {

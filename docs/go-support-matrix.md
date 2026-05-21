@@ -1,9 +1,9 @@
 # Go Frontend Support Matrix
 
-Brevity's Go command under `cmd\brevity` is currently a frontend/runtime
-client. PowerShell remains the authoritative runtime backend and the source of
-truth for state interpretation, orchestration behavior, worker lifecycle,
-cleanup, branch integration, `.brevity` mutation, and JSON contracts.
+Brevity's Go command under `cmd\brevity` is a frontend/runtime client plus the
+first native runtime authority slice. PowerShell remains the legacy reference
+and fallback for most orchestration behavior, but Go now owns provider health
+state mutation.
 
 The original PowerShell `.\brevity.ps1 tui` command is a lightweight read-only
 runtime/operator scaffold. The Go dashboard and `--watch` mode are the active
@@ -11,11 +11,9 @@ frontend direction for the future operator UX. Both paths currently consume
 PowerShell-produced runtime-state data; neither path provides an interactive
 mutation UI yet.
 
-The Go client does not mutate `.brevity` files directly. Current Go actions are
-PowerShell-backed: they invoke `.\brevity.ps1 ... --json`, parse the structured
-`brevity.command-result.v1` contract, and render concise operator output. The
-dashboard path reads the PowerShell-produced `brevity.runtime-state.v1`
-snapshot.
+Go-owned `.brevity` writes must go through `internal/state` and the advisory
+`.brevity/state.lock` protocol. Provider execution and worker execution are not
+implemented by this migration.
 
 The dashboard UX and interactive action roadmap is documented in
 [`docs/go-dashboard-ux-plan.md`](go-dashboard-ux-plan.md).
@@ -31,8 +29,9 @@ metadata. It does not mean Go writes those files itself.
 | `go run ./cmd/brevity --watch` | Dashboard/frontend | PowerShell runtime state JSON | Read-only | Implemented | Keeps polling runtime state until interrupted; line-oriented input supports `j`/`k` then Enter for movement, `d` or Enter for details, `r` then Enter for refresh, `?` then Enter for help, and `q` then Enter to quit. |
 | `go run ./cmd/brevity --watch --refresh 5s` | Dashboard/frontend | PowerShell runtime state JSON | Read-only | Implemented | Uses a Go duration value for the watch-mode polling interval. |
 | `go run ./cmd/brevity --watch --no-clear` | Dashboard/frontend | PowerShell runtime state JSON | Read-only | Implemented | Suppresses screen clearing on changed renders; unchanged stable dashboard content does not redraw. |
-| `go run ./cmd/brevity provider set <provider> <status>` | PowerShell-backed action | PowerShell command-result JSON | Mutating | Implemented | Updates provider health through `.\brevity.ps1 provider set ... --json`. |
-| `go run ./cmd/brevity provider reset <provider>` | PowerShell-backed action | PowerShell command-result JSON | Mutating | Implemented | Resets provider health through `.\brevity.ps1 provider reset ... --json`. |
+| `go run ./cmd/brevity provider status` | Native state inspection | Go `.brevity/provider-health.json` reader | Read-only | Implemented | Reads provider health through `internal/state`; no PowerShell call. |
+| `go run ./cmd/brevity provider set <provider> <status> [--note <note>]` | Native state action | Go state store + `.brevity/state.lock` | Mutating | Implemented | Updates provider health without PowerShell or provider execution. |
+| `go run ./cmd/brevity provider reset <provider>` | Native state action | Go state store + `.brevity/state.lock` | Mutating | Implemented | Resets provider health to `unknown` without PowerShell or provider execution. |
 | `go run ./cmd/brevity task new <slug>` | PowerShell-backed action | PowerShell command-result JSON | Mutating | Implemented | Creates task runtime metadata and worktree through PowerShell. |
 | `go run ./cmd/brevity task cleanup <slug> --force` | PowerShell-backed action | PowerShell command-result JSON | Mutating | Implemented | Requires `--force`; cleanup behavior is owned by PowerShell. |
 | `go run ./cmd/brevity task context refresh <slug>` | PowerShell-backed action | PowerShell command-result JSON | Mutating | Implemented | Refreshes materialized task context through PowerShell. |
@@ -44,7 +43,7 @@ metadata. It does not mean Go writes those files itself.
 | `go run ./cmd/brevity task runs compact --dry-run` | Read-only inspection | PowerShell command-result JSON | Read-only | Implemented | Reports a compaction plan; dry-run only. |
 | `go run ./cmd/brevity doctor` | Read-only inspection | PowerShell command-result JSON | Read-only | Implemented | Displays runtime diagnostics from `.\brevity.ps1 doctor --json`. |
 | `.\brevity.ps1 tui` | PowerShell TUI scaffold | PowerShell runtime state JSON | Read-only | Implemented | Original lightweight operator scaffold; useful as a reference, not the active future frontend direction. |
-| Native Go `.brevity` reader | Runtime migration | Future Go reader | Read-only | Planned/deferred | Future migration step after JSON-first behavior stays stable. |
+| Native Go `.brevity` reader | Runtime migration | Go state readers | Read-only | Partial | Provider health, tasks, runs, and worktree scans are available for `--json-source native`; provider health uses the shared state model. |
 | Interactive mutation UI | Frontend mutation UI | Future command-result actions | Mutating | Planned/deferred | No interactive mutation UI exists yet in the PowerShell TUI or Go dashboard. |
 | `go run ./cmd/brevity task merge <slug>` | PowerShell-backed action | PowerShell command-result JSON | Mutating | Planned/deferred | PowerShell has merge behavior; Go command surface does not expose it yet. |
 | Orphan cleanup execute | PowerShell-backed action | PowerShell command-result JSON | Mutating | Planned/deferred | Go does not expose mutating orphan cleanup execution yet. |
@@ -53,7 +52,13 @@ metadata. It does not mean Go writes those files itself.
 
 ## Documentation Notes
 
-- PowerShell remains the source of truth for behavior and JSON contracts.
+- PowerShell remains the source of truth for most behavior and JSON contracts;
+  provider health mutation is the first Go-owned exception.
+- Provider health writes use `.brevity/state.lock` with exclusive create,
+  `pid` and UTC `createdAt` contents, timeout waiting, and stale-lock cleanup
+  when configured by tests/services.
+- `.\brevity.ps1 provider status/set/reset` remains available for compatibility,
+  but the Go CLI no longer shells to it for provider health.
 - PowerShell `tui` remains a lightweight read-only scaffold; Go dashboard/watch
   mode is the active frontend direction.
 - Dashboard watch mode is still read-only: each refresh reads

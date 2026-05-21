@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"os/signal"
+	"sort"
 	"strings"
 	"time"
 
@@ -17,6 +18,7 @@ import (
 	"github.com/mortenlein/brevity/internal/contracts"
 	"github.com/mortenlein/brevity/internal/dashboard"
 	"github.com/mortenlein/brevity/internal/runtimeclient"
+	"github.com/mortenlein/brevity/internal/state"
 )
 
 func main() {
@@ -30,6 +32,7 @@ type commandKind string
 
 const (
 	commandDashboard       commandKind = commandKind(commands.DashboardID)
+	commandProviderStatus  commandKind = commandKind(commands.ProviderStatusID)
 	commandProviderSet     commandKind = commandKind(commands.ProviderSetID)
 	commandProviderReset   commandKind = commandKind(commands.ProviderResetID)
 	commandContextRefresh  commandKind = commandKind(commands.TaskContextRefreshID)
@@ -55,6 +58,7 @@ type cliOptions struct {
 	jsonSource string
 	provider   string
 	status     string
+	note       string
 	slug       string
 	force      bool
 	execute    bool
@@ -146,18 +150,34 @@ func parseDoctorOptions(args []string) (cliOptions, error) {
 
 func parseProviderOptions(args []string) (cliOptions, error) {
 	if len(args) < 2 {
-		return cliOptions{}, fmt.Errorf("missing provider command: supported commands: set, reset")
+		return cliOptions{}, fmt.Errorf("missing provider command: supported commands: status, set, reset")
 	}
 
 	options := cliOptions{kind: commandDashboard}
 	switch args[1] {
+	case "status":
+		if len(args) != 2 {
+			return cliOptions{}, usageError(commands.ProviderStatus)
+		}
+		options.kind = commandProviderStatus
 	case "set":
-		if len(args) != 4 {
+		if len(args) < 4 {
 			return cliOptions{}, usageError(commands.ProviderSet)
 		}
 		options.kind = commandProviderSet
 		options.provider = args[2]
 		options.status = args[3]
+		for index := 4; index < len(args); index++ {
+			arg := args[index]
+			if arg != "--note" && arg != "-Note" {
+				return cliOptions{}, fmt.Errorf("unknown argument for brevity provider set: %s", arg)
+			}
+			index++
+			if index >= len(args) {
+				return cliOptions{}, fmt.Errorf("brevity provider set %s %s --note requires a note", options.provider, options.status)
+			}
+			options.note = args[index]
+		}
 	case "reset":
 		if len(args) != 3 {
 			return cliOptions{}, usageError(commands.ProviderReset)
@@ -165,7 +185,7 @@ func parseProviderOptions(args []string) (cliOptions, error) {
 		options.kind = commandProviderReset
 		options.provider = args[2]
 	default:
-		return cliOptions{}, fmt.Errorf("unsupported provider command %q: supported commands: set, reset", args[1])
+		return cliOptions{}, fmt.Errorf("unsupported provider command %q: supported commands: status, set, reset", args[1])
 	}
 
 	return options, nil
@@ -351,8 +371,8 @@ func runWithOptions(stdout io.Writer, client runtimeclient.Client, options cliOp
 
 func runWithContextOptions(ctx context.Context, stdout io.Writer, client runtimeclient.Client, options cliOptions) error {
 	switch options.kind {
-	case commandProviderSet, commandProviderReset:
-		return routeProviderCommand(stdout, client, options)
+	case commandProviderStatus, commandProviderSet, commandProviderReset:
+		return routeProviderCommand(stdout, options)
 	case commandContextRefresh:
 		return routeTaskContextCommand(stdout, client, options)
 	case commandDoctor:
@@ -623,8 +643,97 @@ func normalizeDashboardInput(input string) string {
 	}
 }
 
-func routeProviderCommand(stdout io.Writer, client runtimeclient.Client, options cliOptions) error {
-	return runProviderAction(stdout, client, options)
+func routeProviderCommand(stdout io.Writer, options cliOptions) error {
+	store, err := state.NewStore("")
+	if err != nil {
+		return err
+	}
+	service := state.ProviderHealthService{Store: store}
+	switch options.kind {
+	case commandProviderStatus:
+		return renderNativeProviderStatus(stdout, service)
+	case commandProviderSet:
+		status, err := state.NormalizeProviderStatus(options.status)
+		if err != nil {
+			return err
+		}
+		result, runErr := service.Set(options.provider, status, options.note)
+		if renderErr := actions.RenderProviderResult(stdout, result); renderErr != nil {
+			return renderErr
+		}
+		if runErr != nil {
+			return runErr
+		}
+		if !result.Success {
+			return fmt.Errorf("%s reported success=false", result.Command)
+		}
+		return nil
+	case commandProviderReset:
+		result, runErr := service.Reset(options.provider)
+		if renderErr := actions.RenderProviderResult(stdout, result); renderErr != nil {
+			return renderErr
+		}
+		if runErr != nil {
+			return runErr
+		}
+		if !result.Success {
+			return fmt.Errorf("%s reported success=false", result.Command)
+		}
+		return nil
+	default:
+		return fmt.Errorf("unsupported provider action: %s", options.kind)
+	}
+}
+
+func renderNativeProviderStatus(stdout io.Writer, service state.ProviderHealthService) error {
+	health, missing, err := service.List()
+	if err != nil {
+		return err
+	}
+	if missing {
+		health = state.DefaultProviderHealthState()
+	}
+	summary := summarizeNativeProviders(health)
+	fmt.Fprintln(stdout, "Provider health")
+	fmt.Fprintf(stdout, "Path: %s\n", service.Store.Path(state.ProviderHealthFile))
+	fmt.Fprintln(stdout)
+	fmt.Fprintf(stdout, "Providers: %d total, %d degraded, %d unavailable\n", summary.Total, summary.Degraded, summary.Unavailable)
+	fmt.Fprintln(stdout)
+	names := make([]string, 0, len(health))
+	for provider := range health {
+		names = append(names, provider)
+	}
+	sort.Strings(names)
+	for _, provider := range names {
+		record := health[provider]
+		updatedAt := record.UpdatedAt
+		if strings.TrimSpace(updatedAt) == "" {
+			updatedAt = "-"
+		}
+		note := record.Note
+		if strings.TrimSpace(note) == "" {
+			note = "-"
+		}
+		status := string(record.Status)
+		if strings.TrimSpace(status) == "" {
+			status = "unknown"
+		}
+		fmt.Fprintf(stdout, "%s\t%s\t%s\t%s\n", provider, status, updatedAt, note)
+	}
+	return nil
+}
+
+func summarizeNativeProviders(health state.ProviderHealthState) contracts.ProviderSummary {
+	summary := contracts.ProviderSummary{Total: len(health)}
+	for _, provider := range health {
+		switch strings.ToLower(strings.TrimSpace(string(provider.Status))) {
+		case "capacity-degraded":
+			summary.Degraded++
+		case "unavailable":
+			summary.Unavailable++
+		}
+	}
+	return summary
 }
 
 func routeTaskCommand(stdout io.Writer, client runtimeclient.Client, options cliOptions) error {
@@ -819,30 +928,6 @@ func runTaskContextRefresh(stdout io.Writer, client runtimeclient.Client, option
 	})
 }
 
-func runProviderAction(stdout io.Writer, client runtimeclient.Client, options cliOptions) error {
-	var spec actionSpec
-	switch options.kind {
-	case commandProviderSet:
-		spec = actionSpec{
-			call: func() ([]byte, error) {
-				return client.ProviderSetJSON(options.provider, options.status)
-			},
-			render: actions.RenderProviderResult,
-		}
-	case commandProviderReset:
-		spec = actionSpec{
-			call: func() ([]byte, error) {
-				return client.ProviderResetJSON(options.provider)
-			},
-			render: actions.RenderProviderResult,
-		}
-	default:
-		return fmt.Errorf("unsupported provider action: %s", options.kind)
-	}
-
-	return runPowerShellAction(stdout, spec)
-}
-
 func writeUsage(stdout io.Writer) {
 	fmt.Fprintln(stdout, "Brevity Go Dashboard")
 	fmt.Fprintln(stdout)
@@ -852,7 +937,7 @@ func writeUsage(stdout io.Writer) {
 	}
 	fmt.Fprintln(stdout)
 	fmt.Fprintln(stdout, "The dashboard remains read-only. Mutating actions are dispatched")
-	fmt.Fprintln(stdout, `through .\brevity.ps1 ... --json command-result contracts.`)
+	fmt.Fprintln(stdout, "through native Go where implemented; PowerShell remains legacy fallback.")
 	fmt.Fprintln(stdout)
 	fmt.Fprintln(stdout, "Flags:")
 	fmt.Fprintln(stdout, "  --once                    Render the dashboard once.")

@@ -3,6 +3,8 @@ package main
 import (
 	"bytes"
 	"context"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -423,7 +425,7 @@ func (err assertErr) Error() string {
 }
 
 func TestParseOptionsAcceptsProviderSet(t *testing.T) {
-	options, err := parseOptions([]string{"provider", "set", "gemini", "capacity-degraded"})
+	options, err := parseOptions([]string{"provider", "set", "gemini", "capacity-degraded", "--note", "busy"})
 	if err != nil {
 		t.Fatalf("parseOptions returned error: %v", err)
 	}
@@ -436,6 +438,20 @@ func TestParseOptionsAcceptsProviderSet(t *testing.T) {
 	}
 	if options.status != "capacity-degraded" {
 		t.Fatalf("status = %q, want capacity-degraded", options.status)
+	}
+	if options.note != "busy" {
+		t.Fatalf("note = %q, want busy", options.note)
+	}
+}
+
+func TestParseOptionsAcceptsProviderStatus(t *testing.T) {
+	options, err := parseOptions([]string{"provider", "status"})
+	if err != nil {
+		t.Fatalf("parseOptions returned error: %v", err)
+	}
+
+	if options.kind != commandProviderStatus {
+		t.Fatalf("kind = %q, want provider-status", options.kind)
 	}
 }
 
@@ -610,7 +626,7 @@ func TestRunWritesHelp(t *testing.T) {
 	output := stdout.String()
 	wants := []string{
 		"dashboard remains read-only",
-		`.\brevity.ps1 ... --json`,
+		"native Go where implemented",
 		"--once",
 	}
 	for _, command := range commands.UsageCommands {
@@ -717,11 +733,11 @@ func TestRunTaskRunFailsBeforeClientWithoutExecute(t *testing.T) {
 }
 
 func TestParseOptionsRejectsUnsupportedProviderCommand(t *testing.T) {
-	_, err := parseOptions([]string{"provider", "status"})
+	_, err := parseOptions([]string{"provider", "docs"})
 	if err == nil {
 		t.Fatal("parseOptions returned nil error")
 	}
-	if !strings.Contains(err.Error(), `unsupported provider command "status"`) {
+	if !strings.Contains(err.Error(), `unsupported provider command "docs"`) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
@@ -1149,19 +1165,19 @@ func TestRunTaskRunReturnsErrorWhenWorkerFails(t *testing.T) {
 	}
 }
 
-func TestRunProviderSetUsesClientAndRendersResult(t *testing.T) {
-	client := &fakeRuntimeClient{
-		providerSet: []byte(`{"schema":"brevity.command-result.v1","command":"provider set","success":true,"severity":"info","suggestedNextActions":["refresh-runtime-state"],"payload":{"provider":"gemini","previousStatus":"unknown","newStatus":"capacity-degraded","note":"busy"}}`),
-	}
+func TestRunProviderSetUsesNativeStateAndRendersResult(t *testing.T) {
+	repoRoot := tempRepoWithProviderHealth(t, `{"gemini":{"status":"unknown","note":"","updatedAt":""}}`)
+	t.Chdir(repoRoot)
+	client := &fakeRuntimeClient{}
 
 	var stdout bytes.Buffer
-	err := runWithOptions(&stdout, client, cliOptions{kind: commandProviderSet, provider: "gemini", status: "capacity-degraded"})
+	err := runWithOptions(&stdout, client, cliOptions{kind: commandProviderSet, provider: "gemini", status: "capacity-degraded", note: "busy"})
 	if err != nil {
 		t.Fatalf("runWithOptions returned error: %v", err)
 	}
 
-	if len(client.calls) != 1 || client.calls[0] != "provider-set:gemini:capacity-degraded" {
-		t.Fatalf("calls = %#v, want provider set only", client.calls)
+	if len(client.calls) != 0 {
+		t.Fatalf("calls = %#v, want no PowerShell client calls", client.calls)
 	}
 
 	output := stdout.String()
@@ -1179,20 +1195,53 @@ func TestRunProviderSetUsesClientAndRendersResult(t *testing.T) {
 	}
 }
 
-func TestRunProviderResetReturnsErrorWhenResultFails(t *testing.T) {
-	client := &fakeRuntimeClient{
-		providerReset: []byte(`{"schema":"brevity.command-result.v1","command":"provider reset","success":false,"severity":"error","errors":[{"code":"invalid-provider","message":"Invalid provider: nope"}],"payload":{"provider":"nope","previousStatus":"unknown","newStatus":"unknown"}}`),
+func TestRunProviderStatusUsesNativeState(t *testing.T) {
+	repoRoot := tempRepoWithProviderHealth(t, `{"codex":{"status":"healthy","note":"ok","updatedAt":"2026-05-21T10:00:00Z"}}`)
+	t.Chdir(repoRoot)
+	client := &fakeRuntimeClient{}
+
+	var stdout bytes.Buffer
+	err := runWithOptions(&stdout, client, cliOptions{kind: commandProviderStatus})
+	if err != nil {
+		t.Fatalf("runWithOptions returned error: %v", err)
 	}
+	if len(client.calls) != 0 {
+		t.Fatalf("calls = %#v, want no PowerShell client calls", client.calls)
+	}
+	for _, want := range []string{"Provider health", "Providers: 1 total, 0 degraded, 0 unavailable", "codex\thealthy\t2026-05-21T10:00:00Z\tok"} {
+		if !strings.Contains(stdout.String(), want) {
+			t.Fatalf("output missing %q:\n%s", want, stdout.String())
+		}
+	}
+}
+
+func TestRunProviderResetReturnsErrorWhenNativeProviderUnknown(t *testing.T) {
+	repoRoot := tempRepoWithProviderHealth(t, `{"codex":{"status":"unknown"}}`)
+	t.Chdir(repoRoot)
+	client := &fakeRuntimeClient{}
 
 	var stdout bytes.Buffer
 	err := runWithOptions(&stdout, client, cliOptions{kind: commandProviderReset, provider: "nope"})
 	if err == nil {
 		t.Fatal("runWithOptions returned nil error")
 	}
-	if !strings.Contains(err.Error(), "provider reset reported success=false") {
+	if !strings.Contains(err.Error(), "Invalid provider: nope") {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if !strings.Contains(stdout.String(), "error: invalid-provider: Invalid provider: nope") {
 		t.Fatalf("output missing structured error:\n%s", stdout.String())
 	}
+}
+
+func tempRepoWithProviderHealth(t *testing.T, health string) string {
+	t.Helper()
+	repoRoot := t.TempDir()
+	brevityRoot := filepath.Join(repoRoot, ".brevity")
+	if err := os.MkdirAll(brevityRoot, 0o755); err != nil {
+		t.Fatalf("MkdirAll returned error: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(brevityRoot, "provider-health.json"), []byte(health+"\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile returned error: %v", err)
+	}
+	return repoRoot
 }
