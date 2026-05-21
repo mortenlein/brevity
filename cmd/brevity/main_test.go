@@ -592,6 +592,16 @@ func TestParseOptionsAcceptsTaskRuntimeInfoJSON(t *testing.T) {
 	}
 }
 
+func TestParseOptionsAcceptsTaskDetailJSON(t *testing.T) {
+	options, err := parseOptions([]string{"task", "detail", "my-task", "--json"})
+	if err != nil {
+		t.Fatalf("parseOptions returned error: %v", err)
+	}
+	if options.kind != commandTaskDetail || options.slug != "my-task" || !options.json {
+		t.Fatalf("options = %#v, want task detail json", options)
+	}
+}
+
 func TestParseOptionsAcceptsTaskRuns(t *testing.T) {
 	options, err := parseOptions([]string{"task", "runs", "my-task"})
 	if err != nil {
@@ -782,10 +792,13 @@ func TestParseOptionsRejectsUnsupportedProviderCommand(t *testing.T) {
 	}
 }
 
-func TestRunDoctorUsesClientAndRendersResult(t *testing.T) {
-	client := &fakeRuntimeClient{
-		doctor: []byte(`{"schema":"brevity.command-result.v1","command":"doctor","success":true,"severity":"info","warnings":[{"code":"orphaned-task-worktrees","message":"Orphaned task worktrees are present.","count":2}],"suggestedNextActions":["Run doctor."],"payload":{"warningCount":1,"errorCount":0,"providers":{"summary":{"total":3,"degraded":1,"unavailable":0}},"branchCounts":{"orphaned":4},"worktreeCounts":{"orphanedTaskWorktrees":2},"lock":{"exists":false,"path":"C:\\repo\\.brevity\\tasks.lock"},"suggestedNextActions":["Run doctor."]}}`),
+func TestRunDoctorUsesNativeDiagnostics(t *testing.T) {
+	repoRoot := tempRepoWithTasks(t, `[]`)
+	if err := os.WriteFile(filepath.Join(repoRoot, ".brevity", "config.json"), []byte(`{"vaultPath":"","worktreesRoot":""}`+"\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile config returned error: %v", err)
 	}
+	t.Chdir(repoRoot)
+	client := &fakeRuntimeClient{}
 
 	var stdout bytes.Buffer
 	err := runWithOptions(&stdout, client, cliOptions{kind: commandDoctor})
@@ -793,20 +806,48 @@ func TestRunDoctorUsesClientAndRendersResult(t *testing.T) {
 		t.Fatalf("runWithOptions returned error: %v", err)
 	}
 
-	if len(client.calls) != 1 || client.calls[0] != "doctor" {
-		t.Fatalf("calls = %#v, want doctor only", client.calls)
+	if len(client.calls) != 0 {
+		t.Fatalf("calls = %#v, want no PowerShell client calls", client.calls)
 	}
 
 	output := stdout.String()
 	for _, want := range []string{
 		"Doctor",
-		"warnings: 1",
-		"errors: 0",
-		"providers: total=3 degraded=1 unavailable=0",
-		"orphanedWorktrees: 2",
-		"orphanedBranches: 4",
-		"lockExists: false",
-		"- Run doctor.",
+		"repo: " + repoRoot,
+		"checks:",
+		"git-executable",
+		"tasks-readable",
+		"provider-health-readable",
+		"runs-readable",
+		"suggestedNextActions:",
+	} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("output missing %q:\n%s", want, output)
+		}
+	}
+}
+
+func TestRunDoctorJSONUsesNativeDiagnostics(t *testing.T) {
+	repoRoot := tempRepoWithTasks(t, `[]`)
+	if err := os.WriteFile(filepath.Join(repoRoot, ".brevity", "config.json"), []byte(`{"vaultPath":"","worktreesRoot":""}`+"\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile config returned error: %v", err)
+	}
+	t.Chdir(repoRoot)
+	client := &fakeRuntimeClient{}
+
+	var stdout bytes.Buffer
+	err := runWithOptions(&stdout, client, cliOptions{kind: commandDoctor, json: true})
+	if err != nil {
+		t.Fatalf("runWithOptions returned error: %v", err)
+	}
+	if len(client.calls) != 0 {
+		t.Fatalf("calls = %#v, want no PowerShell client calls", client.calls)
+	}
+	output := stdout.String()
+	for _, want := range []string{
+		`"command":"doctor"`,
+		`"schema":"brevity.doctor.v1"`,
+		`"errors":[]`,
 	} {
 		if !strings.Contains(output, want) {
 			t.Fatalf("output missing %q:\n%s", want, output)
@@ -848,6 +889,35 @@ func TestRunTaskRuntimeInfoUsesNativeStateAndRendersResult(t *testing.T) {
 	} {
 		if !strings.Contains(output, want) {
 			t.Fatalf("output missing %q:\n%s", want, output)
+		}
+	}
+}
+
+func TestRunTaskDetailUsesNativeStateAndRendersResult(t *testing.T) {
+	repoRoot := tempRepoWithTasksAndRuns(t,
+		`[{"slug":"my-task","status":"ready-for-worker","normalizedState":"ready-for-worker","branch":"task/my-task","promptPath":"C:\\repo\\worktrees\\active\\brevity-my-task\\prompt.md"}]`,
+		`{"slug":"my-task","runId":"run-abc","workerStatus":"succeeded","startedAt":"2026-05-19T09:00:00Z","finishedAt":"2026-05-19T09:01:00Z","exitCode":0,"provider":"codex","profile":"default","logPath":"C:\\repo\\.brevity\\logs\\my-task\\run-abc.log"}`+"\n")
+	t.Chdir(repoRoot)
+	client := &fakeRuntimeClient{}
+
+	var stdout bytes.Buffer
+	err := runWithOptions(&stdout, client, cliOptions{kind: commandTaskDetail, slug: "my-task"})
+	if err != nil {
+		t.Fatalf("runWithOptions returned error: %v", err)
+	}
+	if len(client.calls) != 0 {
+		t.Fatalf("calls = %#v, want no PowerShell client calls", client.calls)
+	}
+	for _, want := range []string{
+		"Task runtime-info",
+		"slug: my-task",
+		"branch: task/my-task",
+		"promptPath: C:\\repo\\worktrees\\active\\brevity-my-task\\prompt.md",
+		"latestRunId: run-abc",
+		"interpretation: Latest run completed successfully.",
+	} {
+		if !strings.Contains(stdout.String(), want) {
+			t.Fatalf("output missing %q:\n%s", want, stdout.String())
 		}
 	}
 }

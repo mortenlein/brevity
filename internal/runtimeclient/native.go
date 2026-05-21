@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/mortenlein/brevity/internal/contracts"
+	"github.com/mortenlein/brevity/internal/diagnostics"
 	"github.com/mortenlein/brevity/internal/state"
 )
 
@@ -128,7 +129,13 @@ func (client NativeClient) RuntimeState() (contracts.RuntimeState, error) {
 	return runtimeState, nil
 }
 
-func (client NativeClient) DoctorJSON() ([]byte, error) { return nil, nativeUnsupported("doctor") }
+func (client NativeClient) DoctorJSON() ([]byte, error) {
+	report, err := diagnostics.Run(diagnostics.Options{RepoRoot: client.RepoRoot, Now: client.Now})
+	if err != nil {
+		return nil, err
+	}
+	return json.Marshal(diagnostics.CommandResult(report))
+}
 func (client NativeClient) ProviderSetJSON(provider string, status string) ([]byte, error) {
 	return nil, nativeUnsupported("provider set")
 }
@@ -224,6 +231,8 @@ func (client NativeClient) TaskRuntimeInfo(slug string) (contracts.CommandResult
 		Status:          summary.Status,
 		NormalizedState: summary.NormalizedState,
 		TaskExists:      true,
+		Branch:          summary.Branch,
+		PromptPath:      summary.PromptPath,
 		Provider:        firstNonEmpty(summary.Provider, summary.LastProvider),
 		Profile:         firstNonEmpty(summary.Profile, summary.LastProfile),
 		RunCount:        len(runs),

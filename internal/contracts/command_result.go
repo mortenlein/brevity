@@ -147,6 +147,8 @@ type TaskRuntimeInfoPayload struct {
 	Status          string                      `json:"status"`
 	NormalizedState string                      `json:"normalizedState"`
 	TaskExists      bool                        `json:"taskExists"`
+	Branch          string                      `json:"branch,omitempty"`
+	PromptPath      string                      `json:"promptPath,omitempty"`
 	Provider        string                      `json:"provider,omitempty"`
 	Profile         string                      `json:"profile,omitempty"`
 	RunCount        int                         `json:"runCount"`

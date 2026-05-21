@@ -1,10 +1,12 @@
 package actions
 
 import (
+	"encoding/json"
 	"fmt"
 	"io"
 
 	"github.com/mortenlein/brevity/internal/contracts"
+	"github.com/mortenlein/brevity/internal/diagnostics"
 )
 
 func RenderTaskRuntimeInfoResult(stdout io.Writer, result contracts.CommandResult) error {
@@ -21,6 +23,8 @@ func RenderTaskRuntimeInfoResult(stdout io.Writer, result contracts.CommandResul
 	fmt.Fprintf(stdout, "normalizedState: %s\n", emptyAsUnknown(payload.NormalizedState))
 	fmt.Fprintf(stdout, "worktreeExists: %t\n", payload.Worktree.Exists)
 	fmt.Fprintf(stdout, "worktreePath: %s\n", payload.Worktree.Path)
+	fmt.Fprintf(stdout, "branch: %s\n", emptyAsUnknown(payload.Branch))
+	fmt.Fprintf(stdout, "promptPath: %s\n", emptyAsUnknown(payload.PromptPath))
 	fmt.Fprintf(stdout, "contextFileCount: %d\n", payload.Context.MaterializedFileCount)
 	fmt.Fprintf(stdout, "contextMissingCount: %d\n", len(payload.Context.MissingFiles))
 	fmt.Fprintf(stdout, "executionStatus: %s\n", emptyAsUnknown(payload.Execution.Status))
@@ -75,6 +79,11 @@ func RenderTaskRunsResult(stdout io.Writer, result contracts.CommandResult) erro
 }
 
 func RenderDoctorResult(stdout io.Writer, result contracts.CommandResult) error {
+	var report diagnostics.Report
+	if err := json.Unmarshal(result.Payload, &report); err == nil && report.Schema == diagnostics.Schema {
+		return RenderDiagnosticReport(stdout, report)
+	}
+
 	payload, err := contracts.ParseDoctorPayload(result)
 	if err != nil {
 		return err
@@ -96,6 +105,32 @@ func RenderDoctorResult(stdout io.Writer, result contracts.CommandResult) error 
 	}
 
 	renderMessages(stdout, result)
+	return nil
+}
+
+func RenderDiagnosticReport(stdout io.Writer, report diagnostics.Report) error {
+	fmt.Fprintln(stdout, "Doctor")
+	fmt.Fprintf(stdout, "repo: %s\n", report.RepoRoot)
+	fmt.Fprintf(stdout, "ok: %d\n", report.Summary.OK)
+	fmt.Fprintf(stdout, "warnings: %d\n", report.Summary.Warn)
+	fmt.Fprintf(stdout, "errors: %d\n", report.Summary.Error)
+	fmt.Fprintf(stdout, "skipped: %d\n", report.Summary.Skipped)
+	fmt.Fprintln(stdout, "checks:")
+	for _, check := range report.Checks {
+		fmt.Fprintf(stdout, "- %s [%s] %s\n", check.ID, check.Status, check.Message)
+		if check.Path != "" {
+			fmt.Fprintf(stdout, "  path: %s\n", check.Path)
+		}
+		if check.Detail != "" {
+			fmt.Fprintf(stdout, "  detail: %s\n", check.Detail)
+		}
+	}
+	if len(report.SuggestedNextActions) > 0 {
+		fmt.Fprintln(stdout, "suggestedNextActions:")
+		for _, action := range report.SuggestedNextActions {
+			fmt.Fprintf(stdout, "- %s\n", action)
+		}
+	}
 	return nil
 }
 

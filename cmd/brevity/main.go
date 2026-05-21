@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"io"
@@ -17,6 +18,7 @@ import (
 	"github.com/mortenlein/brevity/internal/commands"
 	"github.com/mortenlein/brevity/internal/contracts"
 	"github.com/mortenlein/brevity/internal/dashboard"
+	"github.com/mortenlein/brevity/internal/diagnostics"
 	"github.com/mortenlein/brevity/internal/runtimeclient"
 	"github.com/mortenlein/brevity/internal/state"
 )
@@ -43,6 +45,7 @@ const (
 	commandTaskNew         commandKind = commandKind(commands.TaskNewID)
 	commandTaskRun         commandKind = commandKind(commands.TaskRunID)
 	commandTaskRuntimeInfo commandKind = commandKind(commands.TaskRuntimeInfoID)
+	commandTaskDetail      commandKind = commandKind(commands.TaskDetailID)
 	commandTaskRuns        commandKind = commandKind(commands.TaskRunsID)
 	commandRunsReconcile   commandKind = commandKind(commands.TaskRunsReconcileID)
 	commandRunsRetention   commandKind = commandKind(commands.TaskRunsRetentionID)
@@ -164,11 +167,14 @@ func parseRuntimeOptions(args []string) (cliOptions, error) {
 }
 
 func parseDoctorOptions(args []string) (cliOptions, error) {
-	if len(args) != 1 {
-		return cliOptions{}, usageError(commands.Doctor)
+	options := cliOptions{kind: commandDoctor}
+	for _, arg := range args[1:] {
+		if arg != "--json" {
+			return cliOptions{}, usageError(commands.Doctor)
+		}
+		options.json = true
 	}
-
-	return cliOptions{kind: commandDoctor}, nil
+	return options, nil
 }
 
 func parseProviderOptions(args []string) (cliOptions, error) {
@@ -216,7 +222,7 @@ func parseProviderOptions(args []string) (cliOptions, error) {
 
 func parseTaskOptions(args []string) (cliOptions, error) {
 	if len(args) < 2 {
-		return cliOptions{}, fmt.Errorf("missing task command: supported commands: status, context refresh, runtime-info, runs, new, run, cleanup")
+		return cliOptions{}, fmt.Errorf("missing task command: supported commands: status, context refresh, runtime-info, detail, runs, new, run, cleanup")
 	}
 	if args[1] == "status" {
 		if len(args) != 2 {
@@ -246,11 +252,14 @@ func parseTaskOptions(args []string) (cliOptions, error) {
 	if args[1] == "runtime-info" {
 		return parseTaskRuntimeInfoOptions(args)
 	}
+	if args[1] == "detail" {
+		return parseTaskDetailOptions(args)
+	}
 	if args[1] == "runs" {
 		return parseTaskRunsOptions(args)
 	}
 
-	return cliOptions{}, fmt.Errorf("unsupported task command %q: supported commands: status, context refresh, runtime-info, runs, new, run, cleanup", args[1])
+	return cliOptions{}, fmt.Errorf("unsupported task command %q: supported commands: status, context refresh, runtime-info, detail, runs, new, run, cleanup", args[1])
 }
 
 func parseTaskNewOptions(args []string) (cliOptions, error) {
@@ -327,6 +336,20 @@ func parseTaskRuntimeInfoOptions(args []string) (cliOptions, error) {
 	for _, arg := range args[3:] {
 		if arg != "--json" {
 			return cliOptions{}, usageError(commands.TaskRuntimeInfo)
+		}
+		options.json = true
+	}
+	return options, nil
+}
+
+func parseTaskDetailOptions(args []string) (cliOptions, error) {
+	if len(args) < 3 || args[2] == "" {
+		return cliOptions{}, usageError(commands.TaskDetail)
+	}
+	options := cliOptions{kind: commandTaskDetail, slug: args[2]}
+	for _, arg := range args[3:] {
+		if arg != "--json" {
+			return cliOptions{}, usageError(commands.TaskDetail)
 		}
 		options.json = true
 	}
@@ -421,8 +444,8 @@ func runWithContextOptions(ctx context.Context, stdout io.Writer, client runtime
 	case commandContextRefresh:
 		return routeTaskContextCommand(stdout, client, options)
 	case commandDoctor:
-		return routeDoctorCommand(stdout, client)
-	case commandTaskCleanup, commandTaskNew, commandTaskRun, commandTaskRuntimeInfo:
+		return routeDoctorCommand(stdout, options)
+	case commandTaskCleanup, commandTaskNew, commandTaskRun, commandTaskRuntimeInfo, commandTaskDetail:
 		return routeTaskCommand(stdout, client, options)
 	case commandTaskRuns, commandRunsReconcile, commandRunsRetention, commandRunsCompact:
 		return routeTaskRunsCommand(stdout, client, options)
@@ -837,7 +860,7 @@ func routeTaskCommand(stdout io.Writer, client runtimeclient.Client, options cli
 		return runTaskNew(stdout, client, options)
 	case commandTaskRun:
 		return runTaskRun(stdout, client, options)
-	case commandTaskRuntimeInfo:
+	case commandTaskRuntimeInfo, commandTaskDetail:
 		return runTaskRuntimeInfo(stdout, client, options)
 	default:
 		return fmt.Errorf("unsupported task command: %s", options.kind)
@@ -859,8 +882,8 @@ func routeTaskRunsCommand(stdout io.Writer, client runtimeclient.Client, options
 	}
 }
 
-func routeDoctorCommand(stdout io.Writer, client runtimeclient.Client) error {
-	return runDoctor(stdout, client)
+func routeDoctorCommand(stdout io.Writer, options cliOptions) error {
+	return runDoctor(stdout, options)
 }
 
 func runTaskRunsMaintenance(stdout io.Writer, client runtimeclient.Client, options cliOptions) error {
@@ -931,11 +954,27 @@ func maintenanceCommandName(kind commandKind) string {
 	}
 }
 
-func runDoctor(stdout io.Writer, client runtimeclient.Client) error {
-	return runPowerShellAction(stdout, actionSpec{
-		call:   client.DoctorJSON,
-		render: actions.RenderDoctorResult,
-	})
+func runDoctor(stdout io.Writer, options cliOptions) error {
+	report, err := diagnostics.Run(diagnostics.Options{})
+	if err != nil {
+		return err
+	}
+	result := diagnostics.CommandResult(report)
+	if options.json {
+		output, err := json.Marshal(result)
+		if err != nil {
+			return err
+		}
+		if _, err := stdout.Write(append(output, '\n')); err != nil {
+			return err
+		}
+	} else if err := actions.RenderDoctorResult(stdout, result); err != nil {
+		return err
+	}
+	if !result.Success {
+		return fmt.Errorf("doctor reported error diagnostics")
+	}
+	return nil
 }
 
 func runTaskNew(stdout io.Writer, client runtimeclient.Client, options cliOptions) error {

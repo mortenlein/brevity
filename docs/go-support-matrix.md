@@ -3,7 +3,8 @@
 Brevity's Go command under `cmd\brevity` is a frontend/runtime client plus the
 native runtime authority slices. PowerShell remains the legacy reference and
 fallback for orchestration behavior, but Go now owns provider health state
-mutation plus task/runtime state reading.
+mutation, task/runtime state reading, run-history inspection, and read-only
+doctor/detail diagnostics.
 
 The original PowerShell `.\brevity.ps1 tui` command is a lightweight read-only
 runtime/operator scaffold. The Go dashboard and `--watch` mode are the active
@@ -39,13 +40,15 @@ metadata. It does not mean Go writes those files itself.
 | `go run ./cmd/brevity task new <slug>` | PowerShell-backed action | PowerShell command-result JSON | Mutating | Implemented | Creates task runtime metadata and worktree through PowerShell. |
 | `go run ./cmd/brevity task cleanup <slug> --force` | PowerShell-backed action | PowerShell command-result JSON | Mutating | Implemented | Requires `--force`; cleanup behavior is owned by PowerShell. |
 | `go run ./cmd/brevity task context refresh <slug>` | PowerShell-backed action | PowerShell command-result JSON | Mutating | Implemented | Refreshes materialized task context through PowerShell. |
-| `go run ./cmd/brevity task runtime-info <slug>` | Read-only inspection | PowerShell command-result JSON | Read-only | Implemented | Displays task runtime details from PowerShell. |
-| `go run ./cmd/brevity task runs <slug>` | Read-only inspection | PowerShell command-result JSON | Read-only | Implemented | Displays recent run-index records for one task. |
+| `go run ./cmd/brevity task runtime-info <slug>` | Native read-only inspection | Go `.brevity/tasks.json` + `.brevity/runs.jsonl` reader | Read-only | Implemented | Displays task runtime details without PowerShell. |
+| `go run ./cmd/brevity task detail <slug>` | Native read-only inspection | Go `.brevity/tasks.json` + `.brevity/runs.jsonl` reader | Read-only | Implemented | Alias-style focused task detail view with metadata, worktree, prompt, provider/profile, latest run, and operator interpretation. |
+| `go run ./cmd/brevity task runs <slug>` | Native read-only inspection | Go `.brevity/runs.jsonl` reader | Read-only | Implemented | Displays recent run-index records for one task without PowerShell. |
 | `go run ./cmd/brevity task run <slug> --execute [--profile <profile>] [--smoke]` | PowerShell-backed action | PowerShell command-result JSON | Mutating | Implemented | Starts a synchronous worker run through PowerShell and records run metadata. |
 | `go run ./cmd/brevity task runs reconcile --dry-run` | Read-only inspection | PowerShell command-result JSON | Read-only | Implemented | Reports stale or incomplete run records; dry-run only. |
 | `go run ./cmd/brevity task runs retention --dry-run` | Read-only inspection | PowerShell command-result JSON | Read-only | Implemented | Reports run-index retention signals; dry-run only. |
 | `go run ./cmd/brevity task runs compact --dry-run` | Read-only inspection | PowerShell command-result JSON | Read-only | Implemented | Reports a compaction plan; dry-run only. |
-| `go run ./cmd/brevity doctor` | Read-only inspection | PowerShell command-result JSON | Read-only | Implemented | Displays runtime diagnostics from `.\brevity.ps1 doctor --json`. |
+| `go run ./cmd/brevity doctor` | Native read-only diagnostics | Go diagnostic checks | Read-only | Implemented | Checks Git availability, repo and `.brevity` readability, config, provider health, task metadata, runs, locks, vault/worktree paths, and task worktree paths without PowerShell. |
+| `go run ./cmd/brevity doctor --json` | Native read-only diagnostics | Go diagnostic checks | Read-only | Implemented | Emits `brevity.command-result.v1` with a stable `brevity.doctor.v1` payload; exits non-zero when error diagnostics exist. |
 | `.\brevity.ps1 tui` | PowerShell TUI scaffold | PowerShell runtime state JSON | Read-only | Implemented | Original lightweight operator scaffold; useful as a reference, not the active future frontend direction. |
 | Native Go `.brevity` reader | Runtime migration | Go state readers | Read-only | Implemented for current read slice | Provider health, tasks, runs, and worktree scans are available for native runtime state; provider health and task metadata use `internal/state`. |
 | Interactive mutation UI | Frontend mutation UI | Future command-result actions | Mutating | Planned/deferred | No interactive mutation UI exists yet in the PowerShell TUI or Go dashboard. |
@@ -58,7 +61,8 @@ metadata. It does not mean Go writes those files itself.
 
 - Go owns provider health read/write, `.brevity/tasks.json` reading,
   `.brevity/runs.jsonl` run-history reading, native runtime-state building,
-  native task status, and the Bubble Tea native source.
+  native task status, task runtime/detail inspection, doctor diagnostics, and
+  the Bubble Tea native source.
 - PowerShell remains the authority for task mutation, worker/provider execution,
   task new/start/run/merge/cleanup, and legacy compatibility.
 - Provider health writes use `.brevity/state.lock` with exclusive create,
