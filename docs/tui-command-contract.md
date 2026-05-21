@@ -90,7 +90,27 @@ command string for task slugs, paths, profiles, or flags; paths with spaces must
 remain a single argument.
 
 Current dashboard enablement is intentionally narrow: Refresh runtime state is
-the only executable action. Start, Run, Merge, and Cleanup remain disabled until
-the command contract, confirmation UI, dry-run command display, PowerShell
-execution, post-command refresh, and audit/result display are enabled in that
-order.
+executable, and Start task is executable only after a task row is selected and
+confirmed. Run worker, Merge task, and Cleanup task remain disabled until their
+PowerShell contracts, confirmation UI, post-command refresh, and result display
+are hardened.
+
+## Start Task Fixture Smoke
+
+The Go dashboard has a disposable fixture smoke path for the confirmed Start
+task action:
+
+```powershell
+go test ./internal/bubbleteadashboard -run StartTaskFixtureIntegration -count=1 -v
+```
+
+The test creates a temporary git repository, copies `brevity.ps1` into it,
+creates only the minimum `.brevity` runtime files, and adds one fixture task
+named `fixture-start-task`. It drives dashboard selection, confirmation, the
+PowerShell bridge invocation, the result panel, the activity row, and runtime
+refresh against that temp repo.
+
+This exists so Start task can be tested without real user tasks. PowerShell
+remains authoritative for the mutation, and Go production code does not write
+`.brevity` directly. The fixture does not start providers or workers, and it
+does not enable Run worker, Merge task, or Cleanup task.
