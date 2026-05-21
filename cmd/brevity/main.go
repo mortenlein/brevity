@@ -32,10 +32,12 @@ type commandKind string
 
 const (
 	commandDashboard       commandKind = commandKind(commands.DashboardID)
+	commandRuntimeState    commandKind = commandKind(commands.RuntimeStateID)
 	commandProviderStatus  commandKind = commandKind(commands.ProviderStatusID)
 	commandProviderSet     commandKind = commandKind(commands.ProviderSetID)
 	commandProviderReset   commandKind = commandKind(commands.ProviderResetID)
 	commandContextRefresh  commandKind = commandKind(commands.TaskContextRefreshID)
+	commandTaskStatus      commandKind = commandKind(commands.TaskStatusID)
 	commandDoctor          commandKind = commandKind(commands.DoctorID)
 	commandTaskCleanup     commandKind = commandKind(commands.TaskCleanupID)
 	commandTaskNew         commandKind = commandKind(commands.TaskNewID)
@@ -65,6 +67,7 @@ type cliOptions struct {
 	dryRun     bool
 	profile    string
 	smoke      bool
+	json       bool
 }
 
 type actionCall func() ([]byte, error)
@@ -95,6 +98,9 @@ func parseOptions(args []string) (cliOptions, error) {
 	}
 	if len(args) > 0 && args[0] == "doctor" {
 		return parseDoctorOptions(args)
+	}
+	if len(args) > 0 && args[0] == "runtime" {
+		return parseRuntimeOptions(args)
 	}
 	if len(args) > 0 && args[0] == "task" {
 		return parseTaskOptions(args)
@@ -137,6 +143,23 @@ func parseOptions(args []string) (cliOptions, error) {
 		return cliOptions{}, fmt.Errorf("unexpected argument: %s", flags.Arg(0))
 	}
 
+	return options, nil
+}
+
+func parseRuntimeOptions(args []string) (cliOptions, error) {
+	if len(args) < 2 || args[1] != "state" {
+		return cliOptions{}, usageError(commands.RuntimeState)
+	}
+	options := cliOptions{kind: commandRuntimeState}
+	for _, arg := range args[2:] {
+		if arg != "--json" {
+			return cliOptions{}, usageError(commands.RuntimeState)
+		}
+		options.json = true
+	}
+	if !options.json {
+		return cliOptions{}, usageError(commands.RuntimeState)
+	}
 	return options, nil
 }
 
@@ -193,7 +216,13 @@ func parseProviderOptions(args []string) (cliOptions, error) {
 
 func parseTaskOptions(args []string) (cliOptions, error) {
 	if len(args) < 2 {
-		return cliOptions{}, fmt.Errorf("missing task command: supported commands: context refresh, runtime-info, runs, new, run, cleanup")
+		return cliOptions{}, fmt.Errorf("missing task command: supported commands: status, context refresh, runtime-info, runs, new, run, cleanup")
+	}
+	if args[1] == "status" {
+		if len(args) != 2 {
+			return cliOptions{}, usageError(commands.TaskStatus)
+		}
+		return cliOptions{kind: commandTaskStatus}, nil
 	}
 	if args[1] == "context" {
 		if len(args) != 4 || args[2] != "refresh" {
@@ -221,7 +250,7 @@ func parseTaskOptions(args []string) (cliOptions, error) {
 		return parseTaskRunsOptions(args)
 	}
 
-	return cliOptions{}, fmt.Errorf("unsupported task command %q: supported commands: context refresh, runtime-info, runs, new, run, cleanup", args[1])
+	return cliOptions{}, fmt.Errorf("unsupported task command %q: supported commands: status, context refresh, runtime-info, runs, new, run, cleanup", args[1])
 }
 
 func parseTaskNewOptions(args []string) (cliOptions, error) {
@@ -371,8 +400,12 @@ func runWithOptions(stdout io.Writer, client runtimeclient.Client, options cliOp
 
 func runWithContextOptions(ctx context.Context, stdout io.Writer, client runtimeclient.Client, options cliOptions) error {
 	switch options.kind {
+	case commandRuntimeState:
+		return routeRuntimeStateCommand(stdout)
 	case commandProviderStatus, commandProviderSet, commandProviderReset:
 		return routeProviderCommand(stdout, options)
+	case commandTaskStatus:
+		return routeTaskStatusCommand(stdout)
 	case commandContextRefresh:
 		return routeTaskContextCommand(stdout, client, options)
 	case commandDoctor:
@@ -412,6 +445,15 @@ func routeDashboardCommand(stdout io.Writer, client runtimeclient.Client) error 
 		return err
 	}
 	dashboard.Render(stdout, state)
+	return err
+}
+
+func routeRuntimeStateCommand(stdout io.Writer) error {
+	output, err := runtimeclient.NewNativeClient("").RuntimeStateJSON()
+	if err != nil {
+		return err
+	}
+	_, err = stdout.Write(append(output, '\n'))
 	return err
 }
 
@@ -721,6 +763,45 @@ func renderNativeProviderStatus(stdout io.Writer, service state.ProviderHealthSe
 		fmt.Fprintf(stdout, "%s\t%s\t%s\t%s\n", provider, status, updatedAt, note)
 	}
 	return nil
+}
+
+func routeTaskStatusCommand(stdout io.Writer) error {
+	store, err := state.NewStore("")
+	if err != nil {
+		return err
+	}
+	tasks, missing, err := state.LoadTasks(store)
+	if err != nil {
+		return err
+	}
+	fmt.Fprintln(stdout, "Task status")
+	fmt.Fprintf(stdout, "Path: %s\n", store.Path(state.TasksFile))
+	fmt.Fprintln(stdout)
+	if missing || len(tasks.Items) == 0 {
+		fmt.Fprintln(stdout, "No tasks tracked.")
+		return nil
+	}
+	fmt.Fprintf(stdout, "Tasks: %d tracked\n", len(tasks.Items))
+	fmt.Fprintln(stdout)
+	for _, task := range tasks.Items {
+		summary := task.ToContract()
+		status := summary.NormalizedState
+		if strings.TrimSpace(status) == "" {
+			status = summary.Status
+		}
+		if strings.TrimSpace(status) == "" {
+			status = "unknown"
+		}
+		fmt.Fprintf(stdout, "%s\t%s\t%s\t%s\n", summary.Slug, status, fallbackDash(summary.Branch), fallbackDash(summary.WorktreePath))
+	}
+	return nil
+}
+
+func fallbackDash(value string) string {
+	if strings.TrimSpace(value) == "" {
+		return "-"
+	}
+	return value
 }
 
 func summarizeNativeProviders(health state.ProviderHealthState) contracts.ProviderSummary {

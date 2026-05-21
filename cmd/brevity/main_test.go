@@ -483,6 +483,26 @@ func TestParseOptionsAcceptsTaskContextRefresh(t *testing.T) {
 	}
 }
 
+func TestParseOptionsAcceptsRuntimeStateJSON(t *testing.T) {
+	options, err := parseOptions([]string{"runtime", "state", "--json"})
+	if err != nil {
+		t.Fatalf("parseOptions returned error: %v", err)
+	}
+	if options.kind != commandRuntimeState || !options.json {
+		t.Fatalf("options = %#v, want runtime state json", options)
+	}
+}
+
+func TestParseOptionsAcceptsTaskStatus(t *testing.T) {
+	options, err := parseOptions([]string{"task", "status"})
+	if err != nil {
+		t.Fatalf("parseOptions returned error: %v", err)
+	}
+	if options.kind != commandTaskStatus {
+		t.Fatalf("kind = %q, want task-status", options.kind)
+	}
+}
+
 func TestParseOptionsAcceptsTaskCleanupWithForce(t *testing.T) {
 	options, err := parseOptions([]string{"task", "cleanup", "my-task", "--force"})
 	if err != nil {
@@ -1215,6 +1235,49 @@ func TestRunProviderStatusUsesNativeState(t *testing.T) {
 	}
 }
 
+func TestRunTaskStatusUsesNativeState(t *testing.T) {
+	repoRoot := tempRepoWithTasks(t, `[
+		{"slug":"my-task","status":"ready-for-worker","normalizedState":"ready-for-worker","branch":"task/my-task","worktreePath":"C:\\repo\\worktrees\\active\\my-task"}
+	]`)
+	t.Chdir(repoRoot)
+	client := &fakeRuntimeClient{}
+
+	var stdout bytes.Buffer
+	err := runWithOptions(&stdout, client, cliOptions{kind: commandTaskStatus})
+	if err != nil {
+		t.Fatalf("runWithOptions returned error: %v", err)
+	}
+	if len(client.calls) != 0 {
+		t.Fatalf("calls = %#v, want no PowerShell client calls", client.calls)
+	}
+	for _, want := range []string{"Task status", "Tasks: 1 tracked", "my-task\tready-for-worker\ttask/my-task\tC:\\repo\\worktrees\\active\\my-task"} {
+		if !strings.Contains(stdout.String(), want) {
+			t.Fatalf("output missing %q:\n%s", want, stdout.String())
+		}
+	}
+}
+
+func TestRunRuntimeStateJSONUsesNativeState(t *testing.T) {
+	repoRoot := tempRepoWithTasks(t, `[{"slug":"my-task","status":"blocked"}]`)
+	t.Chdir(repoRoot)
+	client := &fakeRuntimeClient{}
+
+	var stdout bytes.Buffer
+	err := runWithOptions(&stdout, client, cliOptions{kind: commandRuntimeState, json: true})
+	if err != nil {
+		t.Fatalf("runWithOptions returned error: %v", err)
+	}
+	if len(client.calls) != 0 {
+		t.Fatalf("calls = %#v, want no PowerShell client calls", client.calls)
+	}
+	output := stdout.String()
+	for _, want := range []string{`"schema":"brevity.runtime-state.v1"`, `"tracked":1`, `"slug":"my-task"`} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("output missing %q:\n%s", want, output)
+		}
+	}
+}
+
 func TestRunProviderResetReturnsErrorWhenNativeProviderUnknown(t *testing.T) {
 	repoRoot := tempRepoWithProviderHealth(t, `{"codex":{"status":"unknown"}}`)
 	t.Chdir(repoRoot)
@@ -1242,6 +1305,22 @@ func tempRepoWithProviderHealth(t *testing.T, health string) string {
 	}
 	if err := os.WriteFile(filepath.Join(brevityRoot, "provider-health.json"), []byte(health+"\n"), 0o644); err != nil {
 		t.Fatalf("WriteFile returned error: %v", err)
+	}
+	return repoRoot
+}
+
+func tempRepoWithTasks(t *testing.T, tasks string) string {
+	t.Helper()
+	repoRoot := t.TempDir()
+	brevityRoot := filepath.Join(repoRoot, ".brevity")
+	if err := os.MkdirAll(brevityRoot, 0o755); err != nil {
+		t.Fatalf("MkdirAll returned error: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(brevityRoot, "tasks.json"), []byte(tasks+"\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile tasks returned error: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(brevityRoot, "provider-health.json"), []byte(`{"codex":{"status":"healthy"}}`+"\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile provider health returned error: %v", err)
 	}
 	return repoRoot
 }

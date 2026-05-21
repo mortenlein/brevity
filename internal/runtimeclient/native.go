@@ -59,9 +59,7 @@ func (client NativeClient) RuntimeState() (contracts.RuntimeState, error) {
 		Groups:                map[string]any{},
 		OrphanedTaskWorktrees: []contracts.WorktreeRecord{},
 		ActiveWorktrees:       []contracts.WorktreeRecord{},
-		SuggestedNextActions: []string{
-			"Native Go runtime reader is experimental and partial; PowerShell remains source of truth.",
-		},
+		SuggestedNextActions:  []string{"No immediate runtime action suggested."},
 	}
 
 	store, err := state.NewStore(repoRoot)
@@ -82,10 +80,11 @@ func (client NativeClient) RuntimeState() (contracts.RuntimeState, error) {
 		runtimeState.SuggestedNextActions = append(runtimeState.SuggestedNextActions, "No .brevity\\provider-health.json found.")
 	}
 
-	tasks, missingTasks, err := readTasks(filepath.Join(repoRoot, ".brevity", "tasks.json"))
+	taskStore, missingTasks, err := state.LoadTasks(store)
 	if err != nil {
 		return contracts.RuntimeState{}, err
 	}
+	tasks := taskStore.ToContracts()
 	if missingTasks {
 		runtimeState.SuggestedNextActions = append(runtimeState.SuggestedNextActions, "No .brevity\\tasks.json found.")
 	}
@@ -170,24 +169,6 @@ func (client NativeClient) TaskRunsCompactJSON() ([]byte, error) {
 
 func nativeUnsupported(command string) error {
 	return fmt.Errorf("native json source is read-only and does not support %s; use powershell", command)
-}
-
-func readTasks(path string) ([]contracts.TaskSummary, bool, error) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return []contracts.TaskSummary{}, true, nil
-		}
-		return nil, false, fmt.Errorf("read tasks: %w", err)
-	}
-	var tasks []contracts.TaskSummary
-	if err := json.Unmarshal(data, &tasks); err != nil {
-		return nil, false, fmt.Errorf("parse tasks: %w", err)
-	}
-	if tasks == nil {
-		tasks = []contracts.TaskSummary{}
-	}
-	return tasks, false, nil
 }
 
 func readLatestRuns(path string) (map[string]json.RawMessage, bool, error) {
