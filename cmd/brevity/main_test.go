@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -178,6 +179,40 @@ func TestTaskPreflightHumanBlockedOutput(t *testing.T) {
 	output := stdout.String()
 	if !strings.Contains(output, "status: blocked") || !strings.Contains(output, "task does not exist") {
 		t.Fatalf("unexpected output:\n%s", output)
+	}
+}
+
+func TestTaskStartJSONUsesNativeService(t *testing.T) {
+	root := taskPreflightFixture(t, "alpha", "planned", state.StatusHealthy)
+	previous, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.Chdir(previous)
+	if err := os.Chdir(root); err != nil {
+		t.Fatal(err)
+	}
+
+	client := &fakeRuntimeClient{}
+	var stdout bytes.Buffer
+	if err := runWithOptions(&stdout, client, cliOptions{kind: commandTaskStart, slug: "alpha", json: true}); err != nil {
+		t.Fatalf("runWithOptions returned error: %v", err)
+	}
+	output := stdout.String()
+	for _, want := range []string{`"schema":"brevity.command-result.v1"`, `"command":"task start"`, `"slug":"alpha"`, `"newState":"ready-for-worker"`, `"noExecution":true`} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("output missing %q:\n%s", want, output)
+		}
+	}
+	if len(client.calls) != 0 {
+		t.Fatalf("PowerShell/fake client was called: %v", client.calls)
+	}
+	data, err := os.ReadFile(filepath.Join(root, state.DirectoryName, state.TasksFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), `"normalizedState": "ready-for-worker"`) {
+		t.Fatalf("tasks.json was not updated:\n%s", data)
 	}
 }
 
@@ -852,17 +887,17 @@ func TestParseOptionsRejectsTaskNewMissingSlug(t *testing.T) {
 	}
 }
 
-func TestParseOptionsRejectsTaskRunWithoutExecute(t *testing.T) {
+func TestParseOptionsRejectsTaskRunWithoutPlanOrExecute(t *testing.T) {
 	_, err := parseOptions([]string{"task", "run", "my-task", "--smoke"})
 	if err == nil {
 		t.Fatal("parseOptions returned nil error")
 	}
-	if !strings.Contains(err.Error(), "requires --execute") {
+	if !strings.Contains(err.Error(), "requires --plan or --execute") {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
 
-func TestRunTaskRunFailsBeforeClientWithoutExecute(t *testing.T) {
+func TestRunTaskRunFailsBeforeClientWithoutPlanOrExecute(t *testing.T) {
 	client := &fakeRuntimeClient{}
 
 	var stdout bytes.Buffer
@@ -870,7 +905,7 @@ func TestRunTaskRunFailsBeforeClientWithoutExecute(t *testing.T) {
 	if err == nil {
 		t.Fatal("runWithOptions returned nil error")
 	}
-	if !strings.Contains(err.Error(), "requires --execute") {
+	if !strings.Contains(err.Error(), "requires --plan or --execute") {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if len(client.calls) != 0 {
@@ -1152,18 +1187,25 @@ func TestRunTaskRunsMaintenanceFailsBeforeClientWithoutDryRun(t *testing.T) {
 }
 
 func TestRunTaskContextRefreshUsesClientAndRendersResult(t *testing.T) {
-	client := &fakeRuntimeClient{
-		contextRefresh: []byte(`{"schema":"brevity.command-result.v1","command":"task context refresh","success":true,"severity":"info","suggestedNextActions":["Refresh runtime state."],"payload":{"slug":"my-task","refreshed":true,"contextPath":"C:\\repo\\worktrees\\active\\my-task\\.brevity\\context","generatedAt":"2026-05-19T13:00:00Z","normalizedState":"ready-for-worker"}}`),
+	root := taskContextRefreshFixture(t, "my-task")
+	previous, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
 	}
+	defer os.Chdir(previous)
+	if err := os.Chdir(root); err != nil {
+		t.Fatal(err)
+	}
+	client := &fakeRuntimeClient{}
 
 	var stdout bytes.Buffer
-	err := runWithOptions(&stdout, client, cliOptions{kind: commandContextRefresh, slug: "my-task"})
+	err = runWithOptions(&stdout, client, cliOptions{kind: commandContextRefresh, slug: "my-task"})
 	if err != nil {
 		t.Fatalf("runWithOptions returned error: %v", err)
 	}
 
-	if len(client.calls) != 1 || client.calls[0] != "context-refresh:my-task" {
-		t.Fatalf("calls = %#v, want context refresh only", client.calls)
+	if len(client.calls) != 0 {
+		t.Fatalf("PowerShell/fake client was called: %v", client.calls)
 	}
 
 	output := stdout.String()
@@ -1171,33 +1213,77 @@ func TestRunTaskContextRefreshUsesClientAndRendersResult(t *testing.T) {
 		"Task context refresh: success",
 		"slug: my-task",
 		"refreshed: true",
-		"contextPath: C:\\repo\\worktrees\\active\\my-task\\.brevity\\context",
-		"generatedAt: 2026-05-19T13:00:00Z",
+		"promptPath:",
 		"normalizedState: ready-for-worker",
-		"- Refresh runtime state.",
+		"promptRefreshStatus: fresh",
 	} {
 		if !strings.Contains(output, want) {
 			t.Fatalf("output missing %q:\n%s", want, output)
 		}
 	}
+	prompt, err := os.ReadFile(filepath.Join(root, "worktree", "prompt.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(prompt), "Implement fixture behavior.") {
+		t.Fatalf("prompt was not materialized from vault spec:\n%s", prompt)
+	}
 }
 
 func TestRunTaskContextRefreshReturnsErrorWhenResultFails(t *testing.T) {
-	client := &fakeRuntimeClient{
-		contextRefresh: []byte(`{"schema":"brevity.command-result.v1","command":"task context refresh","success":false,"severity":"error","errors":[{"code":"missing-task","message":"Task not found: nope"}],"payload":{"slug":"nope","refreshed":false,"contextPath":"","generatedAt":"2026-05-19T13:00:00Z"}}`),
+	root := taskContextRefreshFixture(t, "my-task")
+	previous, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
 	}
+	defer os.Chdir(previous)
+	if err := os.Chdir(root); err != nil {
+		t.Fatal(err)
+	}
+	client := &fakeRuntimeClient{}
 
 	var stdout bytes.Buffer
-	err := runWithOptions(&stdout, client, cliOptions{kind: commandContextRefresh, slug: "nope"})
+	err = runWithOptions(&stdout, client, cliOptions{kind: commandContextRefresh, slug: "nope"})
 	if err == nil {
 		t.Fatal("runWithOptions returned nil error")
 	}
-	if !strings.Contains(err.Error(), "task context refresh reported success=false") {
+	if !strings.Contains(err.Error(), "preflight blocked") {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if !strings.Contains(stdout.String(), "error: missing-task: Task not found: nope") {
+	if !strings.Contains(stdout.String(), "error: preflight-blocked") {
 		t.Fatalf("output missing structured error:\n%s", stdout.String())
 	}
+}
+
+func taskContextRefreshFixture(t *testing.T, slug string) string {
+	t.Helper()
+	root := t.TempDir()
+	worktree := filepath.Join(root, "worktree")
+	vault := filepath.Join(root, "vault")
+	for _, dir := range []string{filepath.Join(root, ".brevity"), worktree, filepath.Join(vault, "tasks")} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writeMainTestFile(t, filepath.Join(root, ".brevity", "config.json"), `{"vaultPath":"`+jsonPath(vault)+`"}`+"\n")
+	writeMainTestFile(t, filepath.Join(root, ".brevity", "provider-health.json"), `{"codex":{"status":"healthy"}}`+"\n")
+	writeMainTestFile(t, filepath.Join(vault, "project.md"), "# Project\nFixture project.\n")
+	writeMainTestFile(t, filepath.Join(vault, "architecture.md"), "# Architecture\nFixture architecture.\n")
+	writeMainTestFile(t, filepath.Join(vault, "tasks", slug+".md"), "# Goal\nImplement fixture behavior.\n")
+	tasks := fmt.Sprintf(`[{"slug":%q,"status":"ready-for-worker","normalizedState":"ready-for-worker","worktreePath":%q,"promptPath":%q,"provider":"codex"}]`, slug, worktree, filepath.Join(worktree, "prompt.md"))
+	writeMainTestFile(t, filepath.Join(root, ".brevity", "tasks.json"), tasks+"\n")
+	return root
+}
+
+func writeMainTestFile(t *testing.T, path string, contents string) {
+	t.Helper()
+	if err := os.WriteFile(path, []byte(contents), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func jsonPath(path string) string {
+	return strings.ReplaceAll(path, `\`, `\\`)
 }
 
 func TestRunTaskCleanupUsesClientAndRendersResult(t *testing.T) {
@@ -1318,34 +1404,30 @@ func TestRunTaskNewReturnsErrorWhenResultFails(t *testing.T) {
 	}
 }
 
-func TestRunTaskRunUsesClientAndRendersResult(t *testing.T) {
-	client := &fakeRuntimeClient{
-		taskRun: []byte(`{"schema":"brevity.command-result.v1","command":"task run","success":true,"severity":"info","suggestedNextActions":["Refresh runtime state."],"payload":{"slug":"my-task","runId":"20260519T170000Z-my-task","provider":"smoke","profile":"smoke","worktreePath":"C:\\repo\\worktrees\\active\\brevity-my-task","promptPath":"C:\\repo\\worktrees\\active\\brevity-my-task\\prompt.md","executionMode":"sync","startedAt":"2026-05-19T17:00:00Z","finishedAt":"2026-05-19T17:00:01Z","exitCode":0,"workerStatus":"succeeded","failureType":null,"logPath":"C:\\repo\\.brevity\\logs\\my-task\\20260519T170000Z-my-task.log"}}`),
-	}
+func TestRunTaskRunUsesNativeExecutionAndRendersResult(t *testing.T) {
+	repoRoot := tempRepoWithFakeProvider(t, 0)
+	t.Chdir(repoRoot)
+	client := &fakeRuntimeClient{}
 
 	var stdout bytes.Buffer
-	err := runWithOptions(&stdout, client, cliOptions{kind: commandTaskRun, slug: "my-task", execute: true, profile: "smoke", smoke: true})
+	err := runWithOptions(&stdout, client, cliOptions{kind: commandTaskRun, slug: "my-task", execute: true, smoke: true})
 	if err != nil {
-		t.Fatalf("runWithOptions returned error: %v", err)
+		t.Fatalf("runWithOptions returned error: %v\n%s", err, stdout.String())
 	}
 
-	if len(client.calls) != 1 || client.calls[0] != "task-run:my-task:smoke:true" {
-		t.Fatalf("calls = %#v, want task run only", client.calls)
+	if len(client.calls) != 0 {
+		t.Fatalf("calls = %#v, want no PowerShell client calls", client.calls)
 	}
 
 	output := stdout.String()
 	for _, want := range []string{
 		"Task run: success",
 		"slug: my-task",
-		"provider: smoke",
-		"profile: smoke",
+		"provider: antigravity",
+		"profile: default",
 		"workerStatus: succeeded",
-		"runId: 20260519T170000Z-my-task",
-		"startedAt: 2026-05-19T17:00:00Z",
-		"finishedAt: 2026-05-19T17:00:01Z",
 		"exitCode: 0",
-		"logPath: C:\\repo\\.brevity\\logs\\my-task\\20260519T170000Z-my-task.log",
-		"- Refresh runtime state.",
+		".brevity",
 	} {
 		if !strings.Contains(output, want) {
 			t.Fatalf("output missing %q:\n%s", want, output)
@@ -1354,9 +1436,9 @@ func TestRunTaskRunUsesClientAndRendersResult(t *testing.T) {
 }
 
 func TestRunTaskRunReturnsErrorWhenWorkerFails(t *testing.T) {
-	client := &fakeRuntimeClient{
-		taskRun: []byte(`{"schema":"brevity.command-result.v1","command":"task run","success":false,"severity":"error","errors":[{"code":"worker-exit-failed","message":"Worker failed."}],"suggestedNextActions":["Review the worker log."],"payload":{"slug":"my-task","runId":"run-failed","provider":"codex","profile":"default","startedAt":"2026-05-19T17:00:00Z","finishedAt":"2026-05-19T17:00:01Z","exitCode":1,"workerStatus":"failed","failureType":"worker-exit-failed","logPath":"C:\\repo\\.brevity\\logs\\my-task\\run-failed.log"}}`),
-	}
+	repoRoot := tempRepoWithFakeProvider(t, 7)
+	t.Chdir(repoRoot)
+	client := &fakeRuntimeClient{}
 
 	var stdout bytes.Buffer
 	err := runWithOptions(&stdout, client, cliOptions{kind: commandTaskRun, slug: "my-task", execute: true})
@@ -1370,9 +1452,9 @@ func TestRunTaskRunReturnsErrorWhenWorkerFails(t *testing.T) {
 	for _, want := range []string{
 		"Task run: failure",
 		"workerStatus: failed",
-		"exitCode: 1",
-		"failureType: worker-exit-failed",
-		"error: worker-exit-failed: Worker failed.",
+		"exitCode: 7",
+		"failureType: provider-exit-nonzero",
+		"error: provider-exit-nonzero:",
 	} {
 		if !strings.Contains(output, want) {
 			t.Fatalf("output missing %q:\n%s", want, output)
@@ -1545,6 +1627,38 @@ func tempRepoWithTasksAndRuns(t *testing.T, tasks string, runs string) string {
 	repoRoot := tempRepoWithTasks(t, tasks)
 	if err := os.WriteFile(filepath.Join(repoRoot, ".brevity", "runs.jsonl"), []byte(runs), 0o644); err != nil {
 		t.Fatalf("WriteFile runs returned error: %v", err)
+	}
+	return repoRoot
+}
+
+func tempRepoWithFakeProvider(t *testing.T, exitCode int) string {
+	t.Helper()
+	repoRoot := tempRepoWithTasks(t, `[
+		{"slug":"my-task","status":"ready-for-worker","normalizedState":"ready-for-worker","provider":"antigravity","worktreePath":"","promptPath":""}
+	]`)
+	worktree := filepath.Join(repoRoot, "worktrees", "active", "my task")
+	if err := os.MkdirAll(worktree, 0o755); err != nil {
+		t.Fatalf("MkdirAll worktree returned error: %v", err)
+	}
+	promptPath := filepath.Join(worktree, "prompt.md")
+	if err := os.WriteFile(promptPath, []byte("fake prompt\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile prompt returned error: %v", err)
+	}
+	tasks := fmt.Sprintf(`[{"slug":"my-task","status":"ready-for-worker","normalizedState":"ready-for-worker","provider":"antigravity","branch":"task/my-task","worktreePath":%q,"promptPath":%q}]`, worktree, promptPath)
+	if err := os.WriteFile(filepath.Join(repoRoot, ".brevity", "tasks.json"), []byte(tasks+"\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile tasks returned error: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(repoRoot, ".brevity", "provider-health.json"), []byte(`{"antigravity":{"status":"healthy"}}`+"\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile provider health returned error: %v", err)
+	}
+	fakeProvider := filepath.Join(repoRoot, "fake-provider.cmd")
+	script := fmt.Sprintf("@echo off\r\necho fake stdout\r\necho fake stderr 1>&2\r\nexit /b %d\r\n", exitCode)
+	if err := os.WriteFile(fakeProvider, []byte(script), 0o755); err != nil {
+		t.Fatalf("WriteFile fake provider returned error: %v", err)
+	}
+	config := fmt.Sprintf(`{"defaultProvider":"antigravity","providers":{"antigravity":{"command":%q}}}`, fakeProvider)
+	if err := os.WriteFile(filepath.Join(repoRoot, ".brevity", "config.json"), []byte(config+"\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile config returned error: %v", err)
 	}
 	return repoRoot
 }

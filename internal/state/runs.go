@@ -9,6 +9,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/mortenlein/brevity/internal/state/locking"
 )
 
 const RunsFile = "runs.jsonl"
@@ -41,6 +43,45 @@ type RunRecord struct {
 	Source               string          `json:"source,omitempty"`
 	Raw                  json.RawMessage `json:"-"`
 	lineNumber           int
+}
+
+type AppendRunOptions struct {
+	LockOptions locking.Options
+}
+
+func AppendRun(store Store, record RunRecord, options AppendRunOptions) error {
+	lockOptions := options.LockOptions
+	if lockOptions.Timeout == 0 {
+		lockOptions.Timeout = 5 * time.Second
+	}
+	lock, err := locking.Acquire(store.LockPath(), lockOptions)
+	if err != nil {
+		return fmt.Errorf("runs metadata locked: %w", err)
+	}
+	defer lock.Release()
+
+	if _, _, err := LoadRuns(store, time.Now().UTC()); err != nil {
+		return err
+	}
+	if err := os.MkdirAll(store.BrevityRoot(), 0o755); err != nil {
+		return fmt.Errorf("create state directory: %w", err)
+	}
+	line, err := json.Marshal(record)
+	if err != nil {
+		return fmt.Errorf("marshal run record: %w", err)
+	}
+	file, err := os.OpenFile(store.Path(RunsFile), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	if err != nil {
+		return fmt.Errorf("open runs.jsonl: %w", err)
+	}
+	defer file.Close()
+	if _, err := file.Write(append(line, '\n')); err != nil {
+		return fmt.Errorf("append runs.jsonl: %w", err)
+	}
+	if err := file.Sync(); err != nil {
+		return fmt.Errorf("flush runs.jsonl: %w", err)
+	}
+	return nil
 }
 
 func LoadRuns(store Store, now time.Time) (RunHistory, bool, error) {

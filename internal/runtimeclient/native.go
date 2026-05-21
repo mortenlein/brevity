@@ -2,6 +2,7 @@ package runtimeclient
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -237,10 +238,26 @@ func (client NativeClient) TaskNewJSON(slug string) ([]byte, error) {
 	return nil, nativeUnsupported("task new")
 }
 func (client NativeClient) TaskRunJSON(slug string, profile string, smoke bool) ([]byte, error) {
-	return nil, nativeUnsupported("task run")
+	store, err := state.NewStore(client.RepoRoot)
+	if err != nil {
+		return nil, err
+	}
+	result, err := actions.TaskRunExecuteService{Store: store, Now: client.Now}.Execute(context.Background(), slug, profile)
+	if err != nil {
+		return nil, err
+	}
+	return json.Marshal(result)
 }
 func (client NativeClient) TaskRunPlanJSON(slug string, profile string) ([]byte, error) {
-	return nil, nativeUnsupported("task run plan")
+	store, err := state.NewStore(client.RepoRoot)
+	if err != nil {
+		return nil, err
+	}
+	result, err := actions.TaskRunPlanService{Store: store, Now: client.Now}.Plan(slug, profile)
+	if err != nil {
+		return nil, err
+	}
+	return json.Marshal(result)
 }
 func (client NativeClient) TaskRuntimeInfoJSON(slug string) ([]byte, error) {
 	result, err := client.TaskRuntimeInfo(slug)

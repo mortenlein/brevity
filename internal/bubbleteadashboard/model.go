@@ -345,17 +345,6 @@ func (model Model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return model, nil
 		case "enter":
 			action := model.actionDescriptors()[model.clampedPaletteSelection()]
-			if action.ID == ActionRunWorker {
-				cmd := model.commandForAction(action)
-				if cmd == nil {
-					model.paletteOpen = false
-					model.actionPreview = &action
-					return model, nil
-				}
-				model.paletteOpen = false
-				model.startCommandRun(action)
-				return model, cmd
-			}
 			if !action.Enabled {
 				model.paletteOpen = false
 				model.actionPreview = &action
@@ -1371,6 +1360,16 @@ func (model Model) confirmationForAction(action ActionDescriptor) (pscontract.Co
 			slug,
 		)
 	}
+	if action.ID == ActionRunWorker {
+		task, runnable := model.selectedRunnableTask()
+		if !runnable {
+			return pscontract.ConfirmationState{}, false
+		}
+		confirmation.Prompt = fmt.Sprintf(
+			"Run worker for %s executes the native task-run provider command. Review provider/profile and logs after completion.",
+			task.Slug,
+		)
+	}
 	return confirmation, true
 }
 
@@ -1386,6 +1385,15 @@ func (model Model) renderConfirmation(usedRows ...int) string {
 		if model.confirmAction.ID == ActionStartTask {
 			args := append([]string{"brevity", "task", "start"}, model.confirmArgs...)
 			command = strings.Join(args, " ")
+		} else if model.confirmAction.ID == ActionRunWorker {
+			args := []string{"brevity", "task", "run"}
+			if task, ok := model.selectedRunnableTask(); ok {
+				args = append(args, task.Slug, "--execute")
+				if profile := taskProfile(task); profile != "" {
+					args = append(args, "--profile", profile)
+				}
+			}
+			command = strings.Join(args, " ")
 		} else {
 			invocation, err := pscontract.BuildInvocation(model.confirmAction.Command, `.\\brevity.ps1`, model.confirmArgs, false)
 			if err == nil {
@@ -1396,6 +1404,9 @@ func (model Model) renderConfirmation(usedRows ...int) string {
 	authority := "PowerShell is authoritative; Go does not mutate task state"
 	if model.confirmAction != nil && model.confirmAction.ID == ActionStartTask {
 		authority = "native Go task start service"
+	}
+	if model.confirmAction != nil && model.confirmAction.ID == ActionRunWorker {
+		authority = "native Go task-run execution service"
 	}
 	lines := []string{
 		"  action        " + actionLabel,

@@ -1193,18 +1193,31 @@ func runTaskRun(stdout io.Writer, client runtimeclient.Client, options cliOption
 		return fmt.Errorf("brevity task run requires --plan or --execute")
 	}
 
-	return runPowerShellAction(stdout, actionSpec{
-		call: func() ([]byte, error) {
-			return client.TaskRunJSON(options.slug, options.profile, options.smoke)
-		},
-		render: actions.RenderTaskRunResult,
-		check: func(result contracts.CommandResult) error {
-			if isWorkerFailure(result) {
-				return fmt.Errorf("%s worker failed", result.Command)
-			}
-			return nil
-		},
-	})
+	output, err := runtimeclient.NewNativeClient("").TaskRunJSON(options.slug, options.profile, options.smoke)
+	result, parseErr := contracts.ParseCommandResult(output)
+	if parseErr != nil {
+		if err != nil {
+			return fmt.Errorf("%v; additionally failed to parse command result: %w", err, parseErr)
+		}
+		return parseErr
+	}
+	if options.json {
+		if _, writeErr := stdout.Write(append(output, '\n')); writeErr != nil {
+			return writeErr
+		}
+	} else if renderErr := actions.RenderTaskRunResult(stdout, result); renderErr != nil {
+		return renderErr
+	}
+	if err != nil {
+		return err
+	}
+	if !result.Success {
+		return fmt.Errorf("%s reported success=false", result.Command)
+	}
+	if isWorkerFailure(result) {
+		return fmt.Errorf("%s worker failed", result.Command)
+	}
+	return nil
 }
 
 func runTaskRunPlan(stdout io.Writer, options cliOptions) error {

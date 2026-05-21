@@ -58,6 +58,7 @@ type DashboardCommandBridge interface {
 	ExecuteTaskStart(slug string, repoRoot string) pscontract.ExecutionResult
 	ExecuteContextRefresh(slug string, repoRoot string) pscontract.ExecutionResult
 	LoadTaskRunPlan(slug string, profile string, repoRoot string) pscontract.ExecutionResult
+	ExecuteTaskRun(slug string, profile string, repoRoot string) pscontract.ExecutionResult
 }
 
 type RuntimeClientCommandBridge struct {
@@ -164,6 +165,29 @@ func (bridge RuntimeClientCommandBridge) LoadTaskRunPlan(slug string, profile st
 	return result
 }
 
+func (bridge RuntimeClientCommandBridge) ExecuteTaskRun(slug string, profile string, repoRoot string) pscontract.ExecutionResult {
+	started := time.Now()
+	output, err := runtimeclient.NewNativeClient(repoRoot).TaskRunJSON(slug, profile, false)
+	result := pscontract.ExecutionResult{
+		ActionID:            pscontract.ActionRunWorker,
+		CommandDisplayLabel: "Run worker",
+		StartedAt:           started,
+		CompletedAt:         time.Now(),
+		Stdout:              string(output),
+		ExitCode:            0,
+		RefreshAfter:        true,
+	}
+	if err != nil {
+		result.ExitCode = 1
+		result.Error = err.Error()
+	}
+	var commandResult contracts.CommandResult
+	if parseErr := json.Unmarshal(output, &commandResult); parseErr == nil && !commandResult.Success {
+		result.ExitCode = 1
+	}
+	return result
+}
+
 func (bridge RuntimeClientCommandBridge) scriptPath() string {
 	switch client := bridge.Client.(type) {
 	case runtimeclient.PowerShellClient:
@@ -246,13 +270,15 @@ func (model Model) actionDescriptors() []ActionDescriptor {
 		case ActionRunWorker:
 			if runnable {
 				actions[index].Enabled = true
-				actions[index].Kind = ActionKindDryRun
-				actions[index].Description = "native plan preview for " + runTask.Slug
-				actions[index].Command.Arguments = []string{"--plan"}
+				actions[index].Kind = ActionKindMutating
+				actions[index].Description = "native provider execution for " + runTask.Slug
+				actions[index].ConfirmationRequired = true
+				actions[index].Command.Arguments = []string{"--execute"}
 				actions[index].Command.Provider = taskProvider(runTask)
 				actions[index].Command.Profile = taskProfile(runTask)
-				actions[index].Command.Enabled = false
-				actions[index].Command.DisabledReason = "dry-run plan only; worker/provider execution is disabled"
+				actions[index].Command.Enabled = true
+				actions[index].Command.DisabledReason = ""
+				actions[index].Command.SafetyWarning = "Native Go will execute the provider command shown by the task-run plan."
 			} else {
 				actions[index].Enabled = false
 				actions[index].Description = "plan preview only; select a runnable task row"
@@ -302,7 +328,7 @@ func (model Model) commandForAction(action ActionDescriptor) tea.Cmd {
 		if !ok {
 			return nil
 		}
-		return model.loadTaskRunPlanCmd(task.Slug, taskProfile(task))
+		return model.executeTaskRunCmd(task.Slug, taskProfile(task))
 	default:
 		return nil
 	}
@@ -354,6 +380,14 @@ func (model Model) loadTaskRunPlanCmd(slug string, profile string) tea.Cmd {
 	repoRoot := model.state.RepoRoot
 	return func() tea.Msg {
 		return commandResultMsg{id: runID, result: model.dashboardCommandBridge().LoadTaskRunPlan(slug, profile, repoRoot)}
+	}
+}
+
+func (model Model) executeTaskRunCmd(slug string, profile string) tea.Cmd {
+	runID := model.nextCommandID + 1
+	repoRoot := model.state.RepoRoot
+	return func() tea.Msg {
+		return commandResultMsg{id: runID, result: model.dashboardCommandBridge().ExecuteTaskRun(slug, profile, repoRoot)}
 	}
 }
 

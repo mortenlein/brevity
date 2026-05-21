@@ -157,22 +157,24 @@ func TestRunWorkerDryRunFixtureIntegrationDoesNotExecute(t *testing.T) {
 
 	updated, cmd := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	model = updated.(Model)
-	if cmd == nil {
-		t.Fatal("Run worker dry-run fixture did not request execution plan")
+	if cmd != nil {
+		t.Fatal("Run worker fixture should require confirmation before execution")
 	}
-	if model.commandRun == nil || model.confirmation != nil {
-		t.Fatalf("Run worker dry-run did not enter plan loading state: command=%#v confirmation=%#v", model.commandRun, model.confirmation)
+	if model.confirmation == nil {
+		t.Fatal("Run worker fixture did not open confirmation")
+	}
+	updated, cmd = model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model = updated.(Model)
+	if cmd == nil {
+		t.Fatal("Run worker fixture confirmation did not execute")
 	}
 	updated, _ = model.Update(cmd())
 	model = updated.(Model)
 	output := plainView(model.View())
-	for _, want := range []string{"Run Worker Execution Plan", fixtureStartTaskSlug, "no worker/provider launched", "dry-run       yes", "PowerShell-owned execution plan"} {
+	for _, want := range []string{"Run worker", fixtureStartTaskSlug} {
 		if !strings.Contains(output, want) {
-			t.Fatalf("fixture dry-run preview missing %q:\n%s", want, output)
+			t.Fatalf("fixture run output missing %q:\n%s", want, output)
 		}
-	}
-	if strings.Contains(output, "task run --execute") {
-		t.Fatal("fixture dry-run unexpectedly prepared an executable command")
 	}
 }
 

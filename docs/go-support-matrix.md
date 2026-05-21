@@ -6,26 +6,30 @@ fallback for orchestration behavior, but Go now owns provider health state
 mutation, task/runtime state reading, run-history inspection, read-only
 doctor/detail diagnostics, cleanup/orphan inspection reports, native task
 mutation preflight gates, `task start <slug>` metadata mutation, native
-task prompt/context refresh, and native task-run planning.
+task prompt/context refresh, native task-run planning, and native task-run
+provider execution.
 
 The original PowerShell `.\brevity.ps1 tui` command is a lightweight read-only
 runtime/operator scaffold. The Go dashboard and `--watch` mode are the active
 frontend direction for the future operator UX. The default dashboard source
 still consumes PowerShell-produced runtime-state data for compatibility, while
 `runtime state --json`, `task status`, and `--json-source native` read runtime
-state directly from Go. The Bubble Tea dashboard can run confirmed Start task
-and Refresh context through native Go. Run Worker uses the native Go execution
-envelope for dry-run/plan previews only; provider execution is still disabled
-from Go.
+state directly from Go. The Bubble Tea dashboard can run confirmed Start task,
+Refresh context, and Run Worker through native Go. Run Worker uses the native
+task-run plan/preflight envelope, then executes the provider command with
+argv-style `os/exec`, writes logs, appends `.brevity/runs.jsonl`, and updates
+task runtime metadata.
 
 Go-owned `.brevity` writes must go through `internal/state` and the advisory
-`.brevity/state.lock` protocol. Provider execution and worker execution are not
-implemented by this migration.
+`.brevity/state.lock` protocol. Provider execution and worker execution for
+`task run --execute` are implemented natively; merge, cleanup execution, and
+task-new execution are not part of this migration.
 
 Native preflight is the safety contract for Go-owned task mutation.
 Preflight is read-only: it does not create/delete worktrees, create/delete
 branches, write `tasks.json`, or launch providers/workers. PowerShell still
-owns mutation execution for task new/run/merge/cleanup flows.
+owns mutation execution for task new/merge/cleanup flows and remains a legacy
+reference/fallback for task run.
 
 The dashboard UX and interactive action roadmap is documented in
 [`docs/go-dashboard-ux-plan.md`](go-dashboard-ux-plan.md).
@@ -58,7 +62,7 @@ metadata. It does not mean Go writes those files itself.
 | `go run ./cmd/brevity task runs <slug>` | Native read-only inspection | Go `.brevity/runs.jsonl` reader | Read-only | Implemented | Displays recent run-index records for one task without PowerShell. |
 | `go run ./cmd/brevity task run <slug> --plan --json [--profile <profile>]` | Native execution planning | Go task-run plan service | Read-only | Implemented | Emits `brevity.command-result.v1` with a native `brevity.task-run-plan.v1` execution envelope: provider/profile, prompt freshness, planned run/log paths, argv command shape, expected future mutations/files, warnings, and blockers. It never launches providers/workers and never writes `.brevity\runs.jsonl`. |
 | `go run ./cmd/brevity task run <slug> --plan [--profile <profile>]` | Native execution planning | Go task-run plan service | Read-only | Implemented | Human rendering of the same native execution envelope; exits non-zero when plan blockers exist. |
-| `go run ./cmd/brevity task run <slug> --execute [--profile <profile>] [--smoke]` | PowerShell-backed action | PowerShell command-result JSON | Mutating | Implemented legacy fallback | Starts a synchronous worker run through PowerShell and records run metadata. Native Go execution is not implemented. |
+| `go run ./cmd/brevity task run <slug> --execute [--profile <profile>] [--smoke]` | Native provider execution | Go preflight + task-run plan + `os/exec` + `.brevity/state.lock` | Mutating | Implemented | Requires the native plan to be unblocked, executes the planned provider argv without shell concatenation, writes `.brevity/logs/<slug>/`, appends `.brevity/runs.jsonl`, updates task runtime metadata, and emits `brevity.command-result.v1`. Tests use fake providers only. |
 | `go run ./cmd/brevity task runs reconcile --dry-run` | Read-only inspection | PowerShell command-result JSON | Read-only | Implemented | Reports stale or incomplete run records; dry-run only. |
 | `go run ./cmd/brevity task runs retention --dry-run` | Read-only inspection | PowerShell command-result JSON | Read-only | Implemented | Reports run-index retention signals; dry-run only. |
 | `go run ./cmd/brevity task runs compact --dry-run` | Read-only inspection | PowerShell command-result JSON | Read-only | Implemented | Reports a compaction plan; dry-run only. |
@@ -82,16 +86,17 @@ metadata. It does not mean Go writes those files itself.
   native task status, task runtime/detail inspection, doctor diagnostics,
   cleanup/orphan inspection reports, task mutation preflight gates,
   `task run --plan` execution envelopes, and the Bubble Tea native source.
-- PowerShell remains the authority for task new/run/merge/cleanup execution,
-  worker/provider execution, and legacy compatibility. Its task-run planning and
-  prompt/context refresh behavior are now reference/fallback rather than the Go
-  CLI path.
+- PowerShell remains the authority for task new/merge/cleanup execution and
+  legacy compatibility. Its task-run execution behavior is now
+  reference/fallback rather than the Go CLI path.
 - Every Go task mutation must pass native preflight first. The
   `brevity.task-preflight.v1` JSON payload is the contract shared by CLI, TUI,
   and operator flows.
 - Native Start task does not create/delete branches, create/delete worktrees, or
   run providers/workers. Native Refresh context writes only the task prompt,
-  bounded worktree context files, and task refresh metadata.
+  bounded worktree context files, and task refresh metadata. Native Task run
+  writes only provider logs, run-history records, and task runtime metadata; it
+  does not merge, cleanup, delete branches, or delete worktrees.
 - Provider health writes use `.brevity/state.lock` with exclusive create,
   `pid` and UTC `createdAt` contents, timeout waiting, and stale-lock cleanup
   when configured by tests/services.

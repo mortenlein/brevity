@@ -62,9 +62,13 @@ type fakeCommandBridge struct {
 	startCalls   int
 	startSlug    string
 	startRepo    string
+	contextCalls int
+	contextSlug  string
+	contextRepo  string
 	planCalls    int
 	planSlug     string
 	planProfile  string
+	planRepo     string
 }
 
 func (bridge *fakeCommandBridge) RefreshRuntimeState() (contracts.RuntimeState, error) {
@@ -109,12 +113,40 @@ func (bridge *fakeCommandBridge) ExecuteTaskStart(slug string, repoRoot string) 
 	return bridge.result
 }
 
-func (bridge *fakeCommandBridge) LoadTaskRunPlan(slug string, profile string) pscontract.ExecutionResult {
+func (bridge *fakeCommandBridge) ExecuteContextRefresh(slug string, repoRoot string) pscontract.ExecutionResult {
+	bridge.contextCalls++
+	bridge.contextSlug = slug
+	bridge.contextRepo = repoRoot
+	if bridge.result.CommandDisplayLabel == "" {
+		bridge.result.CommandDisplayLabel = "Refresh context"
+	}
+	if bridge.result.ActionID == "" {
+		bridge.result.ActionID = pscontract.ActionRefreshContext
+	}
+	return bridge.result
+}
+
+func (bridge *fakeCommandBridge) LoadTaskRunPlan(slug string, profile string, repoRoot string) pscontract.ExecutionResult {
 	bridge.planCalls++
 	bridge.planSlug = slug
 	bridge.planProfile = profile
+	bridge.planRepo = repoRoot
 	if bridge.result.CommandDisplayLabel == "" {
 		bridge.result.CommandDisplayLabel = "Run worker plan"
+	}
+	if bridge.result.ActionID == "" {
+		bridge.result.ActionID = pscontract.ActionRunWorker
+	}
+	return bridge.result
+}
+
+func (bridge *fakeCommandBridge) ExecuteTaskRun(slug string, profile string, repoRoot string) pscontract.ExecutionResult {
+	bridge.planCalls++
+	bridge.planSlug = slug
+	bridge.planProfile = profile
+	bridge.planRepo = repoRoot
+	if bridge.result.CommandDisplayLabel == "" {
+		bridge.result.CommandDisplayLabel = "Run worker"
 	}
 	if bridge.result.ActionID == "" {
 		bridge.result.ActionID = pscontract.ActionRunWorker
@@ -611,7 +643,7 @@ func TestSelectedRunnableTaskOnlyComesFromRunnableTaskRows(t *testing.T) {
 	}
 }
 
-func TestRunWorkerDryRunPreviewDoesNotExecute(t *testing.T) {
+func TestRunWorkerConfirmationExecutesNative(t *testing.T) {
 	bridge := &fakeCommandBridge{result: pscontract.ExecutionResult{
 		ExitCode: 0,
 		Stdout:   `{"schema":"brevity.command-result.v1","command":"task run","success":true,"severity":"info","payload":{"slug":"task-one","provider":"codex","profile":"large","worktreePath":"C:\\repo\\worktrees\\active\\brevity-task-one","promptPath":"C:\\repo\\.brevity\\tasks\\task-one\\prompt.md","workerCommand":{"provider":"codex","command":"codex","arguments":["run"],"display":"codex run <prompt>","workingDirectory":"C:\\repo\\worktrees\\active\\brevity-task-one"},"approvalMode":"future-confirmation-required","executionKind":"worker-provider","providerExecutionWouldOccur":true,"isolatedWorktreeRequired":true,"dryRunOnly":true,"noExecutionOccurred":true,"authority":"PowerShell-owned execution plan; Go renders only.","safetyNotes":["No worker/provider process was launched."]}}`,
@@ -629,11 +661,16 @@ func TestRunWorkerDryRunPreviewDoesNotExecute(t *testing.T) {
 
 	updated, cmd := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	model = updated.(Model)
-	if cmd == nil {
-		t.Fatal("Run worker dry-run did not request plan")
+	if cmd != nil {
+		t.Fatal("Run worker should wait for confirmation")
 	}
-	if model.actionPreview != nil {
-		t.Fatal("Run worker opened old dry-run preview")
+	if model.confirmation == nil {
+		t.Fatal("Run worker did not open confirmation")
+	}
+	updated, cmd = model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model = updated.(Model)
+	if cmd == nil {
+		t.Fatal("Run worker confirmation did not execute")
 	}
 	if model.commandRun == nil || model.commandRun.status != commandRunning {
 		t.Fatalf("Run worker status = %#v, want running", model.commandRun)
@@ -642,13 +679,7 @@ func TestRunWorkerDryRunPreviewDoesNotExecute(t *testing.T) {
 	model = updated.(Model)
 	output := plainView(model.View())
 	for _, want := range []string{
-		"Run Worker Execution Plan",
-		"task          task-one",
-		"provider      codex",
-		"profile       large",
-		"worker        codex run <prompt>",
-		"no worker/provider launched",
-		"dry-run       yes",
+		"Run worker",
 	} {
 		if !strings.Contains(output, want) {
 			t.Fatalf("Run worker preview missing %q:\n%s", want, output)

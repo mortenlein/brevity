@@ -147,6 +147,7 @@ Actions
 > Provider status   executable read-only
   Task status       executable read-only
   Start task        select a task row to enable
+  Refresh context   select a task row to enable
   Run worker        plan preview only; select a runnable task row
   Merge task        future PowerShell action; confirmation required; not enable...
   Cleanup task      future PowerShell action; confirmation required; not enable...
@@ -185,6 +186,7 @@ Actions
   Provider status   executable read-only
   Task status       executable read-only
 > Start task        native start confirmation for task-one
+  Refresh context   native prompt/context refresh for task-one
   Run worker        plan preview only; select a runnable task row
   Merge task        future PowerShell action; confirmation required; not enable...
   Cleanup task      future PowerShell action; confirmation required; not enable...

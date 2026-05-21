@@ -181,6 +181,54 @@ func UpdateTask(store Store, slug string, options TaskUpdateOptions, mutate Task
 	return TaskUpdate{Previous: previous, Updated: updated}, nil
 }
 
+func UpdateTaskRunMetadata(store Store, record RunRecord, options TaskUpdateOptions) error {
+	_, err := UpdateTask(store, record.Slug, options, func(task map[string]json.RawMessage) error {
+		setRaw(task, "workerStatus", record.WorkerStatus)
+		setRaw(task, "lastRunId", record.RunID)
+		setRaw(task, "lastRunStartedAt", record.StartedAt)
+		setRaw(task, "lastRunFinishedAt", record.FinishedAt)
+		setRaw(task, "lastExitCode", record.ExitCode)
+		setRaw(task, "lastFailureType", record.FailureType)
+		setRaw(task, "lastLogPath", record.LogPath)
+		setRaw(task, "lastProvider", record.Provider)
+		setRaw(task, "lastProfile", record.Profile)
+		setRaw(task, "latestRunId", record.RunID)
+		setRaw(task, "latestRunLogPath", record.LogPath)
+		setRaw(task, "latestRunExitCode", record.ExitCode)
+		setRaw(task, "latestRunProvider", record.Provider)
+		setRaw(task, "latestRunProfile", record.Profile)
+		setRaw(task, "latestRunWorkerStatus", record.WorkerStatus)
+		setRaw(task, "latestRunStartedAt", record.StartedAt)
+		setRaw(task, "latestRunFinishedAt", record.FinishedAt)
+		setRaw(task, "latestRunFailureType", record.FailureType)
+		setRaw(task, "updatedAt", record.FinishedAt)
+		task["latestRunIncomplete"] = json.RawMessage("false")
+		task["latestRunStale"] = json.RawMessage("false")
+		var currentRunCount int
+		_ = json.Unmarshal(task["runCount"], &currentRunCount)
+		setRaw(task, "runCount", currentRunCount+1)
+		execution := TaskExecution{
+			Status:            record.WorkerStatus,
+			LastRunID:         record.RunID,
+			LastRunStartedAt:  record.StartedAt,
+			LastRunFinishedAt: record.FinishedAt,
+			LastExitCode:      record.ExitCode,
+			LastFailureType:   record.FailureType,
+			LastLogPath:       record.LogPath,
+			LastProvider:      record.Provider,
+			LastProfile:       record.Profile,
+		}
+		setRaw(task, "execution", execution)
+		return nil
+	})
+	return err
+}
+
+func setRaw(task map[string]json.RawMessage, key string, value any) {
+	data, _ := json.Marshal(value)
+	task[key] = data
+}
+
 func (tasks *Tasks) UnmarshalJSON(input []byte) error {
 	return json.Unmarshal(input, &tasks.Items)
 }
