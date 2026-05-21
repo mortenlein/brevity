@@ -68,6 +68,22 @@ func TestBuildInvocationKeepsSlugAndPathsAsDiscreteArgs(t *testing.T) {
 	}
 }
 
+func TestRunWorkerDescriptorModelsFutureProviderExecutionWithoutEnablingIt(t *testing.T) {
+	descriptor := findDescriptor(t, ActionRunWorker)
+	if descriptor.Enabled {
+		t.Fatal("Run worker descriptor is enabled, want dry-run-only disabled command")
+	}
+	if descriptor.ExecutionKind != ExecutionKindWorkerProvider {
+		t.Fatalf("ExecutionKind = %q, want %q", descriptor.ExecutionKind, ExecutionKindWorkerProvider)
+	}
+	if !descriptor.RequiresWorktree || !descriptor.LongRunning || !descriptor.StreamsOutput || !descriptor.ProviderExecuting {
+		t.Fatalf("Run worker descriptor missing future execution contract fields: %#v", descriptor)
+	}
+	if !reflect.DeepEqual(descriptor.Arguments, []string{"--execute"}) {
+		t.Fatalf("Run worker future command args = %#v, want --execute modeled but not enabled", descriptor.Arguments)
+	}
+}
+
 func TestDisabledMutatingActionDoesNotBuildWithoutExplicitAllow(t *testing.T) {
 	descriptor := findDescriptor(t, ActionStartTask)
 

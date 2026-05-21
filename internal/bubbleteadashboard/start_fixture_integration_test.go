@@ -111,6 +111,69 @@ func TestStartTaskFixtureIntegration(t *testing.T) {
 	}
 }
 
+func TestRunWorkerDryRunFixtureIntegrationDoesNotExecute(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("PowerShell fixture smoke currently targets the Windows PowerShell path")
+	}
+	if _, err := exec.LookPath("powershell.exe"); err != nil {
+		t.Skipf("powershell.exe not available: %v", err)
+	}
+
+	fixture := newStartTaskFixture(t)
+	previousWorkingDirectory, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("get working directory: %v", err)
+	}
+	if err := os.Chdir(fixture.repoRoot); err != nil {
+		t.Fatalf("chdir fixture repo: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := os.Chdir(previousWorkingDirectory); err != nil {
+			t.Fatalf("restore working directory: %v", err)
+		}
+	})
+
+	client := runtimeclient.PowerShellClient{ScriptPath: fixture.scriptPath}
+	bridge := RuntimeClientCommandBridge{Client: client}
+	state, err := bridge.RefreshRuntimeState()
+	if err != nil {
+		t.Fatalf("refresh fixture runtime state: %v", err)
+	}
+	if len(state.Tasks) != 1 {
+		t.Fatalf("fixture tasks = %d, want 1", len(state.Tasks))
+	}
+	state.Tasks[0].Provider = "codex"
+	state.Tasks[0].Profile = "fixture-profile"
+	state.Tasks[0].Status = "ready-for-worker"
+	state.Tasks[0].NormalizedState = "ready-for-worker"
+
+	model := NewModelWithSource(client, time.Second, "powershell-fixture")
+	model.commandBridge = bridge
+	model.state = state
+	model.hasState = true
+	model.selection.SelectedIndex = indexOfTaskRow(t, model, fixtureStartTaskSlug)
+	model.paletteOpen = true
+	model.paletteSelected = indexOfAction(t, model, ActionRunWorker)
+
+	updated, cmd := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model = updated.(Model)
+	if cmd != nil {
+		t.Fatal("Run worker dry-run fixture returned command, want nil")
+	}
+	if model.commandRun != nil || model.confirmation != nil {
+		t.Fatalf("Run worker dry-run entered execution state: command=%#v confirmation=%#v", model.commandRun, model.confirmation)
+	}
+	output := plainView(model.View())
+	for _, want := range []string{"Run Worker Dry-Run Preview", fixtureStartTaskSlug, "codex / fixture-profile", "no worker/provider launched", "dry-run only"} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("fixture dry-run preview missing %q:\n%s", want, output)
+		}
+	}
+	if strings.Contains(output, "task run --execute") && cmd != nil {
+		t.Fatal("fixture dry-run unexpectedly prepared an executable command")
+	}
+}
+
 type startTaskFixture struct {
 	repoRoot   string
 	scriptPath string

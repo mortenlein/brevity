@@ -16,6 +16,7 @@ type ActionKind string
 const (
 	ActionKindReadOnly ActionKind = "read-only"
 	ActionKindMutating ActionKind = "mutating"
+	ActionKindDryRun   ActionKind = "dry-run"
 	ActionKindFuture   ActionKind = "future"
 )
 
@@ -122,20 +123,36 @@ func actionDescriptors() []ActionDescriptor {
 func (model Model) actionDescriptors() []ActionDescriptor {
 	actions := actionDescriptors()
 	startSlug, startable := model.selectedStartableTaskSlug()
+	runTask, runnable := model.selectedRunnableTask()
 	for index := range actions {
-		if actions[index].ID != ActionStartTask {
-			continue
-		}
-		if startable {
-			actions[index].Enabled = true
-			actions[index].Description = "confirmation required for " + startSlug
-			actions[index].Command.Enabled = true
-			actions[index].Command.DisabledReason = ""
-		} else {
-			actions[index].Enabled = false
-			actions[index].Description = "future PowerShell action; select a task row to enable"
-			actions[index].Command.Enabled = false
-			actions[index].Command.DisabledReason = "future PowerShell action; select a task row with a slug to enable Start task"
+		switch actions[index].ID {
+		case ActionStartTask:
+			if startable {
+				actions[index].Enabled = true
+				actions[index].Description = "confirmation required for " + startSlug
+				actions[index].Command.Enabled = true
+				actions[index].Command.DisabledReason = ""
+			} else {
+				actions[index].Enabled = false
+				actions[index].Description = "future PowerShell action; select a task row to enable"
+				actions[index].Command.Enabled = false
+				actions[index].Command.DisabledReason = "future PowerShell action; select a task row with a slug to enable Start task"
+			}
+		case ActionRunWorker:
+			if runnable {
+				actions[index].Enabled = true
+				actions[index].Kind = ActionKindDryRun
+				actions[index].Description = "dry-run preview for " + runTask.Slug
+				actions[index].Command.Provider = taskProvider(runTask)
+				actions[index].Command.Profile = taskProfile(runTask)
+				actions[index].Command.Enabled = false
+				actions[index].Command.DisabledReason = "dry-run only; worker/provider execution is disabled"
+			} else {
+				actions[index].Enabled = false
+				actions[index].Description = "dry-run only; select a runnable task row"
+				actions[index].Command.Enabled = false
+				actions[index].Command.DisabledReason = "dry-run only; select a runnable task row with slug and runnable state"
+			}
 		}
 	}
 	return actions
@@ -162,6 +179,8 @@ func (model Model) commandForAction(action ActionDescriptor) tea.Cmd {
 			return nil
 		}
 		return model.executeMutatingCmd(action, []string{slug})
+	case ActionRunWorker:
+		return nil
 	default:
 		return nil
 	}

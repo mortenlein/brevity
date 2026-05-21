@@ -48,7 +48,11 @@ type commandStatus string
 
 const (
 	commandIdle      commandStatus = "idle"
+	commandQueued    commandStatus = "queued"
+	commandPreparing commandStatus = "preparing"
 	commandRunning   commandStatus = "running"
+	commandStreaming commandStatus = "streaming"
+	commandCompleted commandStatus = "completed"
 	commandSucceeded commandStatus = "succeeded"
 	commandFailed    commandStatus = "failed"
 	commandTimedOut  commandStatus = "timed out"
@@ -287,13 +291,13 @@ func (model Model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if model.commandRun != nil {
 		switch msg.String() {
 		case "esc":
-			if model.commandRun.status == commandRunning {
+			if model.commandRun.status.isActive() {
 				return model, nil
 			}
 			model.commandRun = nil
 			return model, nil
 		case "q":
-			if model.commandRun.status == commandRunning {
+			if model.commandRun.status.isActive() {
 				return model, nil
 			}
 			model.commandRun = nil
@@ -340,6 +344,11 @@ func (model Model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return model, nil
 		case "enter":
 			action := model.actionDescriptors()[model.clampedPaletteSelection()]
+			if action.ID == ActionRunWorker {
+				model.paletteOpen = false
+				model.actionPreview = &action
+				return model, nil
+			}
 			if !action.Enabled {
 				model.paletteOpen = false
 				model.actionPreview = &action
@@ -977,6 +986,29 @@ func (model Model) selectedStartableTaskSlug() (string, bool) {
 	return slug, true
 }
 
+func (model Model) selectedRunnableTask() (contracts.TaskSummary, bool) {
+	items := model.selectableItems()
+	if len(items) == 0 {
+		return contracts.TaskSummary{}, false
+	}
+	selected := clampInt(model.selection.SelectedIndex, 0, len(items)-1)
+	item := items[selected]
+	if item.Kind != dashboard.SelectionTask {
+		return contracts.TaskSummary{}, false
+	}
+	task := item.Task
+	if strings.TrimSpace(task.Slug) == "" {
+		return contracts.TaskSummary{}, false
+	}
+	state := strings.ToLower(strings.TrimSpace(firstNonEmpty(task.NormalizedState, task.Status)))
+	switch state {
+	case "ready", "ready-for-worker", "runnable", "queued", "prepared":
+		return task, true
+	default:
+		return contracts.TaskSummary{}, false
+	}
+}
+
 func (model Model) paneWidths() (int, int) {
 	width := model.contentWidth()
 	separatorWidth := visibleWidth(paneSeparator)
@@ -1193,11 +1225,13 @@ func (model Model) renderHelpOverlay(usedRows ...int) string {
 		"  p opens actions; read-only actions can execute PowerShell commands",
 		"  Start task requires a selected task row and confirmation",
 		"  Start task changes task state through PowerShell only",
-		"  Run worker, Merge, and Cleanup remain disabled future actions",
+		"  Run worker is dry-run only; no provider is launched",
+		"  future worker execution will be long-running and PowerShell-authoritative",
+		"  Merge and Cleanup remain disabled future actions",
 		"  command results scroll with up/down or j/k; esc closes finished results",
 		"  recent command activity is session-only and read-only",
-		"  mutating actions are disabled and show a blocked command preview",
-		"  executable today: Refresh state, Provider status, Task status",
+		"  dry-run previews never execute on enter",
+		"  executable today: Refresh state, Provider status, Task status, confirmed Start task",
 		"  esc, q, p, or ? closes panels without running commands",
 	}
 	var body strings.Builder
@@ -1213,6 +1247,9 @@ func (model Model) renderActionPreview(usedRows ...int) string {
 	if action == nil {
 		return ""
 	}
+	if action.ID == ActionRunWorker {
+		return model.renderRunWorkerDryRunPreview(*action, usedRows...)
+	}
 	lines := []string{
 		"  action        " + action.Label,
 		"  status        disabled / blocked",
@@ -1225,11 +1262,57 @@ func (model Model) renderActionPreview(usedRows ...int) string {
 	return model.renderPanel("Command Preview", lines, helpTruncatedIndicator, usedRows...)
 }
 
+func (model Model) renderRunWorkerDryRunPreview(action ActionDescriptor, usedRows ...int) string {
+	task, ok := model.selectedRunnableTask()
+	slug := "<selected-task-slug>"
+	provider := fallback(action.Command.Provider, "(unknown)")
+	profile := fallback(action.Command.Profile, "(unknown)")
+	promptPath := "(PowerShell will resolve prompt path)"
+	worktree := "(PowerShell will resolve task worktree)"
+	if ok {
+		slug = task.Slug
+		provider = fallback(taskProvider(task), provider)
+		profile = fallback(taskProfile(task), profile)
+		worktree = fallback(taskWorktreePath(task), worktree)
+		if task.Context != nil {
+			promptPath = fallback(task.Context.Path, promptPath)
+		}
+	}
+	lines := []string{
+		"  action        " + action.Label,
+		"  task          " + slug,
+		"  provider      " + provider + " / " + profile,
+		"  command       " + model.previewCommandShape(action),
+		"  status        dry-run only; execution is disabled",
+		"  boundary      PowerShell remains authoritative; Go does not write .brevity",
+		"  warning       worker/provider execution is not enabled",
+		"  execution     no worker/provider launched",
+		"  mode          dry-run only",
+		"  would use     worktree " + worktree,
+		"  would read    prompt path " + promptPath,
+		"  would invoke  provider/profile after future confirmation",
+		"  would track   activity and command result as long-running output",
+		"  enter         does not execute",
+		"  close         esc, q, or p returns to the dashboard",
+	}
+	return model.renderPanel("Run Worker Dry-Run Preview", lines, helpTruncatedIndicator, usedRows...)
+}
+
 func (model Model) previewCommandShape(action ActionDescriptor) string {
 	var args []string
-	if action.ID == ActionStartTask {
+	switch action.ID {
+	case ActionStartTask:
 		if slug, ok := model.selectedStartableTaskSlug(); ok {
 			args = []string{slug}
+		} else {
+			args = []string{"<selected-task-slug>"}
+		}
+	case ActionRunWorker:
+		if task, ok := model.selectedRunnableTask(); ok {
+			args = []string{task.Slug}
+			if profile := taskProfile(task); profile != "" {
+				args = append(args, "--profile", profile)
+			}
 		} else {
 			args = []string{"<selected-task-slug>"}
 		}
@@ -1305,6 +1388,14 @@ func (model Model) renderCommandResult(usedRows ...int) string {
 		)
 		return model.renderPanel("Command Result", lines, detailTruncatedIndicator, usedRows...)
 	}
+	if run.status.isFutureLongRunningState() && run.result == nil {
+		lines = append(lines,
+			"  message       long-running worker execution state scaffold",
+			"  output        streaming output will appear here when execution exists",
+			"  authority     PowerShell remains authoritative",
+		)
+		return model.renderPanel("Command Result", lines, detailTruncatedIndicator, usedRows...)
+	}
 	if run.result == nil {
 		return model.renderPanel("Command Result", lines, detailTruncatedIndicator, usedRows...)
 	}
@@ -1335,6 +1426,14 @@ func (model Model) renderCommandResult(usedRows ...int) string {
 	}
 	lines = append(lines, "  close         esc or q closes result")
 	return model.renderScrollablePanel("Command Result", lines, run.scroll, detailTruncatedIndicator, usedRows...)
+}
+
+func (status commandStatus) isActive() bool {
+	return status == commandQueued || status == commandPreparing || status == commandRunning || status == commandStreaming
+}
+
+func (status commandStatus) isFutureLongRunningState() bool {
+	return status == commandQueued || status == commandPreparing || status == commandStreaming || status == commandCompleted || status == commandFailed || status == commandCanceled
 }
 
 func commandOutputLines(label string, value string) []string {
@@ -1547,7 +1646,7 @@ func (model Model) renderFooter() string {
 	controls := "up/down or j/k move | r refresh | p actions | d details | q quit | ? help"
 	compactControls := "j/k r p d q quit ? help"
 	if model.commandRun != nil {
-		if model.commandRun.status == commandRunning {
+		if model.commandRun.status.isActive() {
 			controls = "command running | q/esc wait | read-only"
 			compactControls = "running | wait"
 		} else {
@@ -1555,7 +1654,7 @@ func (model Model) renderFooter() string {
 			compactControls = "j/k scroll | esc close"
 		}
 	} else if model.paletteOpen {
-		controls = "up/down or j/k choose | enter run read-only | esc close"
+		controls = "up/down or j/k choose | enter run/preview | esc close"
 		compactControls = "j/k enter esc"
 	} else if model.helpOpen {
 		controls = "esc or ? closes help | read-only boundary | ? help"
@@ -1588,7 +1687,7 @@ func (model Model) renderActionPalette(usedRows ...int) string {
 		fmt.Fprintln(&output, model.renderPaletteActionRow(action, index == selected))
 	}
 	if model.shouldRenderActionPaletteHelp(usedRows...) {
-		fmt.Fprintln(&output, dashboardStyles.help.Render(model.renderLine("  enter runs read-only actions | esc closes | p toggles")))
+		fmt.Fprintln(&output, dashboardStyles.help.Render(model.renderLine("  enter runs read-only/start or opens dry-run preview | esc closes")))
 	}
 	return output.String()
 }
@@ -1774,7 +1873,19 @@ func (model Model) renderDetails(output io.Writer, items []dashboard.SelectionIt
 			if !activity.completedAt.IsZero() {
 				model.detailText(output, "completed", activity.completedAt.Format(time.RFC3339))
 			}
-			model.detailText(output, "guidance", "session-only read-only command activity")
+			if activity.result != nil {
+				model.detailText(output, "exit code", fmt.Sprint(activity.result.ExitCode))
+				if !activity.result.StartedAt.IsZero() {
+					model.detailText(output, "started", activity.result.StartedAt.Format(time.RFC3339))
+				}
+				if stdout := firstOutputLine(activity.result.Stdout); stdout != "" {
+					model.detailText(output, "stdout", stdout)
+				}
+				if stderr := firstOutputLine(activity.result.Stderr); stderr != "" {
+					model.detailText(output, "stderr", stderr)
+				}
+			}
+			model.detailText(output, "guidance", "session-only command activity; future worker runs remain PowerShell-authoritative")
 		} else {
 			model.detailText(output, "guidance", "display-only runtime activity signal")
 		}

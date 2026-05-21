@@ -36,11 +36,25 @@ const (
 	TimeoutLong   TimeoutCategory = "long"
 )
 
+type ExecutionKind string
+
+const (
+	ExecutionKindReadOnly       ExecutionKind = "read-only"
+	ExecutionKindStateMutation  ExecutionKind = "state-mutation"
+	ExecutionKindWorkerProvider ExecutionKind = "worker-provider"
+)
+
 type CommandDescriptor struct {
 	ActionID             ActionID
 	Label                string
 	Command              commands.Command
 	Arguments            []string
+	Provider             string
+	Profile              string
+	RequiresWorktree     bool
+	ExecutionKind        ExecutionKind
+	LongRunning          bool
+	StreamsOutput        bool
 	Mutating             bool
 	Destructive          bool
 	ProviderExecuting    bool
@@ -60,6 +74,7 @@ func DashboardDescriptors() []CommandDescriptor {
 			Label:               "Refresh state",
 			Command:             commands.RuntimeState,
 			Arguments:           []string{"--json"},
+			ExecutionKind:       ExecutionKindReadOnly,
 			Enabled:             true,
 			ResultMode:          ResultModeJSON,
 			TimeoutCategory:     TimeoutShort,
@@ -71,6 +86,7 @@ func DashboardDescriptors() []CommandDescriptor {
 			ActionID:            ActionProviderStatus,
 			Label:               "Provider status",
 			Command:             commands.ProviderStatus,
+			ExecutionKind:       ExecutionKindReadOnly,
 			Enabled:             true,
 			ResultMode:          ResultModeText,
 			TimeoutCategory:     TimeoutShort,
@@ -82,6 +98,7 @@ func DashboardDescriptors() []CommandDescriptor {
 			ActionID:            ActionTaskStatus,
 			Label:               "Task status",
 			Command:             commands.TaskStatus,
+			ExecutionKind:       ExecutionKindReadOnly,
 			Enabled:             true,
 			ResultMode:          ResultModeText,
 			TimeoutCategory:     TimeoutShort,
@@ -93,6 +110,7 @@ func DashboardDescriptors() []CommandDescriptor {
 			ActionID:             ActionStartTask,
 			Label:                "Start task",
 			Command:              commands.TaskStart,
+			ExecutionKind:        ExecutionKindStateMutation,
 			Mutating:             true,
 			RequiresConfirmation: true,
 			Enabled:              false,
@@ -107,6 +125,10 @@ func DashboardDescriptors() []CommandDescriptor {
 			Label:                "Run worker",
 			Command:              commands.TaskRun,
 			Arguments:            []string{"--execute"},
+			RequiresWorktree:     true,
+			ExecutionKind:        ExecutionKindWorkerProvider,
+			LongRunning:          true,
+			StreamsOutput:        true,
 			Mutating:             true,
 			ProviderExecuting:    true,
 			RequiresConfirmation: true,
@@ -121,6 +143,7 @@ func DashboardDescriptors() []CommandDescriptor {
 			ActionID:             ActionMergeTask,
 			Label:                "Merge task",
 			Command:              commands.TaskMerge,
+			ExecutionKind:        ExecutionKindStateMutation,
 			Mutating:             true,
 			RequiresConfirmation: true,
 			Enabled:              false,
@@ -135,6 +158,7 @@ func DashboardDescriptors() []CommandDescriptor {
 			Label:                "Cleanup task",
 			Command:              commands.TaskCleanup,
 			Arguments:            []string{"--force"},
+			ExecutionKind:        ExecutionKindStateMutation,
 			Mutating:             true,
 			Destructive:          true,
 			RequiresConfirmation: true,

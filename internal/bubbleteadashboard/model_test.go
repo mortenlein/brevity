@@ -142,11 +142,11 @@ func TestActionPaletteOpensWithShortcut(t *testing.T) {
 		"Provider status   executable read-only",
 		"Task status       executable read-only",
 		"Start task        future PowerShell action; select a task row to enable",
-		"Run worker        future PowerShell action; confirmation required; not enabled yet",
+		"Run worker        dry-run only; select a runnable task row",
 		"Merge task        future PowerShell action; confirmation required; not enabled yet",
 		"Cleanup task      future PowerShell action; confirmation required; not enabled yet",
 		"Refresh state     enter refreshes state",
-		"enter runs read-only actions | esc closes | p toggles",
+		"enter runs read-only/start or opens dry-run preview | esc closes",
 	} {
 		if !strings.Contains(output, want) {
 			t.Fatalf("palette output missing %q:\n%s", want, output)
@@ -503,6 +503,121 @@ func TestSelectedStartableTaskSlugOnlyComesFromTaskRows(t *testing.T) {
 	}
 }
 
+func TestSelectedRunnableTaskOnlyComesFromRunnableTaskRows(t *testing.T) {
+	tests := []struct {
+		name         string
+		configure    func(*Model)
+		wantRunnable bool
+	}{
+		{
+			name: "runnable task row",
+			configure: func(model *Model) {
+				model.state.Tasks[0].Status = "ready-for-worker"
+				model.selection.SelectedIndex = 1
+			},
+			wantRunnable: true,
+		},
+		{
+			name: "provider row blocked",
+			configure: func(model *Model) {
+				model.state.Tasks[0].Status = "ready-for-worker"
+				model.selection.SelectedIndex = 0
+			},
+		},
+		{
+			name: "cleanup row blocked",
+			configure: func(model *Model) {
+				model.state.Tasks[0].Status = "ready-for-worker"
+				model.selection.SelectedIndex = 2
+			},
+		},
+		{
+			name: "activity row blocked",
+			configure: func(model *Model) {
+				model.state.Tasks[0].Status = "ready-for-worker"
+				model.addActivity(commandActivity{id: 1, action: "Provider status", status: commandSucceeded, summary: "ok"})
+				model.selection.SelectedIndex = 1
+			},
+		},
+		{
+			name: "missing slug blocked",
+			configure: func(model *Model) {
+				model.state.Tasks[0].Slug = ""
+				model.state.Tasks[0].Status = "ready-for-worker"
+				model.selection.SelectedIndex = 1
+			},
+		},
+		{
+			name: "blocked task state differs from start task",
+			configure: func(model *Model) {
+				model.state.Tasks[0].Status = "blocked"
+				model.selection.SelectedIndex = 1
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			model := NewModelWithSource(&fakeClient{}, time.Second, "native")
+			model.state = bubbleState()
+			model.hasState = true
+			tt.configure(&model)
+
+			task, runnable := model.selectedRunnableTask()
+			if runnable != tt.wantRunnable {
+				t.Fatalf("runnable = %t, want %t (task %#v)", runnable, tt.wantRunnable, task)
+			}
+			runAction := actionByID(t, model, ActionRunWorker)
+			if runAction.Enabled != tt.wantRunnable {
+				t.Fatalf("Run worker enabled = %t, want %t", runAction.Enabled, tt.wantRunnable)
+			}
+		})
+	}
+}
+
+func TestRunWorkerDryRunPreviewDoesNotExecute(t *testing.T) {
+	bridge := &fakeCommandBridge{}
+	model := NewModelWithSource(&fakeClient{}, time.Second, "native")
+	model.commandBridge = bridge
+	model.state = bubbleState()
+	model.state.Tasks[0].Status = "ready-for-worker"
+	model.state.Tasks[0].Provider = "codex"
+	model.state.Tasks[0].Profile = "large"
+	model.hasState = true
+	model.selection.SelectedIndex = 1
+	model.paletteOpen = true
+	model.paletteSelected = indexOfAction(t, model, ActionRunWorker)
+
+	updated, cmd := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model = updated.(Model)
+	if cmd != nil {
+		t.Fatal("Run worker dry-run returned command, want nil")
+	}
+	if model.actionPreview == nil {
+		t.Fatal("Run worker did not open dry-run preview")
+	}
+	output := plainView(model.View())
+	for _, want := range []string{
+		"Run Worker Dry-Run Preview",
+		"task          task-one",
+		"provider      codex / large",
+		"dry-run only",
+		"no worker/provider launched",
+		"enter         does not execute",
+	} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("Run worker preview missing %q:\n%s", want, output)
+		}
+	}
+	assertLinesWithinWidth(t, output, model.contentWidth())
+
+	updated, cmd = model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model = updated.(Model)
+	if cmd != nil || bridge.executeCalls != 0 || bridge.mutateCalls != 0 {
+		t.Fatalf("enter in dry-run executed: cmd=%v execute=%d mutate=%d", cmd, bridge.executeCalls, bridge.mutateCalls)
+	}
+}
+
 func TestStartTaskConfirmationOpensAndCancelDoesNotExecute(t *testing.T) {
 	bridge := &fakeCommandBridge{result: pscontract.ExecutionResult{ExitCode: 0, Stdout: "started"}}
 	model := NewModelWithSource(&fakeClient{}, time.Second, "native")
@@ -815,6 +930,25 @@ func TestCommandResultScrollAndEscClose(t *testing.T) {
 	}
 }
 
+func TestLongRunningExecutionStatesRenderScaffold(t *testing.T) {
+	for _, status := range []commandStatus{commandQueued, commandPreparing, commandRunning, commandStreaming, commandCompleted, commandFailed, commandCanceled} {
+		t.Run(string(status), func(t *testing.T) {
+			model := NewModelWithSource(&fakeClient{}, time.Second, "native")
+			model.state = bubbleState()
+			model.hasState = true
+			model.commandRun = &commandRunState{id: 1, action: ActionDescriptor{Label: "Run worker"}, status: status}
+
+			output := plainView(model.View())
+			if !strings.Contains(output, "status        "+string(status)) {
+				t.Fatalf("state %q did not render:\n%s", status, output)
+			}
+			if status != commandRunning && !strings.Contains(output, "long-running worker execution state scaffold") {
+				t.Fatalf("state %q missing scaffold text:\n%s", status, output)
+			}
+		})
+	}
+}
+
 func TestPollingTickManualRefreshAndFailurePreservesState(t *testing.T) {
 	bridge := &fakeCommandBridge{state: bubbleState()}
 	model := NewModelWithSource(&fakeClient{}, time.Second, "native")
@@ -868,10 +1002,41 @@ func TestCommandActivitiesRenderCapAndDetails(t *testing.T) {
 	model.selection.SelectedIndex = 1
 	model.selection.ShowDetails = true
 	output = plainView(model.View())
-	if !strings.Contains(output, "session-only read-only command activity") {
+	if !strings.Contains(output, "session-only command activity") {
 		t.Fatalf("activity detail missing session-only guidance:\n%s", output)
 	}
 	assertLinesWithinWidth(t, output, model.contentWidth())
+}
+
+func TestActivityDetailIncludesResultMetadataAndWidthSafety(t *testing.T) {
+	started := time.Date(2026, 5, 21, 10, 0, 0, 0, time.UTC)
+	model := NewModelWithSource(&fakeClient{}, time.Second, "native")
+	model.state = bubbleState()
+	model.hasState = true
+	model.width = 54
+	model.addActivity(commandActivity{
+		id:          1,
+		action:      "Provider status",
+		status:      commandCompleted,
+		completedAt: started.Add(time.Second),
+		summary:     "ok",
+		result: &pscontract.ExecutionResult{
+			ExitCode:    0,
+			StartedAt:   started,
+			CompletedAt: started.Add(time.Second),
+			Stdout:      strings.Repeat("long-output ", 20),
+		},
+	})
+	model.selection.SelectedIndex = 1
+	model.selection.ShowDetails = true
+
+	output := plainView(model.View())
+	for _, want := range []string{"exit code", "started", "completed", "stdout"} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("activity detail missing %q:\n%s", want, output)
+		}
+	}
+	assertLinesWithinWidth(t, output, model.width)
 }
 
 func TestActionPaletteHelperOnlyRendersWhenSpaceAllows(t *testing.T) {
@@ -883,13 +1048,13 @@ func TestActionPaletteHelperOnlyRendersWhenSpaceAllows(t *testing.T) {
 	model.height = 24
 
 	output := plainView(model.View())
-	if strings.Contains(output, "enter runs read-only actions") {
+	if strings.Contains(output, "opens dry-run preview") {
 		t.Fatalf("height-constrained palette rendered helper:\n%s", output)
 	}
 
-	model.height = 30
+	model.height = 31
 	output = plainView(model.View())
-	if !strings.Contains(output, "enter runs read-only actions | esc closes | p toggles") {
+	if !strings.Contains(output, "enter runs read-only/start or opens dry-run preview | esc closes") {
 		t.Fatalf("roomy palette omitted helper:\n%s", output)
 	}
 }
@@ -3164,4 +3329,15 @@ func assertLoadingOrErrorViewInvariants(t *testing.T, output string, width int, 
 			t.Fatalf("loading/error render invariant missing %q:\n%s", want, output)
 		}
 	}
+}
+
+func actionByID(t *testing.T, model Model, id ActionID) ActionDescriptor {
+	t.Helper()
+	for _, action := range model.actionDescriptors() {
+		if action.ID == id {
+			return action
+		}
+	}
+	t.Fatalf("action %q not found", id)
+	return ActionDescriptor{}
 }
