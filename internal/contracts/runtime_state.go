@@ -56,6 +56,8 @@ type TaskSummary struct {
 	Status                string              `json:"status"`
 	NormalizedState       string              `json:"normalizedState"`
 	Provider              string              `json:"provider"`
+	ProviderHealth        string              `json:"providerHealth"`
+	ProviderGated         bool                `json:"providerGated"`
 	Profile               string              `json:"profile"`
 	LastProvider          string              `json:"lastProvider"`
 	LastProfile           string              `json:"lastProfile"`
@@ -64,17 +66,26 @@ type TaskSummary struct {
 	WorktreeExists        *bool               `json:"worktreeExists,omitempty"`
 	Worktree              *TaskWorktree       `json:"worktree,omitempty"`
 	Context               *TaskRuntimeContext `json:"context,omitempty"`
+	PromptPath            string              `json:"promptPath"`
 	Execution             *TaskExecution      `json:"execution,omitempty"`
 	WorkerStatus          string              `json:"workerStatus"`
 	LastRunID             string              `json:"lastRunId"`
 	LastExitCode          any                 `json:"lastExitCode"`
 	LastLogPath           string              `json:"lastLogPath"`
+	RunCount              int                 `json:"runCount"`
 	LatestRunID           string              `json:"latestRunId"`
 	LatestRunLogPath      string              `json:"latestRunLogPath"`
 	LatestRunExitCode     any                 `json:"latestRunExitCode"`
 	LatestRunProvider     string              `json:"latestRunProvider"`
 	LatestRunProfile      string              `json:"latestRunProfile"`
 	LatestRunWorkerStatus string              `json:"latestRunWorkerStatus"`
+	LatestRunStartedAt    string              `json:"latestRunStartedAt"`
+	LatestRunFinishedAt   string              `json:"latestRunFinishedAt"`
+	LatestRunFailureType  string              `json:"latestRunFailureType"`
+	LatestRunIncomplete   bool                `json:"latestRunIncomplete"`
+	LatestRunStale        bool                `json:"latestRunStale"`
+	LatestRunAgeMinutes   *float64            `json:"latestRunAgeMinutes,omitempty"`
+	LatestRunSource       string              `json:"latestRunSource"`
 	LatestRun             json.RawMessage     `json:"latestRun,omitempty"`
 	Extras                map[string]any      `json:"-"`
 }

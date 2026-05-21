@@ -7,9 +7,10 @@ mutation plus task/runtime state reading.
 
 The original PowerShell `.\brevity.ps1 tui` command is a lightweight read-only
 runtime/operator scaffold. The Go dashboard and `--watch` mode are the active
-frontend direction for the future operator UX. Both paths currently consume
-PowerShell-produced runtime-state data; neither path provides an interactive
-mutation UI yet. `--json-source native` reads runtime state directly from Go.
+frontend direction for the future operator UX. The default dashboard source
+still consumes PowerShell-produced runtime-state data for compatibility, while
+`runtime state --json`, `task status`, and `--json-source native` read runtime
+state directly from Go. Neither path provides an interactive mutation UI yet.
 
 Go-owned `.brevity` writes must go through `internal/state` and the advisory
 `.brevity/state.lock` protocol. Provider execution and worker execution are not
@@ -55,8 +56,9 @@ metadata. It does not mean Go writes those files itself.
 
 ## Documentation Notes
 
-- Go owns provider health read/write, `.brevity/tasks.json` reading, native
-  runtime-state building, native task status, and the Bubble Tea native source.
+- Go owns provider health read/write, `.brevity/tasks.json` reading,
+  `.brevity/runs.jsonl` run-history reading, native runtime-state building,
+  native task status, and the Bubble Tea native source.
 - PowerShell remains the authority for task mutation, worker/provider execution,
   task new/start/run/merge/cleanup, and legacy compatibility.
 - Provider health writes use `.brevity/state.lock` with exclusive create,

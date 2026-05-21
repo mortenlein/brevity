@@ -3,11 +3,13 @@ package runtimeclient
 import (
 	"encoding/json"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"testing"
 	"time"
 
 	"github.com/mortenlein/brevity/internal/contracts"
+	"github.com/mortenlein/brevity/internal/state"
 )
 
 func TestNativeRuntimeStateParsesProviderHealth(t *testing.T) {
@@ -34,6 +36,57 @@ func TestNativeRuntimeStateParsesProviderHealth(t *testing.T) {
 	}
 }
 
+func TestNativeRuntimeStateSemanticParityWithPowerShellReference(t *testing.T) {
+	shell, err := exec.LookPath("pwsh")
+	if err != nil {
+		shell, err = exec.LookPath("powershell")
+	}
+	if err != nil {
+		t.Skip("PowerShell unavailable")
+	}
+
+	repoRoot := nativeTestRepo(t)
+	gitInit := exec.Command("git", "init")
+	gitInit.Dir = repoRoot
+	if output, err := gitInit.CombinedOutput(); err != nil {
+		t.Skipf("git init unavailable for parity fixture: %v %s", err, output)
+	}
+	writeNativeTestFile(t, repoRoot, ".brevity/provider-health.json", `{
+		"codex":{"status":"healthy","updatedAt":"2026-05-19T10:00:00Z","note":"ok"},
+		"gemini":{"status":"capacity-degraded","updatedAt":"2026-05-19T10:01:00Z","note":"busy"}
+	}`)
+	writeNativeTestFile(t, repoRoot, ".brevity/tasks.json", `[
+		{"slug":"ready-task","status":"ready-for-worker","normalizedState":"ready-for-worker","provider":"codex","profile":"default"},
+		{"slug":"blocked-task","status":"blocked","normalizedState":"blocked"}
+	]`)
+
+	native := nativeState(t, repoRoot)
+	sourceRoot, err := filepath.Abs(filepath.Join("..", ".."))
+	if err != nil {
+		t.Fatalf("source root: %v", err)
+	}
+	command := exec.Command(shell, "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", filepath.Join(sourceRoot, "brevity.ps1"), "runtime", "state", "--json")
+	command.Dir = repoRoot
+	output, err := command.Output()
+	if err != nil {
+		t.Skipf("PowerShell reference runtime state unavailable for fixture: %v", err)
+	}
+	var reference contracts.RuntimeState
+	if err := json.Unmarshal(output, &reference); err != nil {
+		t.Skipf("PowerShell reference emitted unparsable JSON for fixture: %v", err)
+	}
+
+	if native.TaskCounts.Tracked != reference.TaskCounts.Tracked {
+		t.Fatalf("tracked tasks native=%d reference=%d", native.TaskCounts.Tracked, reference.TaskCounts.Tracked)
+	}
+	if native.Providers.Summary.Total != reference.Providers.Summary.Total {
+		t.Fatalf("provider total native=%d reference=%d", native.Providers.Summary.Total, reference.Providers.Summary.Total)
+	}
+	if native.Providers.Summary.Degraded != reference.Providers.Summary.Degraded {
+		t.Fatalf("provider degraded native=%d reference=%d", native.Providers.Summary.Degraded, reference.Providers.Summary.Degraded)
+	}
+}
+
 func TestNativeRuntimeStateParsesTasks(t *testing.T) {
 	repoRoot := nativeTestRepo(t)
 	writeNativeTestFile(t, repoRoot, ".brevity/provider-health.json", `{}`)
@@ -52,7 +105,7 @@ func TestNativeRuntimeStateParsesTasks(t *testing.T) {
 	if state.TaskCounts.Blocked != 1 {
 		t.Fatalf("blocked = %d, want 1", state.TaskCounts.Blocked)
 	}
-	if len(state.Tasks) != 2 || state.Tasks[0].Slug != "ready-task" {
+	if len(state.Tasks) != 2 || state.Tasks[0].Slug != "blocked-task" || state.Tasks[1].Slug != "ready-task" {
 		t.Fatalf("tasks = %#v, want parsed tasks", state.Tasks)
 	}
 }
@@ -64,8 +117,8 @@ func TestNativeRuntimeStateParsesRunsJSONL(t *testing.T) {
 		{"slug":"my-task","status":"ready-for-worker","normalizedState":"ready-for-worker"}
 	]`)
 	writeNativeTestFile(t, repoRoot, ".brevity/runs.jsonl",
-		"{\"slug\":\"my-task\",\"runId\":\"old\",\"workerStatus\":\"failed\",\"exitCode\":1,\"provider\":\"codex\",\"profile\":\"default\",\"logPath\":\"old.log\"}\n"+
-			"{\"slug\":\"my-task\",\"runId\":\"new\",\"workerStatus\":\"succeeded\",\"exitCode\":0,\"provider\":\"gemini\",\"profile\":\"smoke\",\"logPath\":\"new.log\"}\n")
+		"{\"slug\":\"my-task\",\"runId\":\"old\",\"workerStatus\":\"failed\",\"startedAt\":\"2026-05-19T08:00:00Z\",\"finishedAt\":\"2026-05-19T08:01:00Z\",\"exitCode\":1,\"provider\":\"codex\",\"profile\":\"default\",\"logPath\":\"old.log\"}\n"+
+			"{\"slug\":\"my-task\",\"runId\":\"new\",\"workerStatus\":\"succeeded\",\"startedAt\":\"2026-05-19T09:00:00Z\",\"finishedAt\":\"2026-05-19T09:01:00Z\",\"exitCode\":0,\"provider\":\"gemini\",\"profile\":\"smoke\",\"logPath\":\"new.log\"}\n")
 
 	state := nativeState(t, repoRoot)
 	task := state.Tasks[0]
@@ -80,6 +133,9 @@ func TestNativeRuntimeStateParsesRunsJSONL(t *testing.T) {
 	}
 	if len(task.LatestRun) == 0 {
 		t.Fatal("LatestRun is empty")
+	}
+	if task.RunCount != 2 || task.LatestRunFinishedAt != "2026-05-19T09:01:00Z" || task.LatestRunSource != "index" {
+		t.Fatalf("run enrichment = %#v, want count, finishedAt, and source", task)
 	}
 }
 
@@ -147,10 +203,15 @@ func TestOrphanedTaskWorktreesTreatsMissingTaskMetadataAsOrphan(t *testing.T) {
 	repoRoot := nativeTestRepo(t)
 	writeNativeTestFile(t, repoRoot, ".brevity/provider-health.json", `{}`)
 	writeNativeTestFile(t, repoRoot, ".brevity/tasks.json", `[]`)
-	stateTasks, _, err := readTasks(filepath.Join(repoRoot, ".brevity", "tasks.json"))
+	store, err := state.NewStore(repoRoot)
 	if err != nil {
-		t.Fatalf("readTasks returned error: %v", err)
+		t.Fatalf("NewStore returned error: %v", err)
 	}
+	taskStore, _, err := state.LoadTasks(store)
+	if err != nil {
+		t.Fatalf("LoadTasks returned error: %v", err)
+	}
+	stateTasks := taskStore.ToContracts()
 
 	orphaned := orphanedTaskWorktrees(stateTasks, []contracts.WorktreeRecord{
 		{Path: filepath.Join(repoRoot, "worktrees", "active", "missing"), Branch: "task/missing"},

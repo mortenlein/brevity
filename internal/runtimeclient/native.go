@@ -3,7 +3,6 @@ package runtimeclient
 import (
 	"bufio"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -89,14 +88,14 @@ func (client NativeClient) RuntimeState() (contracts.RuntimeState, error) {
 		runtimeState.SuggestedNextActions = append(runtimeState.SuggestedNextActions, "No .brevity\\tasks.json found.")
 	}
 
-	latestRuns, missingRuns, err := readLatestRuns(filepath.Join(repoRoot, ".brevity", "runs.jsonl"))
+	runHistory, missingRuns, err := state.LoadRuns(store, now().UTC())
 	if err != nil {
 		return contracts.RuntimeState{}, err
 	}
 	if missingRuns {
 		runtimeState.SuggestedNextActions = append(runtimeState.SuggestedNextActions, ".brevity\\runs.jsonl is absent; latest run data is unavailable.")
 	}
-	attachLatestRuns(tasks, latestRuns)
+	attachLatestRuns(tasks, runHistory.LatestByTask(), runHistory.CountByTask())
 
 	runtimeState.Tasks = tasks
 	runtimeState.TaskCounts = countTasks(tasks)
@@ -169,39 +168,6 @@ func (client NativeClient) TaskRunsCompactJSON() ([]byte, error) {
 
 func nativeUnsupported(command string) error {
 	return fmt.Errorf("native json source is read-only and does not support %s; use powershell", command)
-}
-
-func readLatestRuns(path string) (map[string]json.RawMessage, bool, error) {
-	file, err := os.Open(path)
-	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return map[string]json.RawMessage{}, true, nil
-		}
-		return nil, false, fmt.Errorf("read runs index: %w", err)
-	}
-	defer file.Close()
-
-	latest := map[string]json.RawMessage{}
-	scanner := bufio.NewScanner(file)
-	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
-		if line == "" {
-			continue
-		}
-		var values map[string]json.RawMessage
-		if err := json.Unmarshal([]byte(line), &values); err != nil {
-			return nil, false, fmt.Errorf("parse runs index line: %w", err)
-		}
-		slug := rawString(values, "slug")
-		if slug == "" {
-			continue
-		}
-		latest[slug] = append(json.RawMessage(nil), []byte(line)...)
-	}
-	if err := scanner.Err(); err != nil {
-		return nil, false, fmt.Errorf("scan runs index: %w", err)
-	}
-	return latest, false, nil
 }
 
 func readGitWorktrees(repoRoot string) ([]contracts.WorktreeRecord, error) {
@@ -443,41 +409,54 @@ func quoteCommandArg(value string) string {
 	return value
 }
 
-func attachLatestRuns(tasks []contracts.TaskSummary, latestRuns map[string]json.RawMessage) {
+func attachLatestRuns(tasks []contracts.TaskSummary, latestRuns map[string]state.RunRecord, runCounts map[string]int) {
 	for index := range tasks {
 		run := latestRuns[tasks[index].Slug]
-		if len(run) == 0 {
+		if runCounts[tasks[index].Slug] > 0 {
+			tasks[index].RunCount = runCounts[tasks[index].Slug]
+		}
+		if len(run.Raw) == 0 {
 			continue
 		}
-		tasks[index].LatestRun = run
-		var values map[string]json.RawMessage
-		if err := json.Unmarshal(run, &values); err != nil {
-			continue
-		}
-		tasks[index].LatestRunID = rawString(values, "runId")
-		tasks[index].LatestRunLogPath = rawString(values, "logPath")
-		tasks[index].LatestRunProvider = rawString(values, "provider")
-		tasks[index].LatestRunProfile = rawString(values, "profile")
-		tasks[index].LatestRunWorkerStatus = rawString(values, "workerStatus")
-		if exit, ok := values["exitCode"]; ok {
-			var value any
-			if err := json.Unmarshal(exit, &value); err == nil {
-				tasks[index].LatestRunExitCode = value
-			}
-		}
+		tasks[index].LatestRun = run.Raw
+		tasks[index].LatestRunID = run.RunID
+		tasks[index].LatestRunLogPath = run.LogPath
+		tasks[index].LatestRunProvider = run.Provider
+		tasks[index].LatestRunProfile = run.Profile
+		tasks[index].LatestRunWorkerStatus = run.WorkerStatus
+		tasks[index].LatestRunExitCode = run.ExitCode
+		tasks[index].LatestRunStartedAt = run.StartedAt
+		tasks[index].LatestRunFinishedAt = run.FinishedAt
+		tasks[index].LatestRunFailureType = run.FailureType
+		tasks[index].LatestRunIncomplete = run.Incomplete
+		tasks[index].LatestRunStale = run.Stale
+		tasks[index].LatestRunAgeMinutes = run.RunAgeMinutes
+		tasks[index].LatestRunSource = run.Source
+		tasks[index].LastRunID = firstNonEmpty(tasks[index].LastRunID, run.RunID)
+		tasks[index].LastLogPath = firstNonEmpty(tasks[index].LastLogPath, run.LogPath)
+		tasks[index].LastProvider = firstNonEmpty(tasks[index].LastProvider, run.Provider)
+		tasks[index].LastProfile = firstNonEmpty(tasks[index].LastProfile, run.Profile)
+		tasks[index].LastExitCode = firstNonNil(tasks[index].LastExitCode, run.ExitCode)
+		tasks[index].WorkerStatus = firstNonEmpty(tasks[index].WorkerStatus, run.WorkerStatus)
 	}
 }
 
-func rawString(values map[string]json.RawMessage, key string) string {
-	raw, ok := values[key]
-	if !ok {
-		return ""
-	}
-	var value string
-	if err := json.Unmarshal(raw, &value); err == nil {
-		return value
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return value
+		}
 	}
 	return ""
+}
+
+func firstNonNil(values ...any) any {
+	for _, value := range values {
+		if value != nil {
+			return value
+		}
+	}
+	return nil
 }
 
 func summarizeProviders(health map[string]contracts.ProviderHealth) contracts.ProviderSummary {

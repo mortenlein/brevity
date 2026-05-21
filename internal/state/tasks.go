@@ -39,6 +39,7 @@ type Task struct {
 	LastExitCode          any                 `json:"lastExitCode,omitempty"`
 	LastFailureType       string              `json:"lastFailureType,omitempty"`
 	LastLogPath           string              `json:"lastLogPath,omitempty"`
+	RunCount              int                 `json:"runCount,omitempty"`
 	LastProvider          string              `json:"lastProvider,omitempty"`
 	LastProfile           string              `json:"lastProfile,omitempty"`
 	CreatedAt             string              `json:"createdAt,omitempty"`
@@ -51,6 +52,13 @@ type Task struct {
 	LatestRunProvider     string              `json:"latestRunProvider,omitempty"`
 	LatestRunProfile      string              `json:"latestRunProfile,omitempty"`
 	LatestRunWorkerStatus string              `json:"latestRunWorkerStatus,omitempty"`
+	LatestRunStartedAt    string              `json:"latestRunStartedAt,omitempty"`
+	LatestRunFinishedAt   string              `json:"latestRunFinishedAt,omitempty"`
+	LatestRunFailureType  string              `json:"latestRunFailureType,omitempty"`
+	LatestRunIncomplete   bool                `json:"latestRunIncomplete,omitempty"`
+	LatestRunStale        bool                `json:"latestRunStale,omitempty"`
+	LatestRunAgeMinutes   *float64            `json:"latestRunAgeMinutes,omitempty"`
+	LatestRunSource       string              `json:"latestRunSource,omitempty"`
 }
 
 type TaskWorktree struct {
@@ -160,6 +168,7 @@ func (task Task) ToContract() contracts.TaskSummary {
 		LastRunID:             task.LastRunID,
 		LastExitCode:          task.LastExitCode,
 		LastLogPath:           task.LastLogPath,
+		RunCount:              task.RunCount,
 		LastProvider:          task.LastProvider,
 		LastProfile:           task.LastProfile,
 		LatestRunID:           task.LatestRunID,
@@ -168,6 +177,13 @@ func (task Task) ToContract() contracts.TaskSummary {
 		LatestRunProvider:     task.LatestRunProvider,
 		LatestRunProfile:      task.LatestRunProfile,
 		LatestRunWorkerStatus: task.LatestRunWorkerStatus,
+		LatestRunStartedAt:    task.LatestRunStartedAt,
+		LatestRunFinishedAt:   task.LatestRunFinishedAt,
+		LatestRunFailureType:  task.LatestRunFailureType,
+		LatestRunIncomplete:   task.LatestRunIncomplete,
+		LatestRunStale:        task.LatestRunStale,
+		LatestRunAgeMinutes:   task.LatestRunAgeMinutes,
+		LatestRunSource:       task.LatestRunSource,
 		PromptPath:            promptPath,
 		ProviderHealth:        task.ProviderHealth,
 		ProviderGated:         task.ProviderGated,

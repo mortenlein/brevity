@@ -54,3 +54,16 @@ JSON through a bounded serializer. Current internal budgets are:
 Cleanup candidates are read-only inspection records. They should remain concise;
 future expensive cleanup detail should be summarized or moved behind an explicit
 command instead of fully expanding inside runtime state.
+
+## Native Run History Shape
+
+Native Go reads `.brevity\runs.jsonl` as an append-only JSONL index. Each record
+may include `runId`, `slug`, `provider`, `profile`, `startedAt`, `finishedAt`,
+`exitCode`, `workerStatus`, `failureType`, `logPath`, `stdoutPath`,
+`stderrPath`, `summary`, and `message`.
+
+Missing `.brevity\runs.jsonl` means empty run history. Malformed JSONL rows are
+reported as clear read errors with the line number. Latest run selection is
+deterministic: records sort by `finishedAt`, then `startedAt`, then later JSONL
+line. If `finishedAt` is absent, the run is incomplete; runs older than the
+worker stale threshold are reported as stale.
