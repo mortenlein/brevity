@@ -1,121 +1,149 @@
-# Runtime State Contract
+# Runtime Supervisor State Contract
 
-`.\brevity.ps1 runtime state --json` is Brevity's primary read-only runtime
-inspection contract. It gives TUI and automation consumers a machine-readable
-snapshot of the current orchestration state without requiring them to parse
-human console output.
+This document defines the v1 file contract for the Go-native runtime supervisor
+foundation introduced by `runtime-supervisor-foundation-v1`.
 
-## Schema
+The contract covers these files:
 
-The runtime state document uses the schema identifier
-`brevity.runtime-state.v1`. The discoverable JSON schema lives at
-[`docs/runtime-state.schema.json`](runtime-state.schema.json).
+- `.brevity/runtime.json`
+- `.brevity/runtime.lock`
+- `.brevity/runtime.stop`
 
-The v1 contract is intended to evolve additively where practical. Producers may
-add fields over time, and consumers should tolerate unknown fields. Consumers
-should also treat JSON field ordering as insignificant and should not depend on
-properties appearing in a particular order.
+These files are runtime infrastructure state. They are not task state, queue
+state, provider state, or durable project memory.
 
-## Major Sections
+## Ownership
 
-- `providers` - provider health summary and per-provider health records.
-- `taskCounts` - aggregate task counts by runtime classification.
-- `tasks` - runtime task summaries from `.brevity\tasks.json`.
-- `groups` - task slug lists grouped by runtime classification.
-- `orphanedTaskWorktrees` - task-like active worktrees not tracked in runtime
-  task metadata.
-- `lock` - task metadata lock status.
-- `runtimeMemory` - runtime log metadata and recent runtime-memory entries.
-- `suggestedNextActions` - suggested operator actions derived from the current
-  snapshot.
+The Go runtime owns these files. PowerShell may remain as compatibility or
+reference behavior, but new supervisor-owned runtime behavior should be
+implemented in Go.
 
-## Observational Only
+The runtime supervisor may write `.brevity/runtime.json`, acquire and release
+`.brevity/runtime.lock`, and read or clear `.brevity/runtime.stop`. Other
+commands may read runtime state for operator status. `runtime stop` may create a
+stop request file.
 
-Runtime state is observational only. Reading
-`.\brevity.ps1 runtime state --json` should not mutate runtime state, repair
-metadata, create worktrees, update provider configuration, or perform planner
-automation.
+## `.brevity/runtime.json`
 
-Consumers that need to change Brevity state should invoke explicit commands and
-then refresh from `runtime state --json` after the command completes.
+`runtime.json` is the latest supervisor heartbeat snapshot.
 
-## Performance Budget
+The supervisor writes this file when it starts, refreshes it while running, and
+marks it stopped during graceful shutdown. Writes are atomic through the native
+state store.
 
-Runtime state is intended to be safe for repeated TUI polling. The producer keeps
-runtime-log memory recent-only, emits compact run-history fields, and serializes
-JSON through a bounded serializer. Current internal budgets are:
+Missing `runtime.json` means the runtime is stopped or has never been started.
+Readers must report this as not running, not as task failure.
 
-- recent runtime-memory entries: 5 lines
-- JSON depth: 8 levels
-- JSON object or array entries per value: 200 entries
-- latest run-history scan per task summary: 1 latest run
-- worker-log header read per summarized run: 40 lines
+### Fields
 
-Cleanup candidates are read-only inspection records. They should remain concise;
-future expensive cleanup detail should be summarized or moved behind an explicit
-command instead of fully expanding inside runtime state.
+- `pid` - operating system process id for the supervisor process.
+- `startedAt` - UTC RFC3339 timestamp for supervisor start.
+- `heartbeatAt` - UTC RFC3339 timestamp for the latest supervisor heartbeat.
+- `status` - runtime lifecycle status.
+- `activeWorkers` - current number of workers owned by the supervisor. In v1 this
+  is always `0`.
+- `queueDepth` - current queue depth owned by the supervisor. In v1 this is
+  always `0`.
+- `version` - runtime state file version. Current version is `1`.
 
-## Native Cleanup Inspection
+### Status Values
 
-Go owns read-only cleanup/orphan inspection:
+The v1 implementation persists:
 
-```powershell
-go run ./cmd/brevity cleanup inspect
-go run ./cmd/brevity cleanup inspect --json
+- `running`
+- `stopped`
+
+Readers also tolerate these reserved lifecycle values so future additive changes
+can be reported safely:
+
+- `starting`
+- `stopping`
+- `stale`
+- `unknown`
+
+Unrecognized status values must be reported clearly as invalid runtime state.
+They must not cause task metadata repair, task failure, queue execution, or
+provider execution.
+
+### Stale Runtime Behavior
+
+A runtime is stale when `runtime.json` exists but the recorded process is not
+alive, or the heartbeat is older than the reader's freshness threshold.
+
+Stale runtime state means supervisor infrastructure is stale. It does not mean
+any task failed. A stale supervisor must not corrupt, reconcile, rewrite, or infer
+task execution state.
+
+`runtime stop` may mark stale runtime state as `stopped` and clear a stop request
+so the operator can recover the supervisor lifecycle. This action is limited to
+runtime infrastructure files.
+
+### Corrupted Or Invalid State Behavior
+
+Malformed JSON must be reported as corrupted runtime state with a useful error.
+Readers must not panic, attempt provider execution, or mutate task state.
+
+Invalid but parseable state, such as an unsupported future `version`, missing
+active-runtime fields, an invalid active-runtime pid, negative worker counts, or
+an unrecognized status, must be reported clearly as invalid runtime state.
+
+Unknown future versions are not silently accepted. They are reported as
+unsupported so operators know the reader and producer contracts differ.
+
+## `.brevity/runtime.lock`
+
+`runtime.lock` is an advisory single-supervisor lock. It prevents multiple
+supervisor processes from owning the heartbeat file at the same time.
+
+The lock file contains simple diagnostic text:
+
+```text
+pid=<process-id>
+createdAt=<utc-rfc3339-nano>
 ```
 
-The JSON form emits `brevity.cleanup-inspection.v1` with summary counts and a
-stable candidate list. Candidates can describe tracked task worktree issues,
-missing worktrees, orphan task worktrees, orphan task branches, dirty worktrees,
-stale runs, or unknown inspection cases. Each record includes severity,
-available task/branch/worktree identity, dirty/removable/destructive flags,
-reason, suggested action, and source.
+The supervisor acquires the lock before writing heartbeat state and releases it
+on exit. Lock acquisition uses a timeout and may remove a stale lock after the
+configured stale age. Stale lock cleanup is limited to the lock file itself.
 
-This command is observational only. It lists Git worktrees, local branches, path
-existence, and dirty status where safe. It does not remove worktrees, delete
-branches, run `git clean`, mutate task state, launch providers, or execute
-cleanup. PowerShell remains the authority for cleanup execution.
+The runtime lock is separate from `.brevity/state.lock`, which protects task and
+other Brevity state mutations.
 
-## Native Run History Shape
+## `.brevity/runtime.stop`
 
-Native Go reads `.brevity\runs.jsonl` as an append-only JSONL index. Each record
-may include `runId`, `slug`, `provider`, `profile`, `startedAt`, `finishedAt`,
-`exitCode`, `workerStatus`, `failureType`, `logPath`, `stdoutPath`,
-`stderrPath`, `summary`, and `message`.
+`runtime.stop` is a stop-request marker.
 
-Missing `.brevity\runs.jsonl` means empty run history. Malformed JSONL rows are
-reported as clear read errors with the line number. Latest run selection is
-deterministic: records sort by `finishedAt`, then `startedAt`, then later JSONL
-line. If `finishedAt` is absent, the run is incomplete; runs older than the
-worker stale threshold are reported as stale.
+`runtime stop` creates this file with a UTC timestamp. The running supervisor
+checks for it on heartbeat ticks. When seen, the supervisor writes a final
+`stopped` state and exits. The supervisor or stop command then clears the stop
+request.
 
-## Native Task Run Inspection Commands
+Creating `runtime.stop` must not kill workers, drain queues, execute providers,
+or mutate task execution state. In v1 there are no supervisor-owned workers or
+queues to drain.
 
-Go now owns the read-only task run-history inspection path:
+## Safety Invariants
+
+- Runtime state is infrastructure state, not task state.
+- Supervisor failure is not task failure.
+- Stale runtime state must not corrupt task state.
+- Corrupted `runtime.json` must be reported safely.
+- Runtime status is read-only for status/dashboard consumers.
+- Dry-run paths must never start the supervisor.
+- The supervisor must not execute providers.
+- The supervisor must not drain queues.
+- The supervisor must not mutate task execution state.
+- The supervisor must not spawn workers in v1.
+- The supervisor must not expose daemon APIs, HTTP, websockets, scheduling, or
+  distributed execution in v1.
+
+## Operator Commands
 
 ```powershell
-go run ./cmd/brevity task runs <slug>
-go run ./cmd/brevity task runs <slug> --json
-go run ./cmd/brevity task runtime-info <slug>
-go run ./cmd/brevity task runtime-info <slug> --json
+go run ./cmd/brevity runtime start
+go run ./cmd/brevity runtime status
+go run ./cmd/brevity runtime stop
 ```
 
-These commands read `.brevity\tasks.json` and `.brevity\runs.jsonl`. They do
-not mutate task metadata, write provider state, start workers, merge branches,
-or clean up worktrees. PowerShell remains present as legacy/reference behavior
-for broader command coverage, especially mutation commands and provider/worker
-execution.
-
-`task runs <slug> --json` emits a `brevity.command-result.v1` envelope whose
-payload includes `slug`, `count`, and a newest-first `runs` array. Each run may
-include `runId`, `workerStatus`, `exitCode`, `provider`, `profile`,
-`startedAt`, `finishedAt`, `failureType`, `logPath`, `incomplete`, `stale`,
-`runAgeMinutes`, and `source`.
-
-`runs` is an empty array when the task exists but has no run history. Missing
-tasks return `success: false` with a `task-not-found` error. Malformed run
-history returns a read error with the JSONL line number.
-
-`task runtime-info <slug> --json` emits the same command-result envelope with a
-payload containing task metadata, `runCount`, latest run metadata, stale and
-incomplete booleans, log path, and a short operator interpretation when useful.
+`runtime status` is read-only. Missing state reports stopped/not running.
+Corrupted or invalid state reports a useful status and error.

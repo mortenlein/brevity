@@ -1119,6 +1119,11 @@ func renderRuntimeSupervisorStatus(stdout io.Writer, snapshot runtimestate.Snaps
 		}
 		return
 	}
+	if snapshot.Error != nil {
+		fmt.Fprintln(stdout, "status: invalid")
+		fmt.Fprintf(stdout, "error: %v\n", snapshot.Error)
+		return
+	}
 	state := snapshot.State
 	fmt.Fprintf(stdout, "status: %s\n", fallbackDash(state.Status))
 	fmt.Fprintf(stdout, "pid: %d\n", state.PID)

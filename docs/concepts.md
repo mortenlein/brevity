@@ -274,6 +274,10 @@ are Go-native lifecycle commands. They own the first persistent supervisor
 foundation and write `.brevity\runtime.json` with pid, start time, status,
 heartbeat, active worker count, queue depth, and version metadata.
 
+The file contract for `.brevity\runtime.json`, `.brevity\runtime.lock`, and
+`.brevity\runtime.stop` is documented in
+[`docs/runtime-state-contract.md`](runtime-state-contract.md).
+
 This foundation is intentionally observational. The supervisor updates a
 heartbeat and responds to graceful stop requests, but it does not execute
 providers, drain queues, spawn workers, mutate task execution state, expose an

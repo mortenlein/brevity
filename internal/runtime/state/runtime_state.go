@@ -22,6 +22,15 @@ const (
 	Version     = 1
 )
 
+var allowedStatuses = map[string]struct{}{
+	"running":  {},
+	"starting": {},
+	"stopping": {},
+	"stopped":  {},
+	"stale":    {},
+	"unknown":  {},
+}
+
 type Clock func() time.Time
 
 type RuntimeState struct {
@@ -139,6 +148,11 @@ func (store Store) Snapshot(freshWithin time.Duration) Snapshot {
 		snapshot.Interpretation = "runtime has not been started"
 		return snapshot
 	}
+	if err := Validate(runtimeState); err != nil {
+		snapshot.Error = err
+		snapshot.Interpretation = "runtime state is invalid"
+		return snapshot
+	}
 	snapshot.PIDAlive = ProcessAlive(runtimeState.PID)
 	if startedAt, err := parseTime(runtimeState.StartedAt); err == nil {
 		snapshot.Uptime = now.Sub(startedAt)
@@ -158,6 +172,40 @@ func (store Store) Snapshot(freshWithin time.Duration) Snapshot {
 		snapshot.Interpretation = "runtime is running"
 	}
 	return snapshot
+}
+
+func Validate(state RuntimeState) error {
+	if state.Version > Version {
+		return fmt.Errorf("unsupported runtime.json version %d; supported version is %d", state.Version, Version)
+	}
+	if state.Version <= 0 {
+		return errors.New("runtime.json version is missing or invalid")
+	}
+	status := strings.ToLower(strings.TrimSpace(state.Status))
+	if status == "" {
+		return errors.New("runtime.json status is missing")
+	}
+	if _, ok := allowedStatuses[status]; !ok {
+		return fmt.Errorf("runtime.json status %q is not recognized", state.Status)
+	}
+	if status == "running" || status == "starting" || status == "stopping" {
+		if state.PID <= 0 {
+			return errors.New("runtime.json pid is missing or invalid for active runtime status")
+		}
+		if _, err := parseTime(state.StartedAt); err != nil {
+			return fmt.Errorf("runtime.json startedAt is missing or invalid: %w", err)
+		}
+		if _, err := parseTime(state.HeartbeatAt); err != nil {
+			return fmt.Errorf("runtime.json heartbeatAt is missing or invalid: %w", err)
+		}
+	}
+	if state.ActiveWorkers < 0 {
+		return errors.New("runtime.json activeWorkers cannot be negative")
+	}
+	if state.QueueDepth < 0 {
+		return errors.New("runtime.json queueDepth cannot be negative")
+	}
+	return nil
 }
 
 func NewRunningState(pid int, now time.Time) RuntimeState {
