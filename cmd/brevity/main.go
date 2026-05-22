@@ -48,6 +48,7 @@ const (
 	commandQueueAdd          commandKind = commandKind(commands.QueueAddID)
 	commandQueueList         commandKind = commandKind(commands.QueueListID)
 	commandQueueInspect      commandKind = commandKind(commands.QueueInspectID)
+	commandQueuePlan         commandKind = commandKind(commands.QueuePlanID)
 	commandQueueRemove       commandKind = commandKind(commands.QueueRemoveID)
 	commandProviderStatus    commandKind = commandKind(commands.ProviderStatusID)
 	commandProviderSet       commandKind = commandKind(commands.ProviderSetID)
@@ -197,7 +198,7 @@ func parseOptions(args []string) (cliOptions, error) {
 
 func parseQueueOptions(args []string) (cliOptions, error) {
 	if len(args) < 2 {
-		return cliOptions{}, fmt.Errorf("missing queue command: supported commands: add, list, inspect, remove")
+		return cliOptions{}, fmt.Errorf("missing queue command: supported commands: add, list, inspect, plan, remove")
 	}
 	switch args[1] {
 	case "add":
@@ -219,13 +220,22 @@ func parseQueueOptions(args []string) (cliOptions, error) {
 			options.json = true
 		}
 		return options, nil
+	case "plan":
+		options := cliOptions{kind: commandQueuePlan}
+		for _, arg := range args[2:] {
+			if arg != "--json" {
+				return cliOptions{}, usageError(commands.QueuePlan)
+			}
+			options.json = true
+		}
+		return options, nil
 	case "remove":
 		if len(args) != 3 || strings.TrimSpace(args[2]) == "" {
 			return cliOptions{}, usageError(commands.QueueRemove)
 		}
 		return cliOptions{kind: commandQueueRemove, candidateID: args[2]}, nil
 	default:
-		return cliOptions{}, fmt.Errorf("unsupported queue command %q: supported commands: add, list, inspect, remove", args[1])
+		return cliOptions{}, fmt.Errorf("unsupported queue command %q: supported commands: add, list, inspect, plan, remove", args[1])
 	}
 }
 
@@ -809,7 +819,7 @@ func runWithContextOptions(ctx context.Context, stdout io.Writer, client runtime
 		return routeRuntimeStateCommand(stdout)
 	case commandRuntimeStart, commandRuntimeStop, commandRuntimeStatus:
 		return routeRuntimeSupervisorCommand(ctx, stdout, options)
-	case commandQueueAdd, commandQueueList, commandQueueInspect, commandQueueRemove:
+	case commandQueueAdd, commandQueueList, commandQueueInspect, commandQueuePlan, commandQueueRemove:
 		return routeQueueCommand(stdout, options)
 	case commandProviderStatus, commandProviderSet, commandProviderReset:
 		return routeProviderCommand(stdout, options)
@@ -900,6 +910,18 @@ func routeQueueCommand(stdout io.Writer, options cliOptions) error {
 		}
 		renderQueueInspection(stdout, inspection)
 		return nil
+	case commandQueuePlan:
+		plan := store.Plan()
+		if options.json {
+			output, err := json.Marshal(plan)
+			if err != nil {
+				return err
+			}
+			_, err = stdout.Write(append(output, '\n'))
+			return err
+		}
+		renderQueuePlan(stdout, plan)
+		return nil
 	case commandQueueRemove:
 		item, err := store.Remove(options.candidateID)
 		if err != nil {
@@ -913,6 +935,49 @@ func routeQueueCommand(stdout io.Writer, options cliOptions) error {
 	default:
 		return fmt.Errorf("unsupported queue command: %s", options.kind)
 	}
+}
+
+func renderQueuePlan(stdout io.Writer, plan runtimequeue.Plan) {
+	fmt.Fprintln(stdout, "QUEUE PLAN")
+	fmt.Fprintf(stdout, "Path: %s\n", plan.Path)
+	fmt.Fprintf(stdout, "State: %s\n", plan.State)
+	if strings.TrimSpace(plan.Error) != "" {
+		fmt.Fprintf(stdout, "Error: %s\n", plan.Error)
+	}
+	fmt.Fprintln(stdout)
+	fmt.Fprintln(stdout, "Runnable:")
+	if len(plan.Runnable) == 0 {
+		fmt.Fprintln(stdout, "none")
+	} else {
+		for index, item := range plan.Runnable {
+			label := item.Task
+			if strings.TrimSpace(label) == "" {
+				label = fallbackDash(item.ID)
+			}
+			fmt.Fprintf(stdout, "%d. %s\n", index+1, label)
+			fmt.Fprintf(stdout, "   reason: %s\n", item.Reason)
+		}
+	}
+	fmt.Fprintln(stdout)
+	fmt.Fprintln(stdout, "Skipped:")
+	if len(plan.Skipped) == 0 {
+		fmt.Fprintln(stdout, "none")
+	} else {
+		for _, item := range plan.Skipped {
+			label := item.Task
+			if strings.TrimSpace(label) == "" {
+				label = fallbackDash(item.ID)
+			}
+			fmt.Fprintf(stdout, "- %s\n", label)
+			fmt.Fprintf(stdout, "  reason: %s\n", item.Reason)
+		}
+	}
+	fmt.Fprintln(stdout)
+	fmt.Fprintln(stdout, "Summary:")
+	fmt.Fprintf(stdout, "- runnable: %d\n", plan.Summary.Runnable)
+	fmt.Fprintf(stdout, "- skipped: %d\n", plan.Summary.Skipped)
+	fmt.Fprintln(stdout)
+	fmt.Fprintln(stdout, "Read-only: plan does not execute providers, spawn workers, start the supervisor, drain the queue, or reserve ownership.")
 }
 
 func renderQueueInspection(stdout io.Writer, inspection runtimequeue.Inspection) {

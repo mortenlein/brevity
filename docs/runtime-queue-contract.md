@@ -53,11 +53,12 @@ has a separate contract update.
 
 `brevity queue add <task>` appends an item with status `queued` and persists the
 file atomically. `brevity queue list` reads and prints the queue. `brevity queue
-inspect` reads queue infrastructure diagnostics. `brevity queue remove <id>`
+inspect` reads queue infrastructure diagnostics. `brevity queue plan` explains
+read-only runnable/skipped candidate ordering. `brevity queue remove <id>`
 removes one queue item by queue item id.
 
 These commands do not drain the queue, run providers, spawn workers, start the
-supervisor, or mutate task execution state.
+supervisor, reserve execution ownership, or mutate task execution state.
 
 ## Inspection
 
@@ -81,6 +82,22 @@ Inspection must tolerate a missing file, an empty queue, corrupted JSON,
 unsupported future versions, duplicate ids, and invalid item fields. It must not
 repair, normalize, rewrite, or otherwise mutate `.brevity\runtime-queue.json`.
 Invalid queue infrastructure state is not task failure.
+
+## Planning
+
+`brevity queue plan` is read-only candidate planning. It determines which items
+would be considered runnable under the intentionally small v1 rules and which
+items are skipped with a reason. Runnable items require status `queued`, a valid
+task slug, a present non-duplicated queue id, and valid timestamp fields.
+
+Planning does not introduce scheduling policy. It preserves queue-file order and
+does not apply priorities, provider concurrency, retries, dependency graphs, or
+provider cooldowns.
+
+`brevity queue plan --json` emits a compact machine-readable
+`brevity.runtime-queue-plan.v1` summary. The planning semantics and non-goals
+are documented in
+[`docs/runtime-queue-planning.md`](runtime-queue-planning.md).
 
 ## Ownership And Locking
 
@@ -111,6 +128,9 @@ The current supervisor foundation is observational and must not drain
 - Inspecting the queue is not execution.
 - Inspecting the queue must not start the runtime supervisor.
 - Inspecting the queue must not repair or rewrite queue files automatically.
+- Planning the queue is not execution.
+- Planning the queue must not reserve ownership.
+- Planning the queue must not mutate or drain the queue.
 - The queue does not require the supervisor to be running.
 - Missing `.brevity\runtime-queue.json` is an empty queue.
 - Corrupted queue JSON must be reported safely with a clear error.

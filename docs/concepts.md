@@ -290,9 +290,18 @@ supervisor behavior.
 `.brevity\runtime-queue.json` is the first durable runtime queue contract. It is
 Go-native infrastructure state for queued operator intent, not task state.
 `Brevity queue add <task>` persists a queued item, `Brevity queue list` reads
-the queue, and `Brevity queue remove <id>` removes one queue item by id. These
-commands do not execute providers, spawn workers, start the supervisor, drain
-the queue, or mutate task lifecycle metadata.
+the queue, `Brevity queue plan` explains the current read-only execution
+candidate order, and `Brevity queue remove <id>` removes one queue item by id.
+These commands do not execute providers, spawn workers, start the supervisor,
+drain the queue, or mutate task lifecycle metadata.
+
+`Brevity queue plan [--json]` is observational only. It reads
+`.brevity\runtime-queue.json`, reports which queued items are runnable, reports
+which items are skipped because they are invalid, duplicated, or use unsupported
+statuses, and preserves queue-file order for runnable candidates. It does not
+reserve ownership, update queue state, update task state, or introduce
+scheduler behavior. The planning semantics are documented in
+[`docs/runtime-queue-planning.md`](runtime-queue-planning.md).
 
 The native Bubble Tea dashboard surfaces this queue as read-only operator
 visibility: file state, item count, status counts, corruption/invalid warnings,
