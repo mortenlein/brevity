@@ -712,16 +712,22 @@ When task metadata exists, it prints the slug, branch, status, normalized state,
 worktree path, and prompt path for each task. When no task metadata exists, it prints
 `No Brevity tasks found.`
 
-The task merge command reads the matching record from:
+The native task merge command reads the matching record from:
 
 ```text
 <repo>\.brevity\tasks.json
 ```
 
-It merges the recorded branch into the current Git branch with
-`git merge <branch>`. When the merge succeeds, Brevity updates the task status to
-`merged`. It does not remove the worktree, delete the branch, or remove task
-metadata. If the merge fails, Brevity leaves metadata unchanged.
+`go run .\cmd\brevity task merge <slug> --plan --json` builds a read-only merge
+plan with the source branch, current target branch, worktree dirty state,
+expected Git argv commands, blockers, warnings, and expected metadata mutation.
+
+`go run .\cmd\brevity task merge <slug> [--json]` refuses blocked plans, checks
+out the target branch, and runs `git merge <branch>` without shell string
+concatenation. When the merge succeeds, Brevity updates the task status to
+`merged` through the native state store and advisory lock. It does not remove
+the worktree, delete the branch, or remove task metadata. If the merge fails,
+Brevity leaves metadata unchanged. Cleanup remains explicit and separate.
 
 The task cleanup command reads the matching record from:
 

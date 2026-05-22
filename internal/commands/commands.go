@@ -15,14 +15,17 @@ const (
 	DoctorID             ID = "doctor"
 	TaskCleanupID        ID = "task-cleanup"
 	TaskMergeID          ID = "task-merge"
+	TaskPreflightID      ID = "task-preflight"
 	TaskNewID            ID = "task-new"
 	TaskStartID          ID = "task-start"
 	TaskRunID            ID = "task-run"
 	TaskRuntimeInfoID    ID = "task-runtime-info"
+	TaskDetailID         ID = "task-detail"
 	TaskRunsID           ID = "task-runs"
 	TaskRunsReconcileID  ID = "task-runs-reconcile"
 	TaskRunsRetentionID  ID = "task-runs-retention"
 	TaskRunsCompactID    ID = "task-runs-compact"
+	CleanupInspectID     ID = "cleanup-inspect"
 )
 
 type Command struct {
@@ -54,7 +57,7 @@ var (
 	Doctor = Command{
 		ID:    DoctorID,
 		Words: []string{"doctor"},
-		Usage: "brevity doctor",
+		Usage: "brevity doctor [--json]",
 	}
 	RuntimeState = Command{
 		ID:    RuntimeStateID,
@@ -78,8 +81,8 @@ var (
 	}
 	TaskContextRefresh = Command{
 		ID:    TaskContextRefreshID,
-		Words: []string{"task", "context", "refresh"},
-		Usage: "brevity task context refresh <slug>",
+		Words: []string{"task", "refresh-context"},
+		Usage: "brevity task refresh-context <slug> [--json]",
 	}
 	TaskNew = Command{
 		ID:    TaskNewID,
@@ -106,6 +109,11 @@ var (
 		Words: []string{"task", "runtime-info"},
 		Usage: "brevity task runtime-info <slug> [--json]",
 	}
+	TaskDetail = Command{
+		ID:    TaskDetailID,
+		Words: []string{"task", "detail"},
+		Usage: "brevity task detail <slug> [--json]",
+	}
 	TaskRuns = Command{
 		ID:    TaskRunsID,
 		Words: []string{"task", "runs"},
@@ -131,10 +139,20 @@ var (
 		Words: []string{"task", "cleanup"},
 		Usage: "brevity task cleanup <slug> --force",
 	}
+	CleanupInspect = Command{
+		ID:    CleanupInspectID,
+		Words: []string{"cleanup", "inspect"},
+		Usage: "brevity cleanup inspect [--json]",
+	}
 	TaskMerge = Command{
 		ID:    TaskMergeID,
 		Words: []string{"task", "merge"},
-		Usage: "brevity task merge <slug>",
+		Usage: "brevity task merge <slug> [--plan] [--json]",
+	}
+	TaskPreflight = Command{
+		ID:    TaskPreflightID,
+		Words: []string{"task", "preflight"},
+		Usage: "brevity task preflight <new|start|run|merge|cleanup> <slug> [--json]",
 	}
 )
 
@@ -150,11 +168,14 @@ var UsageCommands = []Command{
 	TaskNew,
 	TaskStart,
 	TaskRun,
+	TaskPreflight,
 	TaskRuntimeInfo,
+	TaskDetail,
 	TaskRuns,
 	TaskRunsReconcile,
 	TaskRunsRetention,
 	TaskRunsCompact,
+	CleanupInspect,
 	TaskCleanup,
 	TaskMerge,
 }

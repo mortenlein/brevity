@@ -173,6 +173,50 @@ type TaskRunPlanPayload struct {
 	Unsupported                 []string             `json:"unsupported"`
 }
 
+type TaskMergePlanPayload struct {
+	Schema                string          `json:"schema"`
+	Version               int             `json:"version"`
+	Slug                  string          `json:"slug"`
+	SourceBranch          string          `json:"sourceBranch"`
+	TargetBranch          string          `json:"targetBranch"`
+	WorktreePath          string          `json:"worktreePath"`
+	RepoRoot              string          `json:"repoRoot"`
+	Dirty                 bool            `json:"dirty"`
+	AheadBehind           string          `json:"aheadBehind,omitempty"`
+	ExpectedGitCommands   [][]string      `json:"expectedGitCommands"`
+	ExpectedStateMutation string          `json:"expectedStateMutation"`
+	Blockers              []ResultMessage `json:"blockers"`
+	Warnings              []ResultMessage `json:"warnings"`
+	Destructive           bool            `json:"destructive"`
+	CleanupRequired       bool            `json:"cleanupRequiredAfterMerge"`
+	GeneratedAt           string          `json:"generatedAt"`
+}
+
+type TaskMergePayload struct {
+	Slug             string               `json:"slug"`
+	SourceBranch     string               `json:"sourceBranch"`
+	TargetBranch     string               `json:"targetBranch"`
+	PreviousState    string               `json:"previousState,omitempty"`
+	NewState         string               `json:"newState,omitempty"`
+	UpdatedAt        string               `json:"updatedAt,omitempty"`
+	Plan             TaskMergePlanPayload `json:"plan"`
+	GitCommands      []GitCommandResult   `json:"gitCommands"`
+	MetadataUpdated  bool                 `json:"metadataUpdated"`
+	BranchRemoved    bool                 `json:"branchRemoved"`
+	WorktreeRemoved  bool                 `json:"worktreeRemoved"`
+	CleanupExecuted  bool                 `json:"cleanupExecuted"`
+	ConflictDetected bool                 `json:"conflictDetected"`
+}
+
+type GitCommandResult struct {
+	Command  string   `json:"command"`
+	Args     []string `json:"args"`
+	Dir      string   `json:"dir"`
+	ExitCode int      `json:"exitCode"`
+	Stdout   string   `json:"stdout,omitempty"`
+	Stderr   string   `json:"stderr,omitempty"`
+}
+
 type TaskRunWorkerCommand struct {
 	Provider         string   `json:"provider"`
 	Command          string   `json:"command"`
@@ -419,6 +463,31 @@ func ParseTaskRunPlanPayload(result CommandResult) (TaskRunPlanPayload, error) {
 	}
 	if payload.Slug == "" {
 		return TaskRunPlanPayload{}, errors.New("invalid task run plan payload: missing slug")
+	}
+	return payload, nil
+}
+
+func ParseTaskMergePlanPayload(result CommandResult) (TaskMergePlanPayload, error) {
+	if len(result.Payload) == 0 {
+		return TaskMergePlanPayload{}, errors.New("task merge plan result missing payload")
+	}
+	var payload TaskMergePlanPayload
+	if err := json.Unmarshal(result.Payload, &payload); err != nil {
+		return TaskMergePlanPayload{}, fmt.Errorf("invalid task merge plan payload: %w", err)
+	}
+	if payload.Slug == "" {
+		return TaskMergePlanPayload{}, errors.New("invalid task merge plan payload: missing slug")
+	}
+	return payload, nil
+}
+
+func ParseTaskMergePayload(result CommandResult) (TaskMergePayload, error) {
+	if len(result.Payload) == 0 {
+		return TaskMergePayload{}, errors.New("task merge result missing payload")
+	}
+	var payload TaskMergePayload
+	if err := json.Unmarshal(result.Payload, &payload); err != nil {
+		return TaskMergePayload{}, fmt.Errorf("invalid task merge payload: %w", err)
 	}
 	return payload, nil
 }

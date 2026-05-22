@@ -3,11 +3,11 @@
 Brevity's Go command under `cmd\brevity` is a frontend/runtime client plus the
 native runtime authority slices. PowerShell remains the legacy reference and
 fallback for orchestration behavior, but Go now owns provider health state
-mutation, task creation, task/runtime state reading, run-history inspection, read-only
-doctor/detail diagnostics, cleanup/orphan inspection reports, native task
-mutation preflight gates, `task start <slug>` metadata mutation, native
-task prompt/context refresh, native task-run planning, and native task-run
-provider execution.
+mutation, task creation, task/runtime state reading, run-history inspection,
+read-only doctor/detail diagnostics, cleanup/orphan inspection reports, native
+task mutation preflight gates, `task start <slug>` metadata mutation, native
+task prompt/context refresh, native task-run planning, native task-run provider
+execution, and native task-merge planning/execution.
 
 The original PowerShell `.\brevity.ps1 tui` command is a lightweight read-only
 runtime/operator scaffold. The Go dashboard and `--watch` mode are the active
@@ -22,14 +22,14 @@ task runtime metadata.
 
 Go-owned `.brevity` writes must go through `internal/state` and the advisory
 `.brevity/state.lock` protocol. Provider execution and worker execution for
-`task run --execute` are implemented natively; merge and cleanup execution are
-not part of this migration.
+`task run --execute` and `task merge` are implemented natively. Cleanup
+execution is still separate and not part of the native merge path.
 
 Native preflight is the safety contract for Go-owned task mutation.
 Preflight is read-only: it does not create/delete worktrees, create/delete
-branches, write `tasks.json`, or launch providers/workers. PowerShell still
-owns merge/cleanup execution and remains a legacy reference/fallback for task
-run and task creation semantics.
+branches, write `tasks.json`, or launch providers/workers. PowerShell remains a
+legacy reference/fallback for merge semantics and other historical orchestration
+behavior, while cleanup execution remains separate.
 
 The dashboard UX and interactive action roadmap is documented in
 [`docs/go-dashboard-ux-plan.md`](go-dashboard-ux-plan.md).
@@ -54,7 +54,9 @@ metadata. It does not mean Go writes those files itself.
 | `go run ./cmd/brevity task preflight <new|start|run|merge|cleanup> <slug> [--json]` | Native mutation safety gate | Go state readers + read-only cleanup/provider checks | Read-only | Implemented | Emits human or stable `brevity.task-preflight.v1` JSON with status, checks, blockers, warnings, expected mutations, destructive/provider-execution flags, and suggested next action. |
 | `go run ./cmd/brevity task start <slug> [--json]` | Native state action | Go preflight + state store + `.brevity/state.lock` | Mutating | Implemented | Transitions allowed task states to `ready-for-worker`, updates `updatedAt` and `startedAt` when absent, preserves unrelated and unknown task fields, emits `brevity.command-result.v1`, and launches no provider/worker. |
 | `go run ./cmd/brevity task new <slug> [--json]` | Native state action | Go preflight + Git worktree + state store + `.brevity/state.lock` | Mutating | Implemented | Creates the branch/worktree required by current semantics, materializes prompt/context from the optional vault spec, appends task metadata, emits `brevity.command-result.v1`, and launches no provider/worker. |
-| `go run ./cmd/brevity task cleanup <slug> --force` | PowerShell-backed action | PowerShell command-result JSON | Mutating | Implemented | Requires `--force`; cleanup behavior is owned by PowerShell. |
+| `go run ./cmd/brevity task merge <slug> --plan [--json]` | Native merge planning | Go state reader + read-only Git inspector | Read-only | Implemented | Builds a `brevity.task-merge-plan.v1` payload with source/target branches, worktree dirty state, expected argv git commands, state mutation, blockers, warnings, and cleanup-required signal. It does not mutate Git or task metadata. |
+| `go run ./cmd/brevity task merge <slug> [--json]` | Native merge execution | Go merge plan + argv `git` + state store + `.brevity/state.lock` | Mutating | Implemented | Refuses blocked plans, checks out the target branch, runs `git merge <sourceBranch>` without shell concatenation, marks task metadata `merged` only on success, and never deletes branches/worktrees or runs cleanup. Tests use disposable Git fixtures. |
+| `go run ./cmd/brevity task cleanup <slug> --force` | PowerShell-backed action | PowerShell command-result JSON | Mutating | Implemented | Requires `--force`; cleanup behavior is owned by PowerShell and remains separate from native merge. |
 | `go run ./cmd/brevity task refresh-context <slug> [--json]` | Native state action | Go preflight + vault loader + state store + `.brevity/state.lock` | Mutating | Implemented | Rewrites `prompt.md`, refreshes bounded `.brevity\context` files from configured vault memory, updates prompt refresh metadata, emits `brevity.command-result.v1`, and launches no provider/worker. |
 | `go run ./cmd/brevity task context refresh <slug> [--json]` | Native state action | Go native refresh service | Mutating | Compatibility alias | Legacy command shape routed to the same Go service; PowerShell remains reference/fallback only. |
 | `go run ./cmd/brevity task runtime-info <slug>` | Native read-only inspection | Go `.brevity/tasks.json` + `.brevity/runs.jsonl` reader | Read-only | Implemented | Displays task runtime details without PowerShell. |
@@ -72,8 +74,7 @@ metadata. It does not mean Go writes those files itself.
 | `go run ./cmd/brevity doctor --json` | Native read-only diagnostics | Go diagnostic checks | Read-only | Implemented | Emits `brevity.command-result.v1` with a stable `brevity.doctor.v1` payload; exits non-zero when error diagnostics exist. |
 | `.\brevity.ps1 tui` | PowerShell TUI scaffold | PowerShell runtime state JSON | Read-only | Implemented | Original lightweight operator scaffold; useful as a reference, not the active future frontend direction. |
 | Native Go `.brevity` reader | Runtime migration | Go state readers | Read-only | Implemented for current read slice | Provider health, tasks, runs, and worktree scans are available for native runtime state; provider health and task metadata use `internal/state`. |
-| Interactive mutation UI | Frontend mutation UI | Future command-result actions | Mutating | Planned/deferred | No interactive mutation UI exists yet in the PowerShell TUI or Go dashboard. |
-| `go run ./cmd/brevity task merge <slug>` | PowerShell-backed action | PowerShell command-result JSON | Mutating | Planned/deferred | PowerShell has merge behavior; Go command surface does not expose it yet. |
+| Interactive mutation UI | Frontend mutation UI | Future command-result actions | Mutating | Planned/deferred | Bubble Tea has native task actions for existing flows; merge confirmation is still a future UI enrichment. |
 | Orphan cleanup execute | PowerShell-backed action | PowerShell command-result JSON | Mutating | Planned/deferred | Go does not expose mutating orphan cleanup execution yet. |
 | `go run ./cmd/brevity task runs compact --execute --archive` | PowerShell-backed action | PowerShell command-result JSON | Mutating | Planned/deferred | Go exposes only dry-run compaction planning. |
 | Background worker lifecycle | Runtime migration | PowerShell today, future Go TBD | Mutating | Planned/deferred | Worker lifecycle remains PowerShell-owned. |
@@ -85,9 +86,10 @@ metadata. It does not mean Go writes those files itself.
   `.brevity/runs.jsonl` run-history reading, native runtime-state building,
   native task status, task runtime/detail inspection, doctor diagnostics,
   cleanup/orphan inspection reports, task mutation preflight gates,
-  `task run --plan` execution envelopes, and the Bubble Tea native source.
-- PowerShell remains the authority for merge/cleanup execution and legacy
-  compatibility. Its task-new and task-run execution behavior is now
+  `task run --plan` execution envelopes, native task merge
+  planning/execution, and the Bubble Tea native source.
+- PowerShell remains the legacy reference for merge and the authority for
+  cleanup execution. Its task-new and task-run execution behavior is now
   reference/fallback rather than the Go CLI path.
 - Every Go task mutation must pass native preflight first. The
   `brevity.task-preflight.v1` JSON payload is the contract shared by CLI, TUI,
@@ -95,8 +97,9 @@ metadata. It does not mean Go writes those files itself.
 - Native Start task does not create/delete branches, create/delete worktrees, or
   run providers/workers. Native Refresh context writes only the task prompt,
   bounded worktree context files, and task refresh metadata. Native Task run
-  writes only provider logs, run-history records, and task runtime metadata; it
-  does not merge, cleanup, delete branches, or delete worktrees.
+  writes only provider logs, run-history records, and task runtime metadata.
+  Native Task merge writes only Git merge state and task metadata on success; it
+  does not cleanup, delete branches, or delete worktrees.
 - Provider health writes use `.brevity/state.lock` with exclusive create,
   `pid` and UTC `createdAt` contents, timeout waiting, and stale-lock cleanup
   when configured by tests/services.

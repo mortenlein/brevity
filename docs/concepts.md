@@ -770,11 +770,18 @@ checked out in any registered Git worktree. It prints whether each branch is
 merged into the current `HEAD` when Git can report that easily, plus the manual
 `git branch -D <branch>` command. Without `--dry-run`, it refuses safely.
 
-`Brevity task merge <slug>` reads the same metadata file, finds the matching task
-record, and merges the recorded branch into the current Git branch with
-`git merge <branch>`. When the merge succeeds, Brevity updates the task status to
-`merged`. It does not clean up the worktree, delete the branch, or remove task
-metadata. If the merge fails, the metadata stays unchanged.
+`Brevity task merge <slug>` is implemented by the native Go CLI. It first builds
+a merge plan from `.brevity\tasks.json` and read-only Git inspection, including
+the source branch, current target branch, worktree path, dirty state, expected
+Git argv commands, blockers, warnings, and the expected task metadata update.
+`--plan --json` emits that plan without mutating Git or task metadata.
+
+Without `--plan`, Brevity refuses blocked plans, checks out the target branch,
+and runs `git merge <branch>` with argv-style Git execution. When the merge
+succeeds, Brevity updates the task status to `merged` through the native state
+store and advisory lock. It does not clean up the worktree, delete the branch,
+or remove task metadata. If the merge fails or conflicts, the metadata stays
+unchanged. Cleanup remains a separate explicit command.
 
 ## Provider Capabilities
 

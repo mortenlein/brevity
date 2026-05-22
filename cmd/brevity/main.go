@@ -44,6 +44,7 @@ const (
 	commandTaskStatus      commandKind = commandKind(commands.TaskStatusID)
 	commandDoctor          commandKind = commandKind(commands.DoctorID)
 	commandTaskCleanup     commandKind = commandKind(commands.TaskCleanupID)
+	commandTaskMerge       commandKind = commandKind(commands.TaskMergeID)
 	commandTaskPreflight   commandKind = "task-preflight"
 	commandTaskNew         commandKind = commandKind(commands.TaskNewID)
 	commandTaskStart       commandKind = commandKind(commands.TaskStartID)
@@ -73,6 +74,7 @@ type cliOptions struct {
 	force           bool
 	execute         bool
 	dryRun          bool
+	plan            bool
 	profile         string
 	smoke           bool
 	json            bool
@@ -245,7 +247,7 @@ func parseProviderOptions(args []string) (cliOptions, error) {
 
 func parseTaskOptions(args []string) (cliOptions, error) {
 	if len(args) < 2 {
-		return cliOptions{}, fmt.Errorf("missing task command: supported commands: status, refresh-context, context refresh, runtime-info, detail, runs, new, start, run, cleanup, preflight")
+		return cliOptions{}, fmt.Errorf("missing task command: supported commands: status, refresh-context, context refresh, runtime-info, detail, runs, new, start, run, merge, cleanup, preflight")
 	}
 	if args[1] == "status" {
 		if len(args) != 2 {
@@ -297,6 +299,9 @@ func parseTaskOptions(args []string) (cliOptions, error) {
 	if args[1] == "run" {
 		return parseTaskRunOptions(args)
 	}
+	if args[1] == "merge" {
+		return parseTaskMergeOptions(args)
+	}
 	if args[1] == "runtime-info" {
 		return parseTaskRuntimeInfoOptions(args)
 	}
@@ -307,7 +312,25 @@ func parseTaskOptions(args []string) (cliOptions, error) {
 		return parseTaskRunsOptions(args)
 	}
 
-	return cliOptions{}, fmt.Errorf("unsupported task command %q: supported commands: status, refresh-context, context refresh, runtime-info, detail, runs, new, start, run, cleanup, preflight", args[1])
+	return cliOptions{}, fmt.Errorf("unsupported task command %q: supported commands: status, refresh-context, context refresh, runtime-info, detail, runs, new, start, run, merge, cleanup, preflight", args[1])
+}
+
+func parseTaskMergeOptions(args []string) (cliOptions, error) {
+	if len(args) < 3 || args[2] == "" {
+		return cliOptions{}, usageError(commands.TaskMerge)
+	}
+	options := cliOptions{kind: commandTaskMerge, slug: args[2]}
+	for _, arg := range args[3:] {
+		switch arg {
+		case "--plan":
+			options.plan = true
+		case "--json":
+			options.json = true
+		default:
+			return cliOptions{}, usageError(commands.TaskMerge)
+		}
+	}
+	return options, nil
 }
 
 func parseTaskPreflightOptions(args []string) (cliOptions, error) {
@@ -555,7 +578,7 @@ func runWithContextOptions(ctx context.Context, stdout io.Writer, client runtime
 		return routeTaskContextCommand(stdout, client, options)
 	case commandDoctor:
 		return routeDoctorCommand(stdout, options)
-	case commandTaskCleanup, commandTaskNew, commandTaskStart, commandTaskRun, commandTaskRuntimeInfo, commandTaskDetail:
+	case commandTaskCleanup, commandTaskNew, commandTaskStart, commandTaskRun, commandTaskMerge, commandTaskRuntimeInfo, commandTaskDetail:
 		return routeTaskCommand(stdout, client, options)
 	case commandTaskPreflight:
 		return routeTaskPreflightCommand(stdout, options)
@@ -1038,11 +1061,50 @@ func routeTaskCommand(stdout io.Writer, client runtimeclient.Client, options cli
 		return runTaskStart(stdout, options)
 	case commandTaskRun:
 		return runTaskRun(stdout, client, options)
+	case commandTaskMerge:
+		return runTaskMerge(stdout, options)
 	case commandTaskRuntimeInfo, commandTaskDetail:
 		return runTaskRuntimeInfo(stdout, client, options)
 	default:
 		return fmt.Errorf("unsupported task command: %s", options.kind)
 	}
+}
+
+func runTaskMerge(stdout io.Writer, options cliOptions) error {
+	store, err := state.NewStore("")
+	if err != nil {
+		return err
+	}
+	service := actions.TaskMergeService{Store: store}
+	var result contracts.CommandResult
+	var runErr error
+	if options.plan {
+		result, runErr = service.Plan(options.slug)
+	} else {
+		result, runErr = service.Merge(options.slug)
+	}
+	if options.json {
+		output, err := json.Marshal(result)
+		if err != nil {
+			return err
+		}
+		if _, err := stdout.Write(append(output, '\n')); err != nil {
+			return err
+		}
+	} else if options.plan {
+		if renderErr := actions.RenderTaskMergePlanResult(stdout, result); renderErr != nil {
+			return renderErr
+		}
+	} else if renderErr := actions.RenderTaskMergeResult(stdout, result); renderErr != nil {
+		return renderErr
+	}
+	if runErr != nil {
+		return runErr
+	}
+	if !result.Success {
+		return fmt.Errorf("%s reported success=false", result.Command)
+	}
+	return nil
 }
 
 func routeTaskContextCommand(stdout io.Writer, client runtimeclient.Client, options cliOptions) error {
