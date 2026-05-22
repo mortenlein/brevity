@@ -24,6 +24,7 @@ type Capability struct {
 var Matrix = []Capability{
 	{"dashboard", "Dashboard/watch console", "Implemented; default PowerShell source, native source optional", "Implemented legacy TUI scaffold", "Go for future operator UX", "read-only", "unit tests", "Go dashboard and Bubble Tea", "migrated frontend direction", "Keep improving native source", "keep reference"},
 	{"runtime-state", "Runtime state JSON", "Native reader implemented", "Implemented legacy producer", "Go", "read-only", "unit and contract tests", "native source supported", "migrated", "Keep compatibility schema additive", "keep fallback"},
+	{"runtime-supervisor", "Runtime supervisor lifecycle", "Native start, stop, status with heartbeat state", "Compatibility wrapper only", "Go", "runtime lifecycle metadata", "unit and fixture tests", "planned operator surface", "foundation migrated", "Keep supervisor observational; add queues later", "delegate only"},
 	{"provider-health", "Provider health read/write", "Native read, set, reset", "Implemented legacy compatibility", "Go", "mutating metadata", "unit tests", "actions available", "migrated", "Deprecate PowerShell-first docs", "keep wrapper/fallback"},
 	{"task-metadata-reads", "Task metadata/runtime reads", "Native task status, detail, runtime-info", "Implemented legacy views", "Go", "read-only", "unit tests", "native TUI source", "migrated", "Keep Go as authority", "keep compatibility"},
 	{"task-new", "Task new worktree creation", "Native implementation", "Implemented legacy compatibility", "Go", "mutating git and metadata", "fixture tests", "action available", "migrated", "Keep PowerShell as fallback only", "keep wrapper"},
@@ -41,7 +42,7 @@ var Matrix = []Capability{
 	{"task-activate-spec", "Task activate/spec", "Native activate and read-only spec", "Implemented legacy compatibility", "Go", "mutating git/metadata for activate; read-only for spec", "fixture tests", "none", "migrated", "Keep no-provider execution boundary", "keep reference"},
 	{"planner-prompts", "Planner prompt generation/application", "Not native", "Implemented", "PowerShell", "mutating prompt/tasks/worktrees depending on flags", "PowerShell manual coverage", "none", "not migrated", "Split prompt generation from task creation", "migrate later"},
 	{"memory-logs-session", "Memory notes, logs, session summary", "Not native or partial via run reads", "Implemented", "PowerShell", "read-only and memory mutation", "PowerShell manual coverage", "dashboard reads runtime memory", "not migrated", "Migrate small read-only views when needed", "keep helper for now"},
-	{"provider-profiles", "Provider profiles/profile aliases", "Duplicated in task-run planning", "Implemented source matrix", "Mixed", "read-only config", "unit tests for Go planning", "indirect", "partially migrated", "Move profile matrix to shared native metadata", "migrate next"},
+	{"provider-profiles", "Provider profiles/profile aliases", "Shared native metadata and resolver", "Implemented source matrix", "Go", "read-only config", "unit tests for provider resolver and Go planning", "indirect", "migrated", "Wire remaining PowerShell reference docs when PowerShell is retired", "keep reference"},
 }
 
 func WriteJSON(stdout io.Writer) error {

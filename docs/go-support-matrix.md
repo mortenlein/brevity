@@ -92,6 +92,7 @@ go run ./cmd/brevity support matrix --json
 | `memory note` | mutating memory log | none | PowerShell-owned | low | migrate later or keep helper |
 | `logs recent`, `logs task` | read-only | partial via run history | PowerShell-owned | low | migrate later |
 | `runtime state [--json]` | read-only | `runtime state --json` | legacy/fallback | low | keep fallback |
+| `runtime start|stop|status` | runtime lifecycle metadata | native equivalent | delegated compatibility | medium | delegate only |
 | `tui` | read-only | dashboard/Bubble Tea | reference scaffold | low | deprecate later |
 | `session summary` | read-only | none | PowerShell-owned | low | migrate later |
 | `onboard` | not implemented | none | planned | low | implement in Go when requested |
@@ -121,6 +122,9 @@ go run ./cmd/brevity support matrix --json
 | `go run ./cmd/brevity --watch --no-clear` | Dashboard/frontend | PowerShell runtime state JSON | Read-only | Implemented | Suppresses screen clearing on changed renders; unchanged stable dashboard content does not redraw. |
 | `go run ./cmd/brevity --bubble --json-source native` | Bubble Tea dashboard | Go native runtime state builder | Read-only | Implemented | Reads provider health, tasks, latest runs, and worktree cleanup signals without PowerShell. |
 | `go run ./cmd/brevity runtime state --json` | Native state inspection | Go native runtime state builder | Read-only | Implemented | Emits stable `brevity.runtime-state.v1` JSON from native Go; no PowerShell call. |
+| `go run ./cmd/brevity runtime start` | Runtime supervisor lifecycle | Go supervisor + `.brevity/runtime.lock` + `.brevity/runtime.json` | Mutating runtime metadata | Implemented foundation | Starts a lightweight heartbeat supervisor only; it does not execute providers, drain queues, or spawn workers. |
+| `go run ./cmd/brevity runtime status` | Runtime supervisor inspection | Go runtime state reader | Read-only | Implemented foundation | Reads `.brevity/runtime.json`, tolerates missing/corrupted/stale state, and reports pid, uptime, heartbeat freshness, worker count, and queue depth. |
+| `go run ./cmd/brevity runtime stop` | Runtime supervisor lifecycle | Go stop request + supervisor heartbeat loop | Mutating runtime metadata | Implemented foundation | Requests graceful shutdown and persists stopped state; no forceful provider or task behavior is involved. |
 | `go run ./cmd/brevity provider status` | Native state inspection | Go `.brevity/provider-health.json` reader | Read-only | Implemented | Reads provider health through `internal/state`; no PowerShell call. |
 | `go run ./cmd/brevity provider set <provider> <status> [--note <note>]` | Native state action | Go state store + `.brevity/state.lock` | Mutating | Implemented | Updates provider health without PowerShell or provider execution. |
 | `go run ./cmd/brevity provider reset <provider>` | Native state action | Go state store + `.brevity/state.lock` | Mutating | Implemented | Resets provider health to `unknown` without PowerShell or provider execution. |

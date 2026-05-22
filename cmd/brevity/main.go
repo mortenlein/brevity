@@ -22,6 +22,8 @@ import (
 	"github.com/mortenlein/brevity/internal/diagnostics"
 	"github.com/mortenlein/brevity/internal/preflight"
 	"github.com/mortenlein/brevity/internal/runmaintenance"
+	runtimestate "github.com/mortenlein/brevity/internal/runtime/state"
+	runtimesupervisor "github.com/mortenlein/brevity/internal/runtime/supervisor"
 	"github.com/mortenlein/brevity/internal/runtimeclient"
 	"github.com/mortenlein/brevity/internal/state"
 	"github.com/mortenlein/brevity/internal/support"
@@ -39,6 +41,9 @@ type commandKind string
 const (
 	commandDashboard         commandKind = commandKind(commands.DashboardID)
 	commandRuntimeState      commandKind = commandKind(commands.RuntimeStateID)
+	commandRuntimeStart      commandKind = commandKind(commands.RuntimeStartID)
+	commandRuntimeStop       commandKind = commandKind(commands.RuntimeStopID)
+	commandRuntimeStatus     commandKind = commandKind(commands.RuntimeStatusID)
 	commandProviderStatus    commandKind = commandKind(commands.ProviderStatusID)
 	commandProviderSet       commandKind = commandKind(commands.ProviderSetID)
 	commandProviderReset     commandKind = commandKind(commands.ProviderResetID)
@@ -317,20 +322,40 @@ func parseCleanupOptions(args []string) (cliOptions, error) {
 }
 
 func parseRuntimeOptions(args []string) (cliOptions, error) {
-	if len(args) < 2 || args[1] != "state" {
-		return cliOptions{}, usageError(commands.RuntimeState)
+	if len(args) < 2 {
+		return cliOptions{}, fmt.Errorf("missing runtime command: supported commands: state, start, stop, status")
 	}
-	options := cliOptions{kind: commandRuntimeState}
-	for _, arg := range args[2:] {
-		if arg != "--json" {
+	switch args[1] {
+	case "state":
+		options := cliOptions{kind: commandRuntimeState}
+		for _, arg := range args[2:] {
+			if arg != "--json" {
+				return cliOptions{}, usageError(commands.RuntimeState)
+			}
+			options.json = true
+		}
+		if !options.json {
 			return cliOptions{}, usageError(commands.RuntimeState)
 		}
-		options.json = true
+		return options, nil
+	case "start":
+		if len(args) != 2 {
+			return cliOptions{}, usageError(commands.RuntimeStart)
+		}
+		return cliOptions{kind: commandRuntimeStart}, nil
+	case "stop":
+		if len(args) != 2 {
+			return cliOptions{}, usageError(commands.RuntimeStop)
+		}
+		return cliOptions{kind: commandRuntimeStop}, nil
+	case "status":
+		if len(args) != 2 {
+			return cliOptions{}, usageError(commands.RuntimeStatus)
+		}
+		return cliOptions{kind: commandRuntimeStatus}, nil
+	default:
+		return cliOptions{}, fmt.Errorf("unsupported runtime command %q: supported commands: state, start, stop, status", args[1])
 	}
-	if !options.json {
-		return cliOptions{}, usageError(commands.RuntimeState)
-	}
-	return options, nil
 }
 
 func parseDoctorOptions(args []string) (cliOptions, error) {
@@ -740,6 +765,8 @@ func runWithContextOptions(ctx context.Context, stdout io.Writer, client runtime
 	switch options.kind {
 	case commandRuntimeState:
 		return routeRuntimeStateCommand(stdout)
+	case commandRuntimeStart, commandRuntimeStop, commandRuntimeStatus:
+		return routeRuntimeSupervisorCommand(ctx, stdout, options)
 	case commandProviderStatus, commandProviderSet, commandProviderReset:
 		return routeProviderCommand(stdout, options)
 	case commandInit:
@@ -1036,6 +1063,80 @@ func routeRuntimeStateCommand(stdout io.Writer) error {
 	}
 	_, err = stdout.Write(append(output, '\n'))
 	return err
+}
+
+func routeRuntimeSupervisorCommand(ctx context.Context, stdout io.Writer, options cliOptions) error {
+	if options.kind == commandRuntimeStart && runtimesupervisor.IsChildProcess() {
+		store, err := runtimestate.NewStore("")
+		if err != nil {
+			return err
+		}
+		return (runtimesupervisor.Supervisor{Store: store}).Run(ctx)
+	}
+	switch options.kind {
+	case commandRuntimeStart:
+		state, started, err := runtimesupervisor.Start("")
+		if err != nil {
+			return err
+		}
+		if started {
+			fmt.Fprintln(stdout, "Runtime supervisor started.")
+		} else {
+			fmt.Fprintln(stdout, "Runtime supervisor already running.")
+		}
+		fmt.Fprintf(stdout, "pid: %d\n", state.PID)
+		fmt.Fprintf(stdout, "status: %s\n", fallbackDash(state.Status))
+		fmt.Fprintf(stdout, "runtimeState: %s\n", mustRuntimeStorePath())
+		return nil
+	case commandRuntimeStop:
+		snapshot, err := runtimesupervisor.Stop("")
+		renderRuntimeSupervisorStatus(stdout, snapshot)
+		return err
+	case commandRuntimeStatus:
+		snapshot, err := runtimesupervisor.Status("")
+		if err != nil {
+			return err
+		}
+		renderRuntimeSupervisorStatus(stdout, snapshot)
+		return nil
+	default:
+		return fmt.Errorf("unsupported runtime supervisor command: %s", options.kind)
+	}
+}
+
+func renderRuntimeSupervisorStatus(stdout io.Writer, snapshot runtimestate.Snapshot) {
+	fmt.Fprintln(stdout, "Runtime supervisor")
+	fmt.Fprintf(stdout, "state: %s\n", snapshot.Interpretation)
+	fmt.Fprintf(stdout, "path: %s\n", snapshot.RuntimePath)
+	if snapshot.Missing {
+		fmt.Fprintln(stdout, "status: missing")
+		return
+	}
+	if snapshot.Corrupted {
+		fmt.Fprintln(stdout, "status: corrupted")
+		if snapshot.Error != nil {
+			fmt.Fprintf(stdout, "error: %v\n", snapshot.Error)
+		}
+		return
+	}
+	state := snapshot.State
+	fmt.Fprintf(stdout, "status: %s\n", fallbackDash(state.Status))
+	fmt.Fprintf(stdout, "pid: %d\n", state.PID)
+	fmt.Fprintf(stdout, "pidAlive: %t\n", snapshot.PIDAlive)
+	fmt.Fprintf(stdout, "uptime: %s\n", runtimestate.FormatDuration(snapshot.Uptime))
+	fmt.Fprintf(stdout, "heartbeatAt: %s\n", fallbackDash(state.HeartbeatAt))
+	fmt.Fprintf(stdout, "heartbeatFresh: %t\n", snapshot.HeartbeatFresh)
+	fmt.Fprintf(stdout, "heartbeatAge: %s\n", runtimestate.FormatDuration(snapshot.HeartbeatAge))
+	fmt.Fprintf(stdout, "activeWorkers: %d\n", state.ActiveWorkers)
+	fmt.Fprintf(stdout, "queueDepth: %d\n", state.QueueDepth)
+}
+
+func mustRuntimeStorePath() string {
+	store, err := runtimestate.NewStore("")
+	if err != nil {
+		return ".brevity\\runtime.json"
+	}
+	return store.RuntimePath()
 }
 
 type watchOptions struct {

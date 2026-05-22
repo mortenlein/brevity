@@ -8823,10 +8823,21 @@ switch ($Command.ToLowerInvariant()) {
         if ([string]::IsNullOrWhiteSpace($Subcommand)) {
             Write-Host "Missing brevity runtime command." -ForegroundColor Red
             Write-Host "Usage: .\brevity.ps1 runtime state [--json]"
+            Write-Host "Usage: .\brevity.ps1 runtime start|stop|status"
             exit 1
         }
 
         switch ($Subcommand.ToLowerInvariant()) {
+            { $_ -in @("start", "stop", "status") } {
+                if ($null -ne $RemainingArgs -and $RemainingArgs.Count -gt 0) {
+                    Write-Host "Unknown brevity runtime $Subcommand argument: $($RemainingArgs[0])" -ForegroundColor Red
+                    Write-Host "Usage: .\brevity.ps1 runtime start|stop|status"
+                    exit 1
+                }
+
+                & go run ./cmd/brevity runtime $Subcommand
+                exit $LASTEXITCODE
+            }
             "state" {
                 $json = $false
                 if ($null -ne $RemainingArgs) {
@@ -8847,6 +8858,7 @@ switch ($Command.ToLowerInvariant()) {
             default {
                 Write-Host "Unknown brevity runtime command: $Subcommand" -ForegroundColor Red
                 Write-Host "Usage: .\brevity.ps1 runtime state [--json]"
+                Write-Host "Usage: .\brevity.ps1 runtime start|stop|status"
                 exit 1
             }
         }

@@ -5,6 +5,9 @@ prompt.md
 
 # Brevity runtime metadata
 .brevity/provider-health.json
+.brevity/runtime.json
+.brevity/runtime.lock
+.brevity/runtime.stop
 .smoke-*
 .brevity/logs/
 .brevity/logs/

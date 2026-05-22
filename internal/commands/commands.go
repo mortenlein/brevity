@@ -7,6 +7,9 @@ type ID string
 const (
 	DashboardID          ID = "dashboard"
 	RuntimeStateID       ID = "runtime-state"
+	RuntimeStartID       ID = "runtime-start"
+	RuntimeStopID        ID = "runtime-stop"
+	RuntimeStatusID      ID = "runtime-status"
 	ProviderStatusID     ID = "provider-status"
 	ProviderSetID        ID = "provider-set"
 	ProviderResetID      ID = "provider-reset"
@@ -71,6 +74,21 @@ var (
 		ID:    RuntimeStateID,
 		Words: []string{"runtime", "state"},
 		Usage: "brevity runtime state --json",
+	}
+	RuntimeStart = Command{
+		ID:    RuntimeStartID,
+		Words: []string{"runtime", "start"},
+		Usage: "brevity runtime start",
+	}
+	RuntimeStop = Command{
+		ID:    RuntimeStopID,
+		Words: []string{"runtime", "stop"},
+		Usage: "brevity runtime stop",
+	}
+	RuntimeStatus = Command{
+		ID:    RuntimeStatusID,
+		Words: []string{"runtime", "status"},
+		Usage: "brevity runtime status",
 	}
 	ProviderSet = Command{
 		ID:    ProviderSetID,
@@ -207,6 +225,9 @@ var (
 var UsageCommands = []Command{
 	Dashboard,
 	RuntimeState,
+	RuntimeStart,
+	RuntimeStop,
+	RuntimeStatus,
 	Doctor,
 	ProviderStatus,
 	ProviderSet,

@@ -158,6 +158,9 @@ Brevity v0 supports:
 .\brevity.ps1 logs task <slug> [--tail <n>]
 .\brevity.ps1 session summary [--json]
 .\brevity.ps1 runtime state [--json]
+.\brevity.ps1 runtime start
+.\brevity.ps1 runtime status
+.\brevity.ps1 runtime stop
 .\brevity.ps1 tui
 .\brevity.ps1 status [-DevRoot <path>]
 .\brevity.ps1 provider status
@@ -236,12 +239,11 @@ provider details, task details, cleanup candidate details, and suggested action
 details. Suggested actions are guidance from runtime state, not executable
 dashboard commands.
 
-PowerShell remains the authoritative runtime backend and the source of truth for
-runtime state, command-result JSON contracts, worker lifecycle, cleanup, branch
-integration, and all `.brevity` mutations. Go does not mutate `.brevity`
-directly. Current Go actions are PowerShell-backed: they dispatch to
-`.\brevity.ps1 ... --json`, parse the PowerShell command-result contract, and
-render concise operator output.
+Go is the runtime authority for migrated orchestration behavior. PowerShell is
+legacy compatibility/reference behavior and should delegate instead of adding
+new runtime-owned logic. Current native Go actions own task metadata, provider
+health, cleanup, run-history inspection, and the first runtime supervisor
+foundation.
 
 Raw terminal input and a framework such as Bubble Tea are deferred. The current
 dashboard mode stays dependency-free and Windows-friendly while the operator
@@ -250,9 +252,8 @@ frontend stabilizes.
 The supported Go command surface, including implemented and deferred commands,
 is tracked in [`docs/go-support-matrix.md`](docs/go-support-matrix.md). There is
 no interactive mutation UI in either the PowerShell TUI or the Go dashboard yet,
-and no native Go runtime state ownership yet. The Go surface should stay
-conservative until the PowerShell JSON contracts and parity checks make a
-behavior safe to move.
+and the Go surface should stay conservative as behavior moves out of legacy
+PowerShell compatibility.
 
 The future operator UX roadmap for the Go dashboard is documented in
 [`docs/go-dashboard-ux-plan.md`](docs/go-dashboard-ux-plan.md).
@@ -282,6 +283,17 @@ additively where practical, and consumers should tolerate unknown fields.
 The centralized contract index is [`docs/contracts.md`](docs/contracts.md). It
 indexes the runtime/TUI contract surface and schemas for automation and TUI
 consumers, including the runtime-state and command-result contracts.
+
+## Runtime Supervisor
+
+`go run ./cmd/brevity runtime start`, `runtime status`, and `runtime stop` are
+the first Go-native persistent supervisor foundation. The supervisor writes
+`.brevity\runtime.json`, owns `.brevity\runtime.lock`, updates a heartbeat, and
+responds to graceful stop requests.
+
+This layer is intentionally small: it does not execute providers, drain queues,
+spawn workers, mutate task execution state, or expose network APIs. PowerShell
+wrappers may call these Go commands for compatibility.
 
 Major sections include:
 

@@ -26,6 +26,19 @@
     "powerShellDisposition": "keep fallback"
   },
   {
+    "id": "runtime-supervisor",
+    "capability": "Runtime supervisor lifecycle",
+    "goSupport": "Native start, stop, status with heartbeat state",
+    "powerShellSupport": "Compatibility wrapper only",
+    "currentAuthority": "Go",
+    "safetyClass": "runtime lifecycle metadata",
+    "testCoverage": "unit and fixture tests",
+    "tuiSupport": "planned operator surface",
+    "migrationStatus": "foundation migrated",
+    "nextAction": "Keep supervisor observational; add queues later",
+    "powerShellDisposition": "delegate only"
+  },
+  {
     "id": "provider-health",
     "capability": "Provider health read/write",
     "goSupport": "Native read, set, reset",
@@ -249,14 +262,14 @@
   {
     "id": "provider-profiles",
     "capability": "Provider profiles/profile aliases",
-    "goSupport": "Duplicated in task-run planning",
+    "goSupport": "Shared native metadata and resolver",
     "powerShellSupport": "Implemented source matrix",
-    "currentAuthority": "Mixed",
+    "currentAuthority": "Go",
     "safetyClass": "read-only config",
-    "testCoverage": "unit tests for Go planning",
+    "testCoverage": "unit tests for provider resolver and Go planning",
     "tuiSupport": "indirect",
-    "migrationStatus": "partially migrated",
-    "nextAction": "Move profile matrix to shared native metadata",
-    "powerShellDisposition": "migrate next"
+    "migrationStatus": "migrated",
+    "nextAction": "Wire remaining PowerShell reference docs when PowerShell is retired",
+    "powerShellDisposition": "keep reference"
   }
 ]

@@ -267,6 +267,20 @@ accepted. Mutating Go commands should keep using native preflight, structured
 command-result contracts, argv-style process execution, and the advisory
 `.brevity\state.lock` where `.brevity` state is written.
 
+### Runtime Supervisor Foundation
+
+`Brevity runtime start`, `Brevity runtime status`, and `Brevity runtime stop`
+are Go-native lifecycle commands. They own the first persistent supervisor
+foundation and write `.brevity\runtime.json` with pid, start time, status,
+heartbeat, active worker count, queue depth, and version metadata.
+
+This foundation is intentionally observational. The supervisor updates a
+heartbeat and responds to graceful stop requests, but it does not execute
+providers, drain queues, spawn workers, mutate task execution state, expose an
+HTTP API, or introduce distributed orchestration. PowerShell compatibility may
+delegate to these Go commands, but it should not add new runtime-owned
+supervisor behavior.
+
 The v1 snapshot includes these major sections:
 
 - `providers` - provider health totals and per-provider health records.
