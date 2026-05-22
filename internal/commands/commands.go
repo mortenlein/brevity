@@ -15,6 +15,8 @@ const (
 	QueueInspectID       ID = "queue-inspect"
 	QueuePlanID          ID = "queue-plan"
 	QueueRemoveID        ID = "queue-remove"
+	QueueReserveID       ID = "queue-reserve"
+	QueueUnreserveID     ID = "queue-unreserve"
 	ProviderStatusID     ID = "provider-status"
 	ProviderSetID        ID = "provider-set"
 	ProviderResetID      ID = "provider-reset"
@@ -119,6 +121,16 @@ var (
 		ID:    QueueRemoveID,
 		Words: []string{"queue", "remove"},
 		Usage: "brevity queue remove <id>",
+	}
+	QueueReserve = Command{
+		ID:    QueueReserveID,
+		Words: []string{"queue", "reserve"},
+		Usage: "brevity queue reserve <id>",
+	}
+	QueueUnreserve = Command{
+		ID:    QueueUnreserveID,
+		Words: []string{"queue", "unreserve"},
+		Usage: "brevity queue unreserve <id>",
 	}
 	ProviderSet = Command{
 		ID:    ProviderSetID,
@@ -263,6 +275,8 @@ var UsageCommands = []Command{
 	QueueInspect,
 	QueuePlan,
 	QueueRemove,
+	QueueReserve,
+	QueueUnreserve,
 	Doctor,
 	ProviderStatus,
 	ProviderSet,

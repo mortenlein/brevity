@@ -3154,7 +3154,7 @@ func TestQueueVisibilityRendersEmptyMissingValidAndCorruptedStates(t *testing.T)
 				CountsByStatus: map[string]int{},
 				Plan:           &contracts.QueuePlan{State: "missing", Runnable: 0, Skipped: 0, ReadOnly: true},
 			},
-			want: []string{"queue     valid file | 0 items | 0 statuses | oldest - ok", "plan      0 runnable | 0 skipped | next - | skip - ok"},
+			want: []string{"queue     valid file | 0 items | 0 reserved | 0 statuses | oldest - ok", "plan      0 runnable | 0 skipped | 0 reserved | next - | skip - ok"},
 		},
 		{
 			name: "valid queue summary",
@@ -3166,7 +3166,7 @@ func TestQueueVisibilityRendersEmptyMissingValidAndCorruptedStates(t *testing.T)
 				OldestQueuedItemAge: "2h0m0s",
 				Plan:                &contracts.QueuePlan{State: "valid", Runnable: 1, Skipped: 1, NextRunnableTask: "task-alpha", FirstSkipReason: "unsupported status: cancelled", ReadOnly: true},
 			},
-			want: []string{"queue     valid file | 3 items | cancelled:1 queued:2 | oldest 2h0m0s ok", "plan      1 runnable | 1 skipped | next task-alpha | skip unsupported status: cancelled ok"},
+			want: []string{"queue     valid file | 3 items | 0 reserved | cancelled:1 queued:2 | oldest 2h0m0s ok", "plan      1 runnable | 1 skipped | 0 reserved | next task-alpha"},
 		},
 		{
 			name: "corrupted queue warning",
@@ -3178,7 +3178,7 @@ func TestQueueVisibilityRendersEmptyMissingValidAndCorruptedStates(t *testing.T)
 				Error:          "parse runtime-queue.json: invalid character",
 				Plan:           &contracts.QueuePlan{State: "corrupted", Runnable: 0, Skipped: 0, Error: "parse runtime-queue.json: invalid character", ReadOnly: true},
 			},
-			want: []string{"queue     corrupted file | 0 items | 0 statuses | oldest - | corrupted !", "plan      0 runnable | 0 skipped | next - | skip - | corrupted !"},
+			want: []string{"queue     corrupted file | 0 items | 0 reserved | 0 statuses | oldest - | corrupted !", "plan      0 runnable | 0 skipped | 0 reserved | next - | skip - | corrupted !"},
 		},
 		{
 			name: "missing queue file",
@@ -3189,7 +3189,7 @@ func TestQueueVisibilityRendersEmptyMissingValidAndCorruptedStates(t *testing.T)
 				CountsByStatus: map[string]int{},
 				Plan:           &contracts.QueuePlan{State: "missing", Runnable: 0, Skipped: 0, ReadOnly: true},
 			},
-			want: []string{"queue     missing file | 0 items | 0 statuses | oldest - ok", "plan      0 runnable | 0 skipped | next - | skip - ok"},
+			want: []string{"queue     missing file | 0 items | 0 reserved | 0 statuses | oldest - ok", "plan      0 runnable | 0 skipped | 0 reserved | next - | skip - ok"},
 		},
 	}
 
@@ -3224,8 +3224,8 @@ func TestQueuePlanVisibilityRendersPlanningError(t *testing.T) {
 
 	output := plainView(model.renderSummary())
 	for _, want := range []string{
-		"queue     valid file | 1 items | queued:1 | oldest - ok",
-		"plan      0 runnable | 0 skipped | next - | skip - | invalid !",
+		"queue     valid file | 1 items | 0 reserved | queued:1 | oldest - ok",
+		"plan      0 runnable | 0 skipped | 0 reserved | next - | skip - | invalid !",
 	} {
 		if !strings.Contains(output, want) {
 			t.Fatalf("queue plan error output missing %q:\n%s", want, output)

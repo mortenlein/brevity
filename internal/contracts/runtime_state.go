@@ -50,11 +50,13 @@ type RuntimeQueue struct {
 	SupportedVersion         int            `json:"supportedVersion"`
 	TotalItems               int            `json:"totalItems"`
 	CountsByStatus           map[string]int `json:"countsByStatus"`
+	ReservedItems            int            `json:"reservedItems"`
 	OldestQueuedItemAge      string         `json:"oldestQueuedItemAge,omitempty"`
 	NewestQueuedItemAge      string         `json:"newestQueuedItemAge,omitempty"`
 	Plan                     *QueuePlan     `json:"plan,omitempty"`
 	DuplicateIDs             []string       `json:"duplicateIds,omitempty"`
 	InvalidItems             []string       `json:"invalidItems,omitempty"`
+	InvalidReservations      []string       `json:"invalidReservations,omitempty"`
 	UnsupportedFutureVersion bool           `json:"unsupportedFutureVersion"`
 	Error                    string         `json:"error,omitempty"`
 }
@@ -63,6 +65,7 @@ type QueuePlan struct {
 	State            string `json:"state"`
 	Runnable         int    `json:"runnable"`
 	Skipped          int    `json:"skipped"`
+	Reserved         int    `json:"reserved"`
 	NextRunnableTask string `json:"nextRunnableTask,omitempty"`
 	FirstSkipReason  string `json:"firstSkipReason,omitempty"`
 	Error            string `json:"error,omitempty"`

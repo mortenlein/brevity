@@ -86,6 +86,44 @@ func TestPlanUnsupportedStatus(t *testing.T) {
 	}
 }
 
+func TestPlanExcludesReservedItems(t *testing.T) {
+	store := testStore(t)
+	reserved := testItem("reserved", "reserved-task", StatusQueued, "2026-05-22T10:00:00Z")
+	reserved.Reservation = &Reservation{
+		Owner:         "runtime-supervisor",
+		ReservedAt:    "2026-05-22T11:00:00Z",
+		ReservationID: "res-test-abc123",
+	}
+	writeQueue(t, store, Queue{Version: Version, Items: []Item{
+		reserved,
+		testItem("open", "open-task", StatusQueued, "2026-05-22T10:30:00Z"),
+	}})
+	plan := store.Plan()
+	if plan.Summary.Runnable != 1 || plan.Summary.Skipped != 1 || plan.Summary.Reserved != 1 {
+		t.Fatalf("summary = %#v", plan.Summary)
+	}
+	if plan.Runnable[0].Task != "open-task" {
+		t.Fatalf("runnable = %#v", plan.Runnable)
+	}
+	if plan.Skipped[0].Reason != "reserved by runtime-supervisor" {
+		t.Fatalf("skip reason = %q", plan.Skipped[0].Reason)
+	}
+}
+
+func TestPlanDetectsInvalidReservation(t *testing.T) {
+	store := testStore(t)
+	reserved := testItem("reserved", "reserved-task", StatusQueued, "2026-05-22T10:00:00Z")
+	reserved.Reservation = &Reservation{Owner: "", ReservedAt: "2026-05-22T11:00:00Z", ReservationID: "res-test-abc123"}
+	writeQueue(t, store, Queue{Version: Version, Items: []Item{reserved}})
+	plan := store.Plan()
+	if plan.Summary.Runnable != 0 || plan.Summary.Skipped != 1 || plan.Summary.Reserved != 0 {
+		t.Fatalf("summary = %#v", plan.Summary)
+	}
+	if !strings.Contains(plan.Skipped[0].Reason, "invalid reservation") {
+		t.Fatalf("skip reason = %q", plan.Skipped[0].Reason)
+	}
+}
+
 func TestPlanCorruptedQueue(t *testing.T) {
 	store := testStore(t)
 	writeRawQueue(t, store, `{"version":1,"items":[`)

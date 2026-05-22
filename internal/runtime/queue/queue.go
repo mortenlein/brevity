@@ -36,21 +36,29 @@ type Queue struct {
 	Items   []Item `json:"items"`
 }
 
+type Reservation struct {
+	Owner         string `json:"owner"`
+	ReservedAt    string `json:"reservedAt"`
+	ReservationID string `json:"reservationId"`
+}
+
 type Item struct {
-	ID        string `json:"id"`
-	Task      string `json:"task"`
-	Provider  string `json:"provider"`
-	Profile   string `json:"profile"`
-	Status    string `json:"status"`
-	CreatedAt string `json:"createdAt"`
-	UpdatedAt string `json:"updatedAt"`
+	ID          string       `json:"id"`
+	Task        string       `json:"task"`
+	Provider    string       `json:"provider"`
+	Profile     string       `json:"profile"`
+	Status      string       `json:"status"`
+	CreatedAt   string       `json:"createdAt"`
+	UpdatedAt   string       `json:"updatedAt"`
+	Reservation *Reservation `json:"reservation,omitempty"`
 }
 
 type Store struct {
-	Store       bstate.Store
-	Now         Clock
-	GenerateID  IDGenerator
-	LockOptions locking.Options
+	Store                 bstate.Store
+	Now                   Clock
+	GenerateID            IDGenerator
+	GenerateReservationID IDGenerator
+	LockOptions           locking.Options
 }
 
 type Inspection struct {
@@ -60,10 +68,12 @@ type Inspection struct {
 	SupportedVersion         int            `json:"supportedVersion"`
 	TotalItems               int            `json:"totalItems"`
 	CountsByStatus           map[string]int `json:"countsByStatus"`
+	ReservedItems            int            `json:"reservedItems"`
 	OldestQueuedItemAge      string         `json:"oldestQueuedItemAge,omitempty"`
 	NewestQueuedItemAge      string         `json:"newestQueuedItemAge,omitempty"`
 	DuplicateIDs             []string       `json:"duplicateIds,omitempty"`
 	InvalidItems             []string       `json:"invalidItems,omitempty"`
+	InvalidReservations      []string       `json:"invalidReservations,omitempty"`
 	UnsupportedFutureVersion bool           `json:"unsupportedFutureVersion"`
 	Error                    string         `json:"error,omitempty"`
 }
@@ -180,12 +190,18 @@ func (store Store) Inspect() Inspection {
 		if _, err := parseTime(item.UpdatedAt); err != nil {
 			result.InvalidItems = append(result.InvalidItems, fmt.Sprintf("item[%d] updatedAt is invalid: %v", index, err))
 		}
+		if item.Reservation != nil {
+			result.ReservedItems++
+			if err := validateReservation(*item.Reservation); err != nil {
+				result.InvalidReservations = append(result.InvalidReservations, fmt.Sprintf("item[%d] reservation is invalid: %v", index, err))
+			}
+		}
 	}
 	for id := range duplicates {
 		result.DuplicateIDs = append(result.DuplicateIDs, id)
 	}
 	sort.Strings(result.DuplicateIDs)
-	if len(result.DuplicateIDs) > 0 || len(result.InvalidItems) > 0 {
+	if len(result.DuplicateIDs) > 0 || len(result.InvalidItems) > 0 || len(result.InvalidReservations) > 0 {
 		result.State = "invalid"
 	}
 	now := store.now().UTC()
@@ -196,6 +212,82 @@ func (store Store) Inspect() Inspection {
 		result.NewestQueuedItemAge = formatAge(now.Sub(newest))
 	}
 	return result
+}
+
+func (store Store) Reserve(id string) (Item, error) {
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return Item{}, errors.New("queue item id is required")
+	}
+	lock, err := store.acquireLock()
+	if err != nil {
+		return Item{}, err
+	}
+	defer func() { _ = lock.Release() }()
+
+	queue, _, err := store.Load()
+	if err != nil {
+		return Item{}, err
+	}
+	now := store.now().UTC()
+	for index := range queue.Items {
+		if queue.Items[index].ID != id {
+			continue
+		}
+		if queue.Items[index].Reservation != nil {
+			return Item{}, fmt.Errorf("queue item already reserved: %s", id)
+		}
+		reservationID, err := store.newReservationID(now)
+		if err != nil {
+			return Item{}, err
+		}
+		timestamp := now.Format(time.RFC3339)
+		queue.Items[index].Reservation = &Reservation{
+			Owner:         "runtime-supervisor",
+			ReservedAt:    timestamp,
+			ReservationID: reservationID,
+		}
+		queue.Items[index].UpdatedAt = timestamp
+		queue.Version = Version
+		if err := store.Store.WriteJSON(FileName, queue); err != nil {
+			return Item{}, err
+		}
+		return queue.Items[index], nil
+	}
+	return Item{}, fmt.Errorf("queue item not found: %s", id)
+}
+
+func (store Store) Unreserve(id string) (Item, error) {
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return Item{}, errors.New("queue item id is required")
+	}
+	lock, err := store.acquireLock()
+	if err != nil {
+		return Item{}, err
+	}
+	defer func() { _ = lock.Release() }()
+
+	queue, _, err := store.Load()
+	if err != nil {
+		return Item{}, err
+	}
+	now := store.now().UTC()
+	for index := range queue.Items {
+		if queue.Items[index].ID != id {
+			continue
+		}
+		if queue.Items[index].Reservation != nil {
+			queue.Items[index].Reservation = nil
+			queue.Items[index].UpdatedAt = now.Format(time.RFC3339)
+			queue.Version = Version
+			if err := store.Store.WriteJSON(FileName, queue); err != nil {
+				return Item{}, err
+			}
+		}
+		return queue.Items[index], nil
+	}
+	return Item{}, fmt.Errorf("queue item not found: %s", id)
 }
 
 func (store Store) Add(task string) (Item, error) {
@@ -303,6 +395,11 @@ func Validate(queue Queue) error {
 		if _, err := parseTime(item.UpdatedAt); err != nil {
 			return fmt.Errorf("runtime-queue.json item[%d] updatedAt is invalid: %w", index, err)
 		}
+		if item.Reservation != nil {
+			if err := validateReservation(*item.Reservation); err != nil {
+				return fmt.Errorf("runtime-queue.json item[%d] reservation is invalid: %w", index, err)
+			}
+		}
 	}
 	return nil
 }
@@ -343,12 +440,28 @@ func (store Store) newItem(task string, queue Queue, now time.Time) (Item, error
 	}, nil
 }
 
+func (store Store) newReservationID(now time.Time) (string, error) {
+	generateID := store.GenerateReservationID
+	if generateID == nil {
+		generateID = GenerateReservationID
+	}
+	return generateID(now)
+}
+
 func GenerateID(now time.Time) (string, error) {
 	var random [3]byte
 	if _, err := rand.Read(random[:]); err != nil {
 		return "", fmt.Errorf("generate queue id: %w", err)
 	}
 	return now.UTC().Format("20060102") + "-" + hex.EncodeToString(random[:]), nil
+}
+
+func GenerateReservationID(now time.Time) (string, error) {
+	var random [4]byte
+	if _, err := rand.Read(random[:]); err != nil {
+		return "", fmt.Errorf("generate reservation id: %w", err)
+	}
+	return "res-" + now.UTC().Format("20060102T150405") + "-" + hex.EncodeToString(random[:]), nil
 }
 
 func (store Store) acquireLock() (*locking.Lock, error) {
@@ -381,6 +494,19 @@ func defaultProvider(store bstate.Store) string {
 		return strings.TrimSpace(config.DefaultProvider)
 	}
 	return "gemini"
+}
+
+func validateReservation(reservation Reservation) error {
+	if strings.TrimSpace(reservation.Owner) == "" {
+		return errors.New("owner is required")
+	}
+	if strings.TrimSpace(reservation.ReservationID) == "" {
+		return errors.New("reservationId is required")
+	}
+	if _, err := parseTime(reservation.ReservedAt); err != nil {
+		return fmt.Errorf("reservedAt is invalid: %w", err)
+	}
+	return nil
 }
 
 func parseTime(value string) (time.Time, error) {

@@ -844,6 +844,7 @@ func queueSummary(queue *contracts.RuntimeQueue) string {
 	parts := []string{
 		fmt.Sprintf("%s file", fallback(queue.State, "unknown")),
 		fmt.Sprintf("%d items", queue.TotalItems),
+		fmt.Sprintf("%d reserved", queue.ReservedItems),
 	}
 	statuses := sortedQueueStatuses(queue.CountsByStatus)
 	if len(statuses) == 0 {
@@ -871,6 +872,7 @@ func queuePlanSummary(plan *contracts.QueuePlan) string {
 	parts := []string{
 		fmt.Sprintf("%d runnable", plan.Runnable),
 		fmt.Sprintf("%d skipped", plan.Skipped),
+		fmt.Sprintf("%d reserved", plan.Reserved),
 		"next " + fallback(plan.NextRunnableTask, "-"),
 		"skip " + fallback(plan.FirstSkipReason, "-"),
 	}

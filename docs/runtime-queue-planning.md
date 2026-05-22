@@ -33,6 +33,7 @@ A queue item is runnable when all of these are true:
 - `id` is present
 - the queue id is not duplicated by another item
 - timestamps are valid enough to trust the item record
+- no reservation metadata is present
 
 Runnable items are reported in queue-file order. Brevity v1 does not apply
 priority, provider concurrency, retry, dependency, cooldown, or scheduling
@@ -48,8 +49,13 @@ observational phase. Current skip reasons include:
 - invalid task slug
 - unsupported status
 - invalid timestamp fields
+- invalid reservation metadata
+- valid reservation metadata, reported as `reserved by <owner>`
 
 Skipped queue items are infrastructure warnings, not task failures.
+Reserved queue items are not considered runnable because another orchestration
+component has explicitly claimed intended execution ownership. That claim is
+metadata only; it does not mean execution has started.
 
 ## Corrupted Or Future Queue Files
 

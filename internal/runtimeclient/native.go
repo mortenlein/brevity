@@ -145,11 +145,13 @@ func queueInspectionToContract(inspection runtimequeue.Inspection, plan runtimeq
 		SupportedVersion:         inspection.SupportedVersion,
 		TotalItems:               inspection.TotalItems,
 		CountsByStatus:           counts,
+		ReservedItems:            inspection.ReservedItems,
 		OldestQueuedItemAge:      inspection.OldestQueuedItemAge,
 		NewestQueuedItemAge:      inspection.NewestQueuedItemAge,
 		Plan:                     queuePlanToContract(plan),
 		DuplicateIDs:             append([]string{}, inspection.DuplicateIDs...),
 		InvalidItems:             append([]string{}, inspection.InvalidItems...),
+		InvalidReservations:      append([]string{}, inspection.InvalidReservations...),
 		UnsupportedFutureVersion: inspection.UnsupportedFutureVersion,
 		Error:                    inspection.Error,
 	}
@@ -160,6 +162,7 @@ func queuePlanToContract(plan runtimequeue.Plan) *contracts.QueuePlan {
 		State:    plan.State,
 		Runnable: plan.Summary.Runnable,
 		Skipped:  plan.Summary.Skipped,
+		Reserved: plan.Summary.Reserved,
 		Error:    plan.Error,
 		ReadOnly: plan.ReadOnly,
 	}

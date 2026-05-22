@@ -40,8 +40,8 @@
   },
   {
     "id": "runtime-queue",
-    "capability": "Runtime queue persistence, inspection, and planning",
-    "goSupport": "Native add, list, inspect, plan, remove for runtime-queue.json; Bubble Tea displays read-only queue health and plan summary",
+    "capability": "Runtime queue persistence, inspection, planning, and reservations",
+    "goSupport": "Native add, list, inspect, plan, reserve, unreserve, remove for runtime-queue.json; Bubble Tea displays read-only queue health, reservation count, and plan summary",
     "powerShellSupport": "Not PowerShell-owned",
     "currentAuthority": "Go",
     "safetyClass": "inert runtime metadata / read-only diagnostics and planning",

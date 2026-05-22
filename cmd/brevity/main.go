@@ -50,6 +50,8 @@ const (
 	commandQueueInspect      commandKind = commandKind(commands.QueueInspectID)
 	commandQueuePlan         commandKind = commandKind(commands.QueuePlanID)
 	commandQueueRemove       commandKind = commandKind(commands.QueueRemoveID)
+	commandQueueReserve      commandKind = commandKind(commands.QueueReserveID)
+	commandQueueUnreserve    commandKind = commandKind(commands.QueueUnreserveID)
 	commandProviderStatus    commandKind = commandKind(commands.ProviderStatusID)
 	commandProviderSet       commandKind = commandKind(commands.ProviderSetID)
 	commandProviderReset     commandKind = commandKind(commands.ProviderResetID)
@@ -198,7 +200,7 @@ func parseOptions(args []string) (cliOptions, error) {
 
 func parseQueueOptions(args []string) (cliOptions, error) {
 	if len(args) < 2 {
-		return cliOptions{}, fmt.Errorf("missing queue command: supported commands: add, list, inspect, plan, remove")
+		return cliOptions{}, fmt.Errorf("missing queue command: supported commands: add, list, inspect, plan, remove, reserve, unreserve")
 	}
 	switch args[1] {
 	case "add":
@@ -234,8 +236,18 @@ func parseQueueOptions(args []string) (cliOptions, error) {
 			return cliOptions{}, usageError(commands.QueueRemove)
 		}
 		return cliOptions{kind: commandQueueRemove, candidateID: args[2]}, nil
+	case "reserve":
+		if len(args) != 3 || strings.TrimSpace(args[2]) == "" {
+			return cliOptions{}, usageError(commands.QueueReserve)
+		}
+		return cliOptions{kind: commandQueueReserve, candidateID: args[2]}, nil
+	case "unreserve":
+		if len(args) != 3 || strings.TrimSpace(args[2]) == "" {
+			return cliOptions{}, usageError(commands.QueueUnreserve)
+		}
+		return cliOptions{kind: commandQueueUnreserve, candidateID: args[2]}, nil
 	default:
-		return cliOptions{}, fmt.Errorf("unsupported queue command %q: supported commands: add, list, inspect, plan, remove", args[1])
+		return cliOptions{}, fmt.Errorf("unsupported queue command %q: supported commands: add, list, inspect, plan, remove, reserve, unreserve", args[1])
 	}
 }
 
@@ -819,7 +831,7 @@ func runWithContextOptions(ctx context.Context, stdout io.Writer, client runtime
 		return routeRuntimeStateCommand(stdout)
 	case commandRuntimeStart, commandRuntimeStop, commandRuntimeStatus:
 		return routeRuntimeSupervisorCommand(ctx, stdout, options)
-	case commandQueueAdd, commandQueueList, commandQueueInspect, commandQueuePlan, commandQueueRemove:
+	case commandQueueAdd, commandQueueList, commandQueueInspect, commandQueuePlan, commandQueueRemove, commandQueueReserve, commandQueueUnreserve:
 		return routeQueueCommand(stdout, options)
 	case commandProviderStatus, commandProviderSet, commandProviderReset:
 		return routeProviderCommand(stdout, options)
@@ -932,9 +944,38 @@ func routeQueueCommand(stdout io.Writer, options cliOptions) error {
 		fmt.Fprintln(stdout)
 		fmt.Fprintf(stdout, "%s\t%s\t%s\n", item.ID, item.Task, item.Status)
 		return nil
+	case commandQueueReserve:
+		item, err := store.Reserve(options.candidateID)
+		if err != nil {
+			return err
+		}
+		fmt.Fprintln(stdout, "Reserved runtime queue item")
+		fmt.Fprintf(stdout, "Path: %s\n", store.QueuePath())
+		fmt.Fprintln(stdout)
+		fmt.Fprintf(stdout, "%s\t%s\t%s\t%s\n", item.ID, item.Task, item.Status, reservationLabel(item.Reservation))
+		fmt.Fprintln(stdout)
+		fmt.Fprintln(stdout, "Reservation only: no provider, worker, supervisor, task state, or queue drain was started.")
+		return nil
+	case commandQueueUnreserve:
+		item, err := store.Unreserve(options.candidateID)
+		if err != nil {
+			return err
+		}
+		fmt.Fprintln(stdout, "Unreserved runtime queue item")
+		fmt.Fprintf(stdout, "Path: %s\n", store.QueuePath())
+		fmt.Fprintln(stdout)
+		fmt.Fprintf(stdout, "%s\t%s\t%s\n", item.ID, item.Task, item.Status)
+		return nil
 	default:
 		return fmt.Errorf("unsupported queue command: %s", options.kind)
 	}
+}
+
+func reservationLabel(reservation *runtimequeue.Reservation) string {
+	if reservation == nil {
+		return "unreserved"
+	}
+	return fmt.Sprintf("%s %s", reservation.Owner, reservation.ReservationID)
 }
 
 func renderQueuePlan(stdout io.Writer, plan runtimequeue.Plan) {
@@ -976,6 +1017,7 @@ func renderQueuePlan(stdout io.Writer, plan runtimequeue.Plan) {
 	fmt.Fprintln(stdout, "Summary:")
 	fmt.Fprintf(stdout, "- runnable: %d\n", plan.Summary.Runnable)
 	fmt.Fprintf(stdout, "- skipped: %d\n", plan.Summary.Skipped)
+	fmt.Fprintf(stdout, "- reserved: %d\n", plan.Summary.Reserved)
 	fmt.Fprintln(stdout)
 	fmt.Fprintln(stdout, "Read-only: plan does not execute providers, spawn workers, start the supervisor, drain the queue, or reserve ownership.")
 }
@@ -986,6 +1028,7 @@ func renderQueueInspection(stdout io.Writer, inspection runtimequeue.Inspection)
 	fmt.Fprintf(stdout, "State: %s\n", inspection.State)
 	fmt.Fprintf(stdout, "Version: %d (supported: %d)\n", inspection.Version, inspection.SupportedVersion)
 	fmt.Fprintf(stdout, "Items: %d\n", inspection.TotalItems)
+	fmt.Fprintf(stdout, "Reserved: %d\n", inspection.ReservedItems)
 	fmt.Fprintln(stdout)
 	fmt.Fprintln(stdout, "Status counts:")
 	if len(inspection.CountsByStatus) == 0 {
@@ -1004,6 +1047,7 @@ func renderQueueInspection(stdout io.Writer, inspection runtimequeue.Inspection)
 	fmt.Fprintf(stdout, "Newest queued item age: %s\n", fallbackDash(inspection.NewestQueuedItemAge))
 	fmt.Fprintf(stdout, "Duplicate ids: %s\n", joinOrNone(inspection.DuplicateIDs))
 	fmt.Fprintf(stdout, "Invalid items: %s\n", joinOrNone(inspection.InvalidItems))
+	fmt.Fprintf(stdout, "Invalid reservations: %s\n", joinOrNone(inspection.InvalidReservations))
 	if inspection.UnsupportedFutureVersion {
 		fmt.Fprintln(stdout, "Warning: unsupported future queue version.")
 	}

@@ -20,7 +20,12 @@ must not be interpreted as task lifecycle progress.
       "profile": "default",
       "status": "queued",
       "createdAt": "2026-05-22T12:00:00Z",
-      "updatedAt": "2026-05-22T12:00:00Z"
+      "updatedAt": "2026-05-22T12:00:00Z",
+      "reservation": {
+        "owner": "runtime-supervisor",
+        "reservedAt": "2026-05-22T12:01:00Z",
+        "reservationId": "res-20260522T120100-abc12345"
+      }
     }
   ]
 }
@@ -38,6 +43,11 @@ must not be interpreted as task lifecycle progress.
   `default`.
 - `status` is the queue item status.
 - `createdAt` and `updatedAt` are UTC timestamps.
+- `reservation` is optional orchestration metadata for explicit execution
+  ownership intent. Missing `reservation` means the item is unreserved.
+- `reservation.owner` identifies the reserving component.
+- `reservation.reservedAt` is the UTC reservation timestamp.
+- `reservation.reservationId` is a stable id for this reservation event.
 
 ## Statuses
 
@@ -52,13 +62,16 @@ has a separate contract update.
 ## Lifecycle
 
 `brevity queue add <task>` appends an item with status `queued` and persists the
-file atomically. `brevity queue list` reads and prints the queue. `brevity queue
-inspect` reads queue infrastructure diagnostics. `brevity queue plan` explains
-read-only runnable/skipped candidate ordering. `brevity queue remove <id>`
-removes one queue item by queue item id.
+file atomically. `brevity queue reserve <id>` adds optional reservation metadata
+to one item. `brevity queue unreserve <id>` clears reservation metadata from one
+item and tolerates items that are already unreserved. `brevity queue list` reads
+and prints the queue. `brevity queue inspect` reads queue infrastructure
+diagnostics. `brevity queue plan` explains read-only runnable/skipped candidate
+ordering. `brevity queue remove <id>` removes one queue item by queue item id.
 
 These commands do not drain the queue, run providers, spawn workers, start the
-supervisor, reserve execution ownership, or mutate task execution state.
+supervisor, imply execution started, or mutate task execution state. Reserve and
+unreserve mutate only queue reservation metadata.
 
 ## Inspection
 
@@ -69,9 +82,11 @@ supervisor, reserve execution ownership, or mutate task execution state.
 - queue version and supported version
 - total item count
 - count by status
+- reserved item count
 - oldest and newest queued item age
 - duplicate queue item ids
 - invalid item fields
+- invalid reservation metadata
 - unsupported future version warning
 
 `brevity queue inspect --json` emits the same diagnostics as a compact
@@ -88,7 +103,9 @@ Invalid queue infrastructure state is not task failure.
 `brevity queue plan` is read-only candidate planning. It determines which items
 would be considered runnable under the intentionally small v1 rules and which
 items are skipped with a reason. Runnable items require status `queued`, a valid
-task slug, a present non-duplicated queue id, and valid timestamp fields.
+task slug, a present non-duplicated queue id, valid timestamp fields, and no
+reservation. Reserved items are skipped with a reason such as `reserved by
+runtime-supervisor`.
 
 Planning does not introduce scheduling policy. It preserves queue-file order and
 does not apply priorities, provider concurrency, retries, dependency graphs, or
@@ -113,7 +130,7 @@ Go-native.
 
 The runtime queue can exist while the supervisor is stopped or missing. The
 supervisor must not be required for `queue add`, `queue list`, `queue inspect`,
-or `queue remove`.
+`queue plan`, `queue reserve`, `queue unreserve`, or `queue remove`.
 
 The current supervisor foundation is observational and must not drain
 `.brevity\runtime-queue.json`.
@@ -131,6 +148,11 @@ The current supervisor foundation is observational and must not drain
 - Planning the queue is not execution.
 - Planning the queue must not reserve ownership.
 - Planning the queue must not mutate or drain the queue.
+- Reserving a queue item is not execution.
+- Reserving a queue item must not launch providers or workers.
+- Reserving a queue item must not mutate task execution state.
+- Reserving a queue item must not imply successful scheduling.
+- Unreserving a queue item must mutate only queue reservation metadata.
 - The queue does not require the supervisor to be running.
 - Missing `.brevity\runtime-queue.json` is an empty queue.
 - Corrupted queue JSON must be reported safely with a clear error.

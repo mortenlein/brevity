@@ -229,6 +229,135 @@ func TestRemoveByID(t *testing.T) {
 	}
 }
 
+func TestReserveQueueItem(t *testing.T) {
+	store := testStore(t)
+	item, err := store.Add("reservable")
+	if err != nil {
+		t.Fatalf("Add returned error: %v", err)
+	}
+	reserved, err := store.Reserve(item.ID)
+	if err != nil {
+		t.Fatalf("Reserve returned error: %v", err)
+	}
+	if reserved.Reservation == nil {
+		t.Fatal("reservation = nil, want metadata")
+	}
+	if reserved.Reservation.Owner != "runtime-supervisor" || reserved.Reservation.ReservationID != "res-test-abc123" {
+		t.Fatalf("reservation = %#v", reserved.Reservation)
+	}
+	if reserved.Reservation.ReservedAt != "2026-05-22T12:00:00Z" || reserved.UpdatedAt != "2026-05-22T12:00:00Z" {
+		t.Fatalf("timestamps reservedAt=%q updatedAt=%q", reserved.Reservation.ReservedAt, reserved.UpdatedAt)
+	}
+	loaded, _, err := store.Load()
+	if err != nil {
+		t.Fatalf("Load returned error: %v", err)
+	}
+	if loaded.Items[0].Reservation == nil || loaded.Items[0].Reservation.ReservationID != "res-test-abc123" {
+		t.Fatalf("loaded reservation = %#v", loaded.Items[0].Reservation)
+	}
+}
+
+func TestUnreserveQueueItem(t *testing.T) {
+	store := testStore(t)
+	item, err := store.Add("reservable")
+	if err != nil {
+		t.Fatalf("Add returned error: %v", err)
+	}
+	if _, err := store.Reserve(item.ID); err != nil {
+		t.Fatalf("Reserve returned error: %v", err)
+	}
+	unreserved, err := store.Unreserve(item.ID)
+	if err != nil {
+		t.Fatalf("Unreserve returned error: %v", err)
+	}
+	if unreserved.Reservation != nil {
+		t.Fatalf("reservation = %#v, want nil", unreserved.Reservation)
+	}
+	again, err := store.Unreserve(item.ID)
+	if err != nil {
+		t.Fatalf("second Unreserve returned error: %v", err)
+	}
+	if again.Reservation != nil {
+		t.Fatalf("second reservation = %#v, want nil", again.Reservation)
+	}
+}
+
+func TestReserveRejectsDuplicateReservation(t *testing.T) {
+	store := testStore(t)
+	item, err := store.Add("reservable")
+	if err != nil {
+		t.Fatalf("Add returned error: %v", err)
+	}
+	if _, err := store.Reserve(item.ID); err != nil {
+		t.Fatalf("Reserve returned error: %v", err)
+	}
+	if _, err := store.Reserve(item.ID); err == nil {
+		t.Fatal("second Reserve succeeded, want error")
+	}
+}
+
+func TestReserveRejectsMissingItem(t *testing.T) {
+	store := testStore(t)
+	if _, err := store.Add("reservable"); err != nil {
+		t.Fatalf("Add returned error: %v", err)
+	}
+	if _, err := store.Reserve("missing"); err == nil {
+		t.Fatal("Reserve missing id succeeded, want error")
+	}
+}
+
+func TestReservationPersistenceCompatibility(t *testing.T) {
+	store := testStore(t)
+	writeRawQueue(t, store, `{"version":1,"items":[{"id":"plain","task":"plain-task","provider":"gemini","profile":"default","status":"queued","createdAt":"2026-05-22T10:00:00Z","updatedAt":"2026-05-22T10:00:00Z"}]}`)
+	queue, missing, err := store.Load()
+	if err != nil {
+		t.Fatalf("Load returned error: %v", err)
+	}
+	if missing || queue.Items[0].Reservation != nil {
+		t.Fatalf("queue missing=%v reservation=%#v, want compatible unreserved item", missing, queue.Items[0].Reservation)
+	}
+}
+
+func TestInspectCountsReservationsAndDetectsInvalidReservation(t *testing.T) {
+	store := testStore(t)
+	item := testItem("reserved", "reserved-task", StatusQueued, "2026-05-22T10:00:00Z")
+	item.Reservation = &Reservation{Owner: "runtime-supervisor", ReservedAt: "bad-time", ReservationID: "res-bad"}
+	writeQueue(t, store, Queue{Version: Version, Items: []Item{item}})
+	inspection := store.Inspect()
+	if inspection.ReservedItems != 1 {
+		t.Fatalf("ReservedItems = %d, want 1", inspection.ReservedItems)
+	}
+	if inspection.State != "invalid" || len(inspection.InvalidReservations) != 1 {
+		t.Fatalf("inspection = %#v, want invalid reservation", inspection)
+	}
+}
+
+func TestReservationOperationsDoNotMutateTaskState(t *testing.T) {
+	store := testStore(t)
+	if err := os.MkdirAll(store.Store.BrevityRoot(), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	tasksPath := store.Store.Path("tasks.json")
+	before := `{"items":[]}` + "\n"
+	if err := os.WriteFile(tasksPath, []byte(before), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	item, err := store.Add("reservable")
+	if err != nil {
+		t.Fatalf("Add returned error: %v", err)
+	}
+	if _, err := store.Reserve(item.ID); err != nil {
+		t.Fatalf("Reserve returned error: %v", err)
+	}
+	if _, err := store.Unreserve(item.ID); err != nil {
+		t.Fatalf("Unreserve returned error: %v", err)
+	}
+	after := readFile(t, tasksPath)
+	if after != before {
+		t.Fatalf("tasks.json mutated\nbefore: %s\nafter: %s", before, after)
+	}
+}
+
 func TestDuplicateIDsAreAvoided(t *testing.T) {
 	store := testStore(t)
 	calls := 0
@@ -269,6 +398,9 @@ func testStore(t *testing.T) Store {
 				return "20260522-abc123", nil
 			}
 			return "20260522-def456", nil
+		},
+		GenerateReservationID: func(time.Time) (string, error) {
+			return "res-test-abc123", nil
 		},
 	}
 }

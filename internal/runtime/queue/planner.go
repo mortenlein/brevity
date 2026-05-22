@@ -36,6 +36,7 @@ type PlanItem struct {
 type PlanSummary struct {
 	Runnable int `json:"runnable"`
 	Skipped  int `json:"skipped"`
+	Reserved int `json:"reserved"`
 }
 
 func (store Store) Plan() Plan {
@@ -88,6 +89,14 @@ func (store Store) Plan() Plan {
 			plan.Skipped = append(plan.Skipped, planItem(item, reason))
 			continue
 		}
+		if item.Reservation != nil {
+			owner := strings.TrimSpace(item.Reservation.Owner)
+			if owner == "" {
+				owner = "(unknown)"
+			}
+			plan.Skipped = append(plan.Skipped, planItem(item, "reserved by "+owner))
+			continue
+		}
 		plan.Runnable = append(plan.Runnable, planItem(item, "queued"))
 	}
 	return finalizePlan(plan)
@@ -134,6 +143,11 @@ func planningSkipReason(index int, item Item, duplicateIDs map[string]struct{}) 
 	if _, err := parseTime(item.UpdatedAt); err != nil {
 		return fmt.Sprintf("invalid updatedAt: %v", err)
 	}
+	if item.Reservation != nil {
+		if err := validateReservation(*item.Reservation); err != nil {
+			return fmt.Sprintf("invalid reservation: %v", err)
+		}
+	}
 	return ""
 }
 
@@ -149,9 +163,16 @@ func planItem(item Item, reason string) PlanItem {
 }
 
 func finalizePlan(plan Plan) Plan {
+	reserved := 0
+	for _, item := range plan.Skipped {
+		if strings.HasPrefix(item.Reason, "reserved by ") {
+			reserved++
+		}
+	}
 	plan.Summary = PlanSummary{
 		Runnable: len(plan.Runnable),
 		Skipped:  len(plan.Skipped),
+		Reserved: reserved,
 	}
 	return plan
 }
