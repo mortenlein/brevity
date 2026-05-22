@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/mortenlein/brevity/internal/contracts"
+	"github.com/mortenlein/brevity/internal/providers"
 	"github.com/mortenlein/brevity/internal/state"
 )
 
@@ -77,8 +78,9 @@ func (service TaskRunExecuteService) Execute(ctx context.Context, slug string, p
 		return taskRunExecutionErrorFromPlan(plan, planResult.Errors, "plan-blocked", "Native task-run plan is blocked; no provider process was launched."), nil
 	}
 
-	config, _ := readRunConfig(store)
-	worker, _, _ := resolveWorker(config, state.Task{Provider: plan.Provider, Profile: plan.Profile}, profile)
+	config, _ := providers.ReadRunConfig(store)
+	health, _, _ := loadPlanProviderHealth(store)
+	worker, _, _ := providers.Resolve(config, plan.Provider, plan.Profile, profile, health)
 	runner := service.Runner
 	if runner == nil {
 		runner = ExecProviderRunner{Now: service.now}

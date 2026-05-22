@@ -162,7 +162,7 @@ go run ./cmd/brevity support matrix --json
 
 ## Documentation Notes
 
-- Go owns init/repair, provider health read/write, `.brevity/tasks.json` reading and locked
+- Go owns init/repair, provider metadata/profile resolution, provider health read/write, `.brevity/tasks.json` reading and locked
   task-new, task-start, and prompt/context refresh writes,
   `.brevity/runs.jsonl` run-history reading, native runtime-state building,
   native task status, task runtime/detail inspection, doctor diagnostics,

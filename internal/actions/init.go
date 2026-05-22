@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/mortenlein/brevity/internal/contracts"
+	"github.com/mortenlein/brevity/internal/providers"
 	"github.com/mortenlein/brevity/internal/state"
 	"github.com/mortenlein/brevity/internal/state/locking"
 )
@@ -46,6 +47,7 @@ func (service InitService) Run() (contracts.CommandResult, error) {
 	store.RepoRoot = repoRoot
 	devRoot := filepath.Dir(repoRoot)
 	defaultConfig := state.DefaultConfig(repoRoot, devRoot)
+	defaultConfig.Providers = providers.DefaultStateConfigProviders()
 	effectiveConfig := defaultConfig
 	items := []initItem{}
 	fields := []repairField{}
@@ -186,7 +188,7 @@ func ensureProviderHealth(store state.Store) (bool, error) {
 			return existed, err
 		}
 		changed := false
-		for provider, value := range state.DefaultProviderHealthState() {
+		for provider, value := range providers.DefaultHealthState() {
 			if _, ok := health[provider]; !ok {
 				health[provider] = value
 				changed = true
@@ -197,7 +199,7 @@ func ensureProviderHealth(store state.Store) (bool, error) {
 		}
 		return existed, nil
 	}
-	return existed, store.WriteJSON(state.ProviderHealthFile, state.DefaultProviderHealthState())
+	return existed, store.WriteJSON(state.ProviderHealthFile, providers.DefaultHealthState())
 }
 
 func gitRepoRoot(start string) (string, error) {

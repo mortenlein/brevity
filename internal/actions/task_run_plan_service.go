@@ -11,6 +11,7 @@ import (
 
 	"github.com/mortenlein/brevity/internal/contracts"
 	"github.com/mortenlein/brevity/internal/preflight"
+	"github.com/mortenlein/brevity/internal/providers"
 	"github.com/mortenlein/brevity/internal/state"
 )
 
@@ -20,55 +21,6 @@ type TaskRunPlanService struct {
 	Store state.Store
 	Now   func() time.Time
 	RunID func(string, time.Time) string
-}
-
-type runConfig struct {
-	DefaultProvider string                    `json:"defaultProvider"`
-	Providers       map[string]providerConfig `json:"providers"`
-	Codex           *providerConfig           `json:"codex"`
-}
-
-type providerConfig struct {
-	Command         string            `json:"command"`
-	Mode            string            `json:"mode"`
-	Sandbox         string            `json:"sandbox"`
-	Model           string            `json:"model"`
-	Profile         string            `json:"profile"`
-	ExecutionPolicy string            `json:"executionPolicy"`
-	ApprovalMode    string            `json:"approvalMode"`
-	SkipTrust       bool              `json:"skipTrust"`
-	Env             map[string]string `json:"env"`
-}
-
-type resolvedWorker struct {
-	Provider string
-	Profile  string
-	Model    string
-	Config   providerConfig
-}
-
-type profileDefinition struct {
-	Provider string
-	Model    string
-}
-
-var workerProfiles = map[string]profileDefinition{
-	"gemini-lite":    {Provider: "gemini"},
-	"gemini-flash":   {Provider: "gemini", Model: "gemini-3-flash-preview"},
-	"gemini-pro":     {Provider: "gemini"},
-	"codex-fast":     {Provider: "codex"},
-	"codex-balanced": {Provider: "codex"},
-	"codex-deep":     {Provider: "codex"},
-	"copilot":        {Provider: "copilot"},
-}
-
-var workerProfileAliases = map[string]string{
-	"gemini-fast":     "gemini-flash",
-	"gemini-balanced": "gemini-pro",
-	"gemini-default":  "gemini-flash",
-	"codex-default":   "codex-balanced",
-	"codex-standard":  "codex-balanced",
-	"codex-pro":       "codex-deep",
 }
 
 func (service TaskRunPlanService) Plan(slug string, profile string) (contracts.CommandResult, error) {
@@ -95,8 +47,9 @@ func (service TaskRunPlanService) Plan(slug string, profile string) (contracts.C
 		return contracts.CommandResult{}, err
 	}
 
-	config, configWarnings := readRunConfig(store)
-	worker, resolverWarnings, resolverBlockers := resolveWorker(config, task, profile)
+	config, configWarnings := providers.ReadRunConfig(store)
+	health, healthMissing, healthErr := loadPlanProviderHealth(store)
+	worker, resolverWarnings, resolverBlockers := providers.Resolve(config, task.Provider, task.Profile, profile, health)
 	worktreePath := firstPlanNonEmpty(task.WorktreePath, planWorktreePath(task.Worktree))
 	promptPath := firstPlanNonEmpty(task.PromptPath, planPromptPath(task.Prompt))
 	promptFreshness := planPromptFreshness(promptPath, task.PromptRefreshedAt)
@@ -139,8 +92,8 @@ func (service TaskRunPlanService) Plan(slug string, profile string) (contracts.C
 	payload.Warnings = append(payload.Warnings, configWarnings...)
 	payload.Warnings = append(payload.Warnings, resolverWarnings...)
 	payload.Blockers = append(payload.Blockers, resolverBlockers...)
-	payload.Warnings = append(payload.Warnings, providerHealthMessages(store, worker.Provider, false)...)
-	payload.Blockers = append(payload.Blockers, providerHealthMessages(store, worker.Provider, true)...)
+	payload.Warnings = append(payload.Warnings, providerHealthLoadMessages(healthMissing, healthErr, false)...)
+	payload.Blockers = append(payload.Blockers, providerHealthLoadMessages(healthMissing, healthErr, true)...)
 	payload.Blockers = append(payload.Blockers, preflightBlockers(preflightResult)...)
 	payload.Warnings = append(payload.Warnings, preflightWarnings(preflightResult)...)
 	if promptFreshness == "stale" {
@@ -177,65 +130,7 @@ func (service TaskRunPlanService) Plan(slug string, profile string) (contracts.C
 	}, nil
 }
 
-func readRunConfig(store state.Store) (runConfig, []contracts.ResultMessage) {
-	config := runConfig{DefaultProvider: "codex", Providers: map[string]providerConfig{}}
-	data, err := os.ReadFile(store.Path("config.json"))
-	if err != nil {
-		if os.IsNotExist(err) {
-			return config, []contracts.ResultMessage{{Code: "config-missing", Message: ".brevity/config.json is missing; native defaults were used."}}
-		}
-		return config, []contracts.ResultMessage{{Code: "config-read-error", Message: err.Error()}}
-	}
-	if err := json.Unmarshal(data, &config); err != nil {
-		return runConfig{DefaultProvider: "codex", Providers: map[string]providerConfig{}}, []contracts.ResultMessage{{Code: "config-parse-error", Message: err.Error()}}
-	}
-	if config.Providers == nil {
-		config.Providers = map[string]providerConfig{}
-	}
-	return config, nil
-}
-
-func resolveWorker(config runConfig, task state.Task, requestedProfile string) (resolvedWorker, []contracts.ResultMessage, []contracts.ResultMessage) {
-	warnings := []contracts.ResultMessage{}
-	blockers := []contracts.ResultMessage{}
-	provider := strings.ToLower(firstPlanNonEmpty(task.Provider, config.DefaultProvider, "codex"))
-	profile := firstPlanNonEmpty(task.Profile, "default")
-	model := ""
-	if requestedProfile != "" {
-		canonical, definition, ok := resolveProfile(requestedProfile)
-		if !ok {
-			return resolvedWorker{Provider: provider, Profile: requestedProfile}, nil, []contracts.ResultMessage{{Code: "profile-not-found", Message: "Unknown worker profile: " + requestedProfile}}
-		}
-		provider = definition.Provider
-		profile = canonical
-		model = definition.Model
-	}
-	cfg := defaultProviderConfig(provider)
-	if provider == "codex" && config.Codex != nil {
-		cfg = mergeProviderConfig(cfg, *config.Codex)
-	}
-	if providerConfig, ok := config.Providers[provider]; ok {
-		cfg = mergeProviderConfig(cfg, providerConfig)
-	}
-	if model == "" {
-		model = cfg.Model
-	}
-	if cfg.Command == "" {
-		cfg.Command = defaultProviderConfig(provider).Command
-	}
-	if !supportedProvider(provider) {
-		blockers = append(blockers, contracts.ResultMessage{Code: "unsupported-provider", Message: "Unsupported worker provider: " + provider})
-	}
-	if cfg.Command == "" {
-		blockers = append(blockers, contracts.ResultMessage{Code: "missing-provider-command", Message: "Provider command is not configured."})
-	}
-	if len(cfg.Env) > 0 {
-		warnings = append(warnings, contracts.ResultMessage{Code: "provider-env-redacted", Message: "Provider environment values are redacted in the plan.", Count: len(cfg.Env)})
-	}
-	return resolvedWorker{Provider: provider, Profile: profile, Model: model, Config: cfg}, warnings, blockers
-}
-
-func planWorkerCommand(worker resolvedWorker, worktreePath string, promptPath string) (contracts.TaskRunWorkerCommand, *contracts.ResultMessage) {
+func planWorkerCommand(worker providers.Resolved, worktreePath string, promptPath string) (contracts.TaskRunWorkerCommand, *contracts.ResultMessage) {
 	command := contracts.TaskRunWorkerCommand{Provider: worker.Provider, Command: worker.Config.Command, WorkingDirectory: worktreePath, ExecutionPolicy: worker.Config.ExecutionPolicy}
 	for name := range worker.Config.Env {
 		command.EnvironmentNames = append(command.EnvironmentNames, name)
@@ -297,8 +192,15 @@ func planWorkerCommand(worker resolvedWorker, worktreePath string, promptPath st
 	return command, nil
 }
 
-func providerHealthMessages(store state.Store, provider string, blockers bool) []contracts.ResultMessage {
+func loadPlanProviderHealth(store state.Store) (state.ProviderHealthState, bool, error) {
 	health, missing, err := state.LoadProviderHealth(store)
+	if err != nil || missing {
+		return state.ProviderHealthState{}, missing, err
+	}
+	return health, false, nil
+}
+
+func providerHealthLoadMessages(missing bool, err error, blockers bool) []contracts.ResultMessage {
 	if err != nil {
 		if blockers {
 			return []contracts.ResultMessage{{Code: "provider-health-error", Message: err.Error()}}
@@ -310,21 +212,6 @@ func providerHealthMessages(store state.Store, provider string, blockers bool) [
 			return nil
 		}
 		return []contracts.ResultMessage{{Code: "provider-health-missing", Message: ".brevity/provider-health.json is missing; provider readiness is unknown."}}
-	}
-	record := health[strings.ToLower(provider)]
-	switch record.Status {
-	case state.StatusUnavailable:
-		if blockers {
-			return []contracts.ResultMessage{{Code: "provider-unavailable", Message: "Provider '" + provider + "' is currently unavailable.", Details: map[string]any{"provider": provider, "status": string(record.Status), "note": record.Note}}}
-		}
-	case state.StatusQuotaConstrained:
-		if blockers {
-			return []contracts.ResultMessage{{Code: "provider-quota-constrained", Message: "Provider '" + provider + "' is quota-constrained.", Details: map[string]any{"provider": provider, "status": string(record.Status), "note": record.Note}}}
-		}
-	case state.StatusCapacityDegraded, state.StatusUnknown, "":
-		if !blockers {
-			return []contracts.ResultMessage{{Code: "provider-" + firstPlanNonEmpty(string(record.Status), "unknown"), Message: "Provider '" + provider + "' readiness is degraded or unknown.", Details: map[string]any{"provider": provider, "status": string(record.Status), "note": record.Note}}}
-		}
 	}
 	return nil
 }
@@ -362,63 +249,6 @@ func (service TaskRunPlanService) runID(slug string, now time.Time) string {
 		return service.RunID(slug, now)
 	}
 	return fmt.Sprintf("%s-%s", slug, now.UTC().Format("20060102T150405Z"))
-}
-
-func resolveProfile(name string) (string, profileDefinition, bool) {
-	normalized := strings.ToLower(strings.TrimSpace(name))
-	if alias := workerProfileAliases[normalized]; alias != "" {
-		normalized = alias
-	}
-	definition, ok := workerProfiles[normalized]
-	return normalized, definition, ok
-}
-
-func defaultProviderConfig(provider string) providerConfig {
-	switch provider {
-	case "gemini":
-		return providerConfig{Command: "gemini", Sandbox: "workspace-write", ApprovalMode: "yolo", SkipTrust: true, Env: map[string]string{}}
-	case "antigravity":
-		return providerConfig{Command: "antigravity", Env: map[string]string{}}
-	case "copilot":
-		return providerConfig{Command: "copilot", Env: map[string]string{}}
-	default:
-		return providerConfig{Command: "codex", Mode: "exec", Sandbox: "workspace-write", ExecutionPolicy: "Bypass", Env: map[string]string{}}
-	}
-}
-
-func mergeProviderConfig(base providerConfig, override providerConfig) providerConfig {
-	if override.Command != "" {
-		base.Command = override.Command
-	}
-	if override.Mode != "" {
-		base.Mode = override.Mode
-	}
-	if override.Sandbox != "" {
-		base.Sandbox = override.Sandbox
-	}
-	if override.Model != "" {
-		base.Model = override.Model
-	}
-	if override.Profile != "" {
-		base.Profile = override.Profile
-	}
-	if override.ExecutionPolicy != "" {
-		base.ExecutionPolicy = override.ExecutionPolicy
-	}
-	if override.ApprovalMode != "" {
-		base.ApprovalMode = override.ApprovalMode
-	}
-	if override.SkipTrust {
-		base.SkipTrust = true
-	}
-	if override.Env != nil {
-		base.Env = override.Env
-	}
-	return base
-}
-
-func supportedProvider(provider string) bool {
-	return provider == "codex" || provider == "gemini" || provider == "antigravity"
 }
 
 func planPromptFreshness(path string, refreshedAt string) string {
