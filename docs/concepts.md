@@ -285,6 +285,19 @@ HTTP API, or introduce distributed orchestration. PowerShell compatibility may
 delegate to these Go commands, but it should not add new runtime-owned
 supervisor behavior.
 
+### Runtime Queue
+
+`.brevity\runtime-queue.json` is the first durable runtime queue contract. It is
+Go-native infrastructure state for queued operator intent, not task state.
+`Brevity queue add <task>` persists a queued item, `Brevity queue list` reads
+the queue, and `Brevity queue remove <id>` removes one queue item by id. These
+commands do not execute providers, spawn workers, start the supervisor, drain
+the queue, or mutate task lifecycle metadata.
+
+The contract, allowed statuses, locking expectations, and safety invariants are
+documented in
+[`docs/runtime-queue-contract.md`](runtime-queue-contract.md).
+
 The v1 snapshot includes these major sections:
 
 - `providers` - provider health totals and per-provider health records.

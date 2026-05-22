@@ -10,6 +10,9 @@ const (
 	RuntimeStartID       ID = "runtime-start"
 	RuntimeStopID        ID = "runtime-stop"
 	RuntimeStatusID      ID = "runtime-status"
+	QueueAddID           ID = "queue-add"
+	QueueListID          ID = "queue-list"
+	QueueRemoveID        ID = "queue-remove"
 	ProviderStatusID     ID = "provider-status"
 	ProviderSetID        ID = "provider-set"
 	ProviderResetID      ID = "provider-reset"
@@ -89,6 +92,21 @@ var (
 		ID:    RuntimeStatusID,
 		Words: []string{"runtime", "status"},
 		Usage: "brevity runtime status",
+	}
+	QueueAdd = Command{
+		ID:    QueueAddID,
+		Words: []string{"queue", "add"},
+		Usage: "brevity queue add <task>",
+	}
+	QueueList = Command{
+		ID:    QueueListID,
+		Words: []string{"queue", "list"},
+		Usage: "brevity queue list",
+	}
+	QueueRemove = Command{
+		ID:    QueueRemoveID,
+		Words: []string{"queue", "remove"},
+		Usage: "brevity queue remove <id>",
 	}
 	ProviderSet = Command{
 		ID:    ProviderSetID,
@@ -228,6 +246,9 @@ var UsageCommands = []Command{
 	RuntimeStart,
 	RuntimeStop,
 	RuntimeStatus,
+	QueueAdd,
+	QueueList,
+	QueueRemove,
 	Doctor,
 	ProviderStatus,
 	ProviderSet,

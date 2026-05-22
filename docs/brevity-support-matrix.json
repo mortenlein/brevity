@@ -39,6 +39,19 @@
     "powerShellDisposition": "delegate only"
   },
   {
+    "id": "runtime-queue",
+    "capability": "Runtime queue persistence",
+    "goSupport": "Native add, list, remove for runtime-queue.json",
+    "powerShellSupport": "Not PowerShell-owned",
+    "currentAuthority": "Go",
+    "safetyClass": "inert runtime metadata",
+    "testCoverage": "unit tests",
+    "tuiSupport": "planned operator surface",
+    "migrationStatus": "foundation migrated",
+    "nextAction": "Keep execution/draining out of queue v1",
+    "powerShellDisposition": "none"
+  },
+  {
     "id": "provider-health",
     "capability": "Provider health read/write",
     "goSupport": "Native read, set, reset",

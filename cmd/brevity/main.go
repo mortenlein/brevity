@@ -22,6 +22,7 @@ import (
 	"github.com/mortenlein/brevity/internal/diagnostics"
 	"github.com/mortenlein/brevity/internal/preflight"
 	"github.com/mortenlein/brevity/internal/runmaintenance"
+	runtimequeue "github.com/mortenlein/brevity/internal/runtime/queue"
 	runtimestate "github.com/mortenlein/brevity/internal/runtime/state"
 	runtimesupervisor "github.com/mortenlein/brevity/internal/runtime/supervisor"
 	"github.com/mortenlein/brevity/internal/runtimeclient"
@@ -44,6 +45,9 @@ const (
 	commandRuntimeStart      commandKind = commandKind(commands.RuntimeStartID)
 	commandRuntimeStop       commandKind = commandKind(commands.RuntimeStopID)
 	commandRuntimeStatus     commandKind = commandKind(commands.RuntimeStatusID)
+	commandQueueAdd          commandKind = commandKind(commands.QueueAddID)
+	commandQueueList         commandKind = commandKind(commands.QueueListID)
+	commandQueueRemove       commandKind = commandKind(commands.QueueRemoveID)
 	commandProviderStatus    commandKind = commandKind(commands.ProviderStatusID)
 	commandProviderSet       commandKind = commandKind(commands.ProviderSetID)
 	commandProviderReset     commandKind = commandKind(commands.ProviderResetID)
@@ -134,6 +138,9 @@ func parseOptions(args []string) (cliOptions, error) {
 	if len(args) > 0 && args[0] == "runtime" {
 		return parseRuntimeOptions(args)
 	}
+	if len(args) > 0 && args[0] == "queue" {
+		return parseQueueOptions(args)
+	}
 	if len(args) > 0 && args[0] == "task" {
 		return parseTaskOptions(args)
 	}
@@ -185,6 +192,31 @@ func parseOptions(args []string) (cliOptions, error) {
 	}
 
 	return options, nil
+}
+
+func parseQueueOptions(args []string) (cliOptions, error) {
+	if len(args) < 2 {
+		return cliOptions{}, fmt.Errorf("missing queue command: supported commands: add, list, remove")
+	}
+	switch args[1] {
+	case "add":
+		if len(args) != 3 || strings.TrimSpace(args[2]) == "" {
+			return cliOptions{}, usageError(commands.QueueAdd)
+		}
+		return cliOptions{kind: commandQueueAdd, slug: args[2]}, nil
+	case "list":
+		if len(args) != 2 {
+			return cliOptions{}, usageError(commands.QueueList)
+		}
+		return cliOptions{kind: commandQueueList}, nil
+	case "remove":
+		if len(args) != 3 || strings.TrimSpace(args[2]) == "" {
+			return cliOptions{}, usageError(commands.QueueRemove)
+		}
+		return cliOptions{kind: commandQueueRemove, candidateID: args[2]}, nil
+	default:
+		return cliOptions{}, fmt.Errorf("unsupported queue command %q: supported commands: add, list, remove", args[1])
+	}
 }
 
 func parseInitOptions(args []string) (cliOptions, error) {
@@ -767,6 +799,8 @@ func runWithContextOptions(ctx context.Context, stdout io.Writer, client runtime
 		return routeRuntimeStateCommand(stdout)
 	case commandRuntimeStart, commandRuntimeStop, commandRuntimeStatus:
 		return routeRuntimeSupervisorCommand(ctx, stdout, options)
+	case commandQueueAdd, commandQueueList, commandQueueRemove:
+		return routeQueueCommand(stdout, options)
 	case commandProviderStatus, commandProviderSet, commandProviderReset:
 		return routeProviderCommand(stdout, options)
 	case commandInit:
@@ -807,6 +841,55 @@ func runWithContextOptions(ctx context.Context, stdout io.Writer, client runtime
 			})
 		}
 		return routeDashboardCommand(stdout, client)
+	}
+}
+
+func routeQueueCommand(stdout io.Writer, options cliOptions) error {
+	store, err := runtimequeue.NewStore("")
+	if err != nil {
+		return err
+	}
+	switch options.kind {
+	case commandQueueAdd:
+		item, err := store.Add(options.slug)
+		if err != nil {
+			return err
+		}
+		fmt.Fprintln(stdout, "Queued runtime item")
+		fmt.Fprintf(stdout, "Path: %s\n", store.QueuePath())
+		fmt.Fprintln(stdout)
+		fmt.Fprintf(stdout, "%s\t%s\t%s\t%s\t%s\n", item.ID, item.Task, item.Provider, item.Profile, item.Status)
+		return nil
+	case commandQueueList:
+		queue, missing, err := store.Load()
+		if err != nil {
+			return err
+		}
+		fmt.Fprintln(stdout, "Runtime queue")
+		fmt.Fprintf(stdout, "Path: %s\n", store.QueuePath())
+		fmt.Fprintln(stdout)
+		if missing || len(queue.Items) == 0 {
+			fmt.Fprintln(stdout, "No queued runtime items.")
+			return nil
+		}
+		fmt.Fprintf(stdout, "Items: %d\n", len(queue.Items))
+		fmt.Fprintln(stdout)
+		for _, item := range queue.Items {
+			fmt.Fprintf(stdout, "%s\t%s\t%s\t%s\t%s\t%s\n", item.ID, item.Task, item.Provider, item.Profile, item.Status, item.CreatedAt)
+		}
+		return nil
+	case commandQueueRemove:
+		item, err := store.Remove(options.candidateID)
+		if err != nil {
+			return err
+		}
+		fmt.Fprintln(stdout, "Removed runtime queue item")
+		fmt.Fprintf(stdout, "Path: %s\n", store.QueuePath())
+		fmt.Fprintln(stdout)
+		fmt.Fprintf(stdout, "%s\t%s\t%s\n", item.ID, item.Task, item.Status)
+		return nil
+	default:
+		return fmt.Errorf("unsupported queue command: %s", options.kind)
 	}
 }
 
