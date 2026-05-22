@@ -137,7 +137,7 @@ var (
 	TaskCleanup = Command{
 		ID:    TaskCleanupID,
 		Words: []string{"task", "cleanup"},
-		Usage: "brevity task cleanup <slug> --force",
+		Usage: "brevity task cleanup <slug> [--plan] [--force] [--json]",
 	}
 	CleanupInspect = Command{
 		ID:    CleanupInspectID,

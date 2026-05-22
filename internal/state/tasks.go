@@ -87,6 +87,10 @@ type TaskCreate struct {
 	Created Task
 }
 
+type TaskRemove struct {
+	Removed Task
+}
+
 type TaskWorktree struct {
 	Exists     bool   `json:"exists"`
 	Path       string `json:"path"`
@@ -229,6 +233,46 @@ func CreateTask(store Store, task Task, options TaskCreateOptions) (TaskCreate, 
 		return TaskCreate{}, err
 	}
 	return TaskCreate{Created: task}, nil
+}
+
+func RemoveTask(store Store, slug string, options TaskUpdateOptions) (TaskRemove, error) {
+	slug = strings.TrimSpace(slug)
+	if slug == "" {
+		return TaskRemove{}, fmt.Errorf("task slug is required")
+	}
+	lockOptions := options.LockOptions
+	if lockOptions.Timeout == 0 {
+		lockOptions.Timeout = 5 * time.Second
+	}
+	lock, err := locking.Acquire(store.LockPath(), lockOptions)
+	if err != nil {
+		return TaskRemove{}, fmt.Errorf("task metadata locked: %w", err)
+	}
+	defer lock.Release()
+
+	rawTasks, err := loadRawTasks(store)
+	if err != nil {
+		return TaskRemove{}, err
+	}
+	index := -1
+	for i, rawTask := range rawTasks {
+		if rawTaskKey(rawTask) == slug {
+			index = i
+			break
+		}
+	}
+	if index < 0 {
+		return TaskRemove{}, fmt.Errorf("task not found: %s", slug)
+	}
+	removed, err := rawTaskToTask(rawTasks[index])
+	if err != nil {
+		return TaskRemove{}, fmt.Errorf("parse task %s: %w", slug, err)
+	}
+	rawTasks = append(rawTasks[:index], rawTasks[index+1:]...)
+	if err := writeRawTasks(store, rawTasks); err != nil {
+		return TaskRemove{}, err
+	}
+	return TaskRemove{Removed: removed}, nil
 }
 
 func UpdateTaskRunMetadata(store Store, record RunRecord, options TaskUpdateOptions) error {

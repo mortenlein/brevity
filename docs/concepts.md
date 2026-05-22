@@ -783,6 +783,19 @@ store and advisory lock. It does not clean up the worktree, delete the branch,
 or remove task metadata. If the merge fails or conflicts, the metadata stays
 unchanged. Cleanup remains a separate explicit command.
 
+`Brevity task cleanup <slug> --plan --json` is implemented by the native Go
+CLI. The plan is read-only and reports the selected task worktree, branch, dirty
+state, branch merge state when available, expected Git argv commands, force
+requirement, blockers, warnings, and expected metadata mutation.
+
+`Brevity task cleanup <slug> --force` is the explicit mutating cleanup path.
+Native cleanup refuses blocked plans, dirty worktrees, and unmerged branches. It
+removes the selected Git worktree, deletes the selected local branch with safe
+`git branch -d`, and then removes the selected task metadata record through the
+native state store and advisory lock. Cleanup does not run automatically after
+merge and does not clean orphan records unless an explicit orphan cleanup command
+is requested.
+
 ## Provider Capabilities
 
 Brevity supports different AI providers, such as Codex and Gemini. These providers may expose different tools and capabilities. For example, some providers may offer file system tools like `replace` and `write_file`, while others may not.

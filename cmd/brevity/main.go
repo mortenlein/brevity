@@ -407,13 +407,21 @@ func parseTaskCleanupOptions(args []string) (cliOptions, error) {
 	}
 
 	for _, arg := range args[3:] {
-		if arg == "--force" {
+		switch arg {
+		case "--force":
 			options.force = true
-			continue
+		case "--plan":
+			options.plan = true
+		case "--json":
+			options.json = true
+		default:
+			return cliOptions{}, fmt.Errorf("unknown argument for brevity task cleanup: %s", arg)
 		}
-		return cliOptions{}, fmt.Errorf("unknown argument for brevity task cleanup: %s", arg)
 	}
-	if !options.force {
+	if options.plan && options.force {
+		return cliOptions{}, fmt.Errorf("brevity task cleanup cannot combine --plan and --force")
+	}
+	if !options.force && !options.plan {
 		return cliOptions{}, fmt.Errorf("brevity task cleanup requires --force")
 	}
 
@@ -1377,16 +1385,40 @@ func runNativeInspection(stdout io.Writer, options cliOptions, call func(runtime
 }
 
 func runTaskCleanup(stdout io.Writer, client runtimeclient.Client, options cliOptions) error {
-	if !options.force {
-		return fmt.Errorf("brevity task cleanup requires --force")
+	store, err := state.NewStore("")
+	if err != nil {
+		return err
 	}
-
-	return runPowerShellAction(stdout, actionSpec{
-		call: func() ([]byte, error) {
-			return client.TaskCleanupJSON(options.slug)
-		},
-		render: actions.RenderTaskCleanupResult,
-	})
+	service := actions.TaskCleanupService{Store: store}
+	var result contracts.CommandResult
+	var runErr error
+	if options.plan {
+		result, runErr = service.Plan(options.slug)
+	} else {
+		result, runErr = service.Cleanup(options.slug, options.force)
+	}
+	if options.json {
+		output, err := json.Marshal(result)
+		if err != nil {
+			return err
+		}
+		if _, err := stdout.Write(append(output, '\n')); err != nil {
+			return err
+		}
+	} else if options.plan {
+		if renderErr := actions.RenderTaskCleanupPlanResult(stdout, result); renderErr != nil {
+			return renderErr
+		}
+	} else if renderErr := actions.RenderTaskCleanupResult(stdout, result); renderErr != nil {
+		return renderErr
+	}
+	if runErr != nil {
+		return runErr
+	}
+	if !result.Success {
+		return fmt.Errorf("%s reported success=false", result.Command)
+	}
+	return nil
 }
 
 func runTaskContextRefresh(stdout io.Writer, client runtimeclient.Client, options cliOptions) error {

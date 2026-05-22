@@ -1288,9 +1288,9 @@ func jsonPath(path string) string {
 }
 
 func TestRunTaskCleanupUsesClientAndRendersResult(t *testing.T) {
-	client := &fakeRuntimeClient{
-		taskCleanup: []byte(`{"schema":"brevity.command-result.v1","command":"task cleanup","success":true,"severity":"warning","warnings":[{"message":"Runtime state is stale."}],"suggestedNextActions":["refresh-runtime-state"],"payload":{"slug":"my-task","worktreePath":"C:\\repo\\worktrees\\active\\brevity-my-task","branch":"task/my-task","metadataRemoved":true,"branchRemoved":true,"worktreeRemoved":true,"force":true,"cleanupWarnings":["Runtime state is stale."]}}`),
-	}
+	repoRoot, worktreePath := tempGitRepoForTaskCleanup(t, "my-task")
+	t.Chdir(repoRoot)
+	client := &fakeRuntimeClient{}
 
 	var stdout bytes.Buffer
 	err := runWithOptions(&stdout, client, cliOptions{kind: commandTaskCleanup, slug: "my-task", force: true})
@@ -1298,8 +1298,16 @@ func TestRunTaskCleanupUsesClientAndRendersResult(t *testing.T) {
 		t.Fatalf("runWithOptions returned error: %v", err)
 	}
 
-	if len(client.calls) != 1 || client.calls[0] != "task-cleanup:my-task" {
-		t.Fatalf("calls = %#v, want task cleanup only", client.calls)
+	if len(client.calls) != 0 {
+		t.Fatalf("calls = %#v, want no PowerShell calls", client.calls)
+	}
+	if _, err := os.Stat(worktreePath); !os.IsNotExist(err) {
+		t.Fatalf("worktree still exists after cleanup: %v", err)
+	}
+	command := exec.Command("git", "show-ref", "--verify", "--quiet", "refs/heads/task/my-task")
+	command.Dir = repoRoot
+	if command.Run() == nil {
+		t.Fatal("task branch still exists after cleanup")
 	}
 
 	output := stdout.String()
@@ -1309,8 +1317,6 @@ func TestRunTaskCleanupUsesClientAndRendersResult(t *testing.T) {
 		"worktreeRemoved: true",
 		"branchRemoved: true",
 		"metadataRemoved: true",
-		"cleanupWarning: Runtime state is stale.",
-		"warning: Runtime state is stale.",
 		"- refresh-runtime-state",
 	} {
 		if !strings.Contains(output, want) {
@@ -1336,19 +1342,19 @@ func TestRunTaskCleanupFailsBeforeClientWithoutForce(t *testing.T) {
 }
 
 func TestRunTaskCleanupReturnsErrorWhenResultFails(t *testing.T) {
-	client := &fakeRuntimeClient{
-		taskCleanup: []byte(`{"schema":"brevity.command-result.v1","command":"task cleanup","success":false,"severity":"error","errors":[{"code":"task-not-found","message":"Task not found: nope"}],"payload":{"slug":"nope","metadataRemoved":false,"branchRemoved":false,"worktreeRemoved":false,"force":true,"cleanupWarnings":[]}}`),
-	}
+	repoRoot := tempGitRepoForTaskNew(t)
+	t.Chdir(repoRoot)
+	client := &fakeRuntimeClient{}
 
 	var stdout bytes.Buffer
 	err := runWithOptions(&stdout, client, cliOptions{kind: commandTaskCleanup, slug: "nope", force: true})
 	if err == nil {
 		t.Fatal("runWithOptions returned nil error")
 	}
-	if !strings.Contains(err.Error(), "task cleanup reported success=false") {
+	if !strings.Contains(err.Error(), "task cleanup blocked") {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if !strings.Contains(stdout.String(), "error: task-not-found: Task not found: nope") {
+	if !strings.Contains(stdout.String(), "error: task-not-found: task not found: nope") {
 		t.Fatalf("output missing structured error:\n%s", stdout.String())
 	}
 }
@@ -1683,6 +1689,19 @@ func tempGitRepoForTaskNew(t *testing.T) string {
 		t.Fatalf("WriteFile config returned error: %v", err)
 	}
 	return repoRoot
+}
+
+func tempGitRepoForTaskCleanup(t *testing.T, slug string) (string, string) {
+	t.Helper()
+	repoRoot := tempGitRepoForTaskNew(t)
+	worktreePath := filepath.Join(repoRoot, "worktrees", "active", "brevity-"+slug)
+	branch := "task/" + slug
+	runTestCommand(t, repoRoot, "git", "worktree", "add", worktreePath, "-b", branch)
+	tasks := fmt.Sprintf(`[{"slug":%q,"status":"merged","normalizedState":"merged","branch":%q,"worktreePath":%q}]`, slug, branch, worktreePath)
+	if err := os.WriteFile(filepath.Join(repoRoot, ".brevity", "tasks.json"), []byte(tasks+"\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile tasks returned error: %v", err)
+	}
+	return repoRoot, worktreePath
 }
 
 func runTestCommand(t *testing.T, dir string, name string, args ...string) {

@@ -56,7 +56,8 @@ metadata. It does not mean Go writes those files itself.
 | `go run ./cmd/brevity task new <slug> [--json]` | Native state action | Go preflight + Git worktree + state store + `.brevity/state.lock` | Mutating | Implemented | Creates the branch/worktree required by current semantics, materializes prompt/context from the optional vault spec, appends task metadata, emits `brevity.command-result.v1`, and launches no provider/worker. |
 | `go run ./cmd/brevity task merge <slug> --plan [--json]` | Native merge planning | Go state reader + read-only Git inspector | Read-only | Implemented | Builds a `brevity.task-merge-plan.v1` payload with source/target branches, worktree dirty state, expected argv git commands, state mutation, blockers, warnings, and cleanup-required signal. It does not mutate Git or task metadata. |
 | `go run ./cmd/brevity task merge <slug> [--json]` | Native merge execution | Go merge plan + argv `git` + state store + `.brevity/state.lock` | Mutating | Implemented | Refuses blocked plans, checks out the target branch, runs `git merge <sourceBranch>` without shell concatenation, marks task metadata `merged` only on success, and never deletes branches/worktrees or runs cleanup. Tests use disposable Git fixtures. |
-| `go run ./cmd/brevity task cleanup <slug> --force` | PowerShell-backed action | PowerShell command-result JSON | Mutating | Implemented | Requires `--force`; cleanup behavior is owned by PowerShell and remains separate from native merge. |
+| `go run ./cmd/brevity task cleanup <slug> --plan [--json]` | Native cleanup planning | Go state reader + read-only Git inspector | Read-only | Implemented | Emits `brevity.task-cleanup-plan.v1` with worktree/branch facts, dirty and merge-state checks, expected argv Git commands, force requirement, blockers, and warnings. |
+| `go run ./cmd/brevity task cleanup <slug> --force [--json]` | Native cleanup execution | Go cleanup plan + argv `git` + state store + `.brevity/state.lock` | Mutating | Implemented | Requires explicit `--force`, refuses blocked/dirty/unmerged plans, removes the selected Git worktree, deletes the selected branch with safe `git branch -d`, removes selected task metadata, and never runs implicitly after merge. |
 | `go run ./cmd/brevity task refresh-context <slug> [--json]` | Native state action | Go preflight + vault loader + state store + `.brevity/state.lock` | Mutating | Implemented | Rewrites `prompt.md`, refreshes bounded `.brevity\context` files from configured vault memory, updates prompt refresh metadata, emits `brevity.command-result.v1`, and launches no provider/worker. |
 | `go run ./cmd/brevity task context refresh <slug> [--json]` | Native state action | Go native refresh service | Mutating | Compatibility alias | Legacy command shape routed to the same Go service; PowerShell remains reference/fallback only. |
 | `go run ./cmd/brevity task runtime-info <slug>` | Native read-only inspection | Go `.brevity/tasks.json` + `.brevity/runs.jsonl` reader | Read-only | Implemented | Displays task runtime details without PowerShell. |
@@ -99,7 +100,8 @@ metadata. It does not mean Go writes those files itself.
   bounded worktree context files, and task refresh metadata. Native Task run
   writes only provider logs, run-history records, and task runtime metadata.
   Native Task merge writes only Git merge state and task metadata on success; it
-  does not cleanup, delete branches, or delete worktrees.
+  does not cleanup, delete branches, or delete worktrees. Native cleanup is a
+  separate explicit command and does not force-delete branches.
 - Provider health writes use `.brevity/state.lock` with exclusive create,
   `pid` and UTC `createdAt` contents, timeout waiting, and stale-lock cleanup
   when configured by tests/services.

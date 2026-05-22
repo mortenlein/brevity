@@ -729,30 +729,34 @@ concatenation. When the merge succeeds, Brevity updates the task status to
 the worktree, delete the branch, or remove task metadata. If the merge fails,
 Brevity leaves metadata unchanged. Cleanup remains explicit and separate.
 
-The task cleanup command reads the matching record from:
+The native Go task cleanup command reads the matching record from:
 
 ```text
 <repo>\.brevity\tasks.json
 ```
 
-It removes the recorded Git worktree, deletes the recorded Git branch with
-`git branch -d`, and then removes the task record from metadata. This is the
-default safe cleanup behavior. If Git cannot remove the worktree or delete the
-branch, Brevity leaves the metadata unchanged.
-
-Use `--force` only when you explicitly want Git's forced cleanup behavior:
+Plan first when you want the exact cleanup decision without mutation:
 
 ```powershell
-.\brevity.ps1 task cleanup <slug> --force
+go run .\cmd\brevity task cleanup <slug> --plan --json
 ```
 
-With `--force`, Brevity removes the worktree with
-`git worktree remove --force <worktreePath>` and deletes the branch with
-`git branch -D <branch>`. If the recorded worktree path is missing or is not a
-registered Git worktree, Brevity prints a warning and continues to branch removal.
-When branch removal succeeds, or the branch is already missing, Brevity removes the
-task metadata record. If branch removal fails for another reason, Brevity keeps the
-metadata unchanged.
+The plan reports the worktree path, branch, dirty flag, branch merged flag when
+available, whether cleanup is removable/destructive, expected Git argv commands,
+expected metadata mutation, blockers, warnings, and the generated timestamp.
+
+Execution is always gated by explicit `--force`:
+
+```powershell
+go run .\cmd\brevity task cleanup <slug> --force --json
+```
+
+Native cleanup refuses dirty worktrees and unmerged branches. It removes the
+recorded Git worktree with `git worktree remove`, deletes the recorded branch
+with safe `git branch -d`, and then removes the selected task record through the
+native state store and advisory lock. It does not force-delete branches, does
+not clean up orphan records, and never runs implicitly after merge. PowerShell
+cleanup remains present as legacy/reference behavior.
 
 Orphan cleanup is separate from normal task cleanup. It only considers registered
 Git worktrees under the active worktree root, on `task/*` branches, with no

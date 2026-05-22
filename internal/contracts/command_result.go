@@ -86,14 +86,39 @@ type TaskContextRefreshPayload struct {
 }
 
 type TaskCleanupPayload struct {
-	Slug            string   `json:"slug"`
-	WorktreePath    string   `json:"worktreePath"`
-	Branch          string   `json:"branch"`
-	MetadataRemoved bool     `json:"metadataRemoved"`
-	BranchRemoved   bool     `json:"branchRemoved"`
-	WorktreeRemoved bool     `json:"worktreeRemoved"`
-	Force           bool     `json:"force"`
-	CleanupWarnings []string `json:"cleanupWarnings"`
+	Slug            string                  `json:"slug"`
+	WorktreePath    string                  `json:"worktreePath"`
+	Branch          string                  `json:"branch"`
+	Plan            *TaskCleanupPlanPayload `json:"plan,omitempty"`
+	GitCommands     []GitCommandResult      `json:"gitCommands,omitempty"`
+	MetadataRemoved bool                    `json:"metadataRemoved"`
+	BranchRemoved   bool                    `json:"branchRemoved"`
+	WorktreeRemoved bool                    `json:"worktreeRemoved"`
+	Force           bool                    `json:"force"`
+	CleanupWarnings []string                `json:"cleanupWarnings"`
+}
+
+type TaskCleanupPlanPayload struct {
+	Schema                   string          `json:"schema"`
+	Version                  int             `json:"version"`
+	Slug                     string          `json:"slug"`
+	WorktreePath             string          `json:"worktreePath"`
+	Branch                   string          `json:"branch"`
+	RepoRoot                 string          `json:"repoRoot"`
+	Dirty                    bool            `json:"dirty"`
+	BranchMerged             bool            `json:"branchMerged"`
+	BranchMergedKnown        bool            `json:"branchMergedKnown"`
+	WorktreeExists           bool            `json:"worktreeExists"`
+	WorktreeRegistered       bool            `json:"worktreeRegistered"`
+	BranchExists             bool            `json:"branchExists"`
+	Removable                bool            `json:"removable"`
+	Destructive              bool            `json:"destructive"`
+	RequiresForce            bool            `json:"requiresForce"`
+	ExpectedGitCommands      [][]string      `json:"expectedGitCommands"`
+	ExpectedMetadataMutation string          `json:"expectedMetadataMutation"`
+	Blockers                 []ResultMessage `json:"blockers"`
+	Warnings                 []ResultMessage `json:"warnings"`
+	GeneratedAt              string          `json:"generatedAt"`
 }
 
 type TaskNewPayload struct {
@@ -477,6 +502,20 @@ func ParseTaskMergePlanPayload(result CommandResult) (TaskMergePlanPayload, erro
 	}
 	if payload.Slug == "" {
 		return TaskMergePlanPayload{}, errors.New("invalid task merge plan payload: missing slug")
+	}
+	return payload, nil
+}
+
+func ParseTaskCleanupPlanPayload(result CommandResult) (TaskCleanupPlanPayload, error) {
+	if len(result.Payload) == 0 {
+		return TaskCleanupPlanPayload{}, errors.New("task cleanup plan result missing payload")
+	}
+	var payload TaskCleanupPlanPayload
+	if err := json.Unmarshal(result.Payload, &payload); err != nil {
+		return TaskCleanupPlanPayload{}, fmt.Errorf("invalid task cleanup plan payload: %w", err)
+	}
+	if payload.Slug == "" {
+		return TaskCleanupPlanPayload{}, errors.New("invalid task cleanup plan payload: missing slug")
 	}
 	return payload, nil
 }
