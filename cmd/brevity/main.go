@@ -56,6 +56,8 @@ const (
 	commandRunsRetention   commandKind = commandKind(commands.TaskRunsRetentionID)
 	commandRunsCompact     commandKind = commandKind(commands.TaskRunsCompactID)
 	commandCleanupInspect  commandKind = commandKind(commands.CleanupInspectID)
+	commandCleanupPlan     commandKind = commandKind(commands.CleanupPlanID)
+	commandCleanupExecute  commandKind = commandKind(commands.CleanupExecuteID)
 )
 
 type cliOptions struct {
@@ -78,6 +80,8 @@ type cliOptions struct {
 	profile         string
 	smoke           bool
 	json            bool
+	all             bool
+	candidateID     string
 	preflightAction preflight.Action
 }
 
@@ -161,17 +165,68 @@ func parseOptions(args []string) (cliOptions, error) {
 }
 
 func parseCleanupOptions(args []string) (cliOptions, error) {
-	if len(args) < 2 || args[1] != "inspect" {
+	if len(args) < 2 {
+		return cliOptions{}, fmt.Errorf("missing cleanup command: supported commands: inspect, plan, execute")
+	}
+	switch args[1] {
+	case "inspect":
+		options := cliOptions{kind: commandCleanupInspect}
+		for _, arg := range args[2:] {
+			if arg != "--json" {
+				return cliOptions{}, usageError(commands.CleanupInspect)
+			}
+			options.json = true
+		}
+		return options, nil
+	case "plan":
+		options := cliOptions{kind: commandCleanupPlan}
+		for _, arg := range args[2:] {
+			switch arg {
+			case "--json":
+				options.json = true
+			case "--all":
+				options.all = true
+			default:
+				if strings.HasPrefix(arg, "-") || options.candidateID != "" {
+					return cliOptions{}, usageError(commands.CleanupPlan)
+				}
+				options.candidateID = arg
+			}
+		}
+		if !options.all && strings.TrimSpace(options.candidateID) == "" {
+			return cliOptions{}, usageError(commands.CleanupPlan)
+		}
+		if options.all && strings.TrimSpace(options.candidateID) != "" {
+			return cliOptions{}, fmt.Errorf("brevity cleanup plan cannot combine --all and a candidate id")
+		}
+		return options, nil
+	case "execute":
+		options := cliOptions{kind: commandCleanupExecute}
+		for _, arg := range args[2:] {
+			switch arg {
+			case "--json":
+				options.json = true
+			case "--all":
+				options.all = true
+			case "--force":
+				options.force = true
+			default:
+				if strings.HasPrefix(arg, "-") || options.candidateID != "" {
+					return cliOptions{}, usageError(commands.CleanupExecute)
+				}
+				options.candidateID = arg
+			}
+		}
+		if !options.all && strings.TrimSpace(options.candidateID) == "" {
+			return cliOptions{}, usageError(commands.CleanupExecute)
+		}
+		if options.all && strings.TrimSpace(options.candidateID) != "" {
+			return cliOptions{}, fmt.Errorf("brevity cleanup execute cannot combine --all and a candidate id")
+		}
+		return options, nil
+	default:
 		return cliOptions{}, usageError(commands.CleanupInspect)
 	}
-	options := cliOptions{kind: commandCleanupInspect}
-	for _, arg := range args[2:] {
-		if arg != "--json" {
-			return cliOptions{}, usageError(commands.CleanupInspect)
-		}
-		options.json = true
-	}
-	return options, nil
 }
 
 func parseRuntimeOptions(args []string) (cliOptions, error) {
@@ -592,8 +647,8 @@ func runWithContextOptions(ctx context.Context, stdout io.Writer, client runtime
 		return routeTaskPreflightCommand(stdout, options)
 	case commandTaskRuns, commandRunsReconcile, commandRunsRetention, commandRunsCompact:
 		return routeTaskRunsCommand(stdout, client, options)
-	case commandCleanupInspect:
-		return routeCleanupInspectCommand(stdout, options)
+	case commandCleanupInspect, commandCleanupPlan, commandCleanupExecute:
+		return routeCleanupCommand(stdout, options)
 	default:
 		if options.bubble {
 			if options.refresh <= 0 {
@@ -629,6 +684,19 @@ func routeTaskPreflightCommand(stdout io.Writer, options cliOptions) error {
 		return err
 	}
 	return preflight.RenderHuman(stdout, result)
+}
+
+func routeCleanupCommand(stdout io.Writer, options cliOptions) error {
+	switch options.kind {
+	case commandCleanupInspect:
+		return routeCleanupInspectCommand(stdout, options)
+	case commandCleanupPlan:
+		return runOrphanCleanupPlan(stdout, options)
+	case commandCleanupExecute:
+		return runOrphanCleanupExecute(stdout, options)
+	default:
+		return fmt.Errorf("unsupported cleanup command: %s", options.kind)
+	}
 }
 
 func routeCleanupInspectCommand(stdout io.Writer, options cliOptions) error {
@@ -673,6 +741,58 @@ func routeCleanupInspectCommand(stdout io.Writer, options cliOptions) error {
 		fmt.Fprintf(stdout, "  dirty: %t removable: %t destructive: %t\n", candidate.Dirty, candidate.Removable, candidate.Destructive)
 		fmt.Fprintf(stdout, "  reason: %s\n", candidate.Reason)
 		fmt.Fprintf(stdout, "  suggestedAction: %s\n", candidate.SuggestedAction)
+	}
+	return nil
+}
+
+func runOrphanCleanupPlan(stdout io.Writer, options cliOptions) error {
+	store, err := state.NewStore("")
+	if err != nil {
+		return err
+	}
+	result, runErr := actions.OrphanCleanupService{Store: store}.Plan(options.candidateID, options.all)
+	if options.json {
+		output, err := json.Marshal(result)
+		if err != nil {
+			return err
+		}
+		if _, err := stdout.Write(append(output, '\n')); err != nil {
+			return err
+		}
+	} else if renderErr := actions.RenderOrphanCleanupPlanResult(stdout, result); renderErr != nil {
+		return renderErr
+	}
+	if runErr != nil {
+		return runErr
+	}
+	if !result.Success {
+		return fmt.Errorf("%s reported success=false", result.Command)
+	}
+	return nil
+}
+
+func runOrphanCleanupExecute(stdout io.Writer, options cliOptions) error {
+	store, err := state.NewStore("")
+	if err != nil {
+		return err
+	}
+	result, runErr := actions.OrphanCleanupService{Store: store}.Execute(options.candidateID, options.all, options.force)
+	if options.json {
+		output, err := json.Marshal(result)
+		if err != nil {
+			return err
+		}
+		if _, err := stdout.Write(append(output, '\n')); err != nil {
+			return err
+		}
+	} else if renderErr := actions.RenderOrphanCleanupExecutionResult(stdout, result); renderErr != nil {
+		return renderErr
+	}
+	if runErr != nil {
+		return runErr
+	}
+	if !result.Success {
+		return fmt.Errorf("%s reported success=false", result.Command)
 	}
 	return nil
 }

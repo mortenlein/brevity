@@ -26,6 +26,8 @@ const (
 	TaskRunsRetentionID  ID = "task-runs-retention"
 	TaskRunsCompactID    ID = "task-runs-compact"
 	CleanupInspectID     ID = "cleanup-inspect"
+	CleanupPlanID        ID = "cleanup-plan"
+	CleanupExecuteID     ID = "cleanup-execute"
 )
 
 type Command struct {
@@ -144,6 +146,16 @@ var (
 		Words: []string{"cleanup", "inspect"},
 		Usage: "brevity cleanup inspect [--json]",
 	}
+	CleanupPlan = Command{
+		ID:    CleanupPlanID,
+		Words: []string{"cleanup", "plan"},
+		Usage: "brevity cleanup plan <candidate-id>|--all [--json]",
+	}
+	CleanupExecute = Command{
+		ID:    CleanupExecuteID,
+		Words: []string{"cleanup", "execute"},
+		Usage: "brevity cleanup execute <candidate-id>|--all --force [--json]",
+	}
 	TaskMerge = Command{
 		ID:    TaskMergeID,
 		Words: []string{"task", "merge"},
@@ -176,6 +188,8 @@ var UsageCommands = []Command{
 	TaskRunsRetention,
 	TaskRunsCompact,
 	CleanupInspect,
+	CleanupPlan,
+	CleanupExecute,
 	TaskCleanup,
 	TaskMerge,
 }

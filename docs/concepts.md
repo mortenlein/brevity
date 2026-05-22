@@ -753,22 +753,32 @@ removal. Brevity removes the task record when branch removal succeeds or the
 branch is already missing. If branch removal fails for another reason, the
 metadata stays in place so the task can be inspected or retried explicitly.
 
-`Brevity task cleanup-orphans --dry-run` reports registered task-like worktrees
-under the active worktree root that are missing from `.brevity\tasks.json`.
-`Brevity task cleanup-orphans --execute` is the explicit mutating form. Before
-each removal, Brevity re-checks that the worktree is still registered, still
-under the active worktree root, still on a `task/*` branch, and still missing
-matching task metadata. It skips uncertain candidates and only deletes a branch
-after the worktree removal succeeds and the branch still exists as `task/*`.
-Dirty orphaned worktrees are treated as unsafe: Brevity reports tracked and
-untracked changes when detectable, prints inspection commands, and leaves the
-worktree untouched.
+`go run ./cmd/brevity cleanup inspect` is the native read-only orphan and
+cleanup detector. It reports registered task-like worktrees missing from
+`.brevity\tasks.json`, branch-only `task/*` orphans, missing tracked
+worktrees, dirty tracked worktrees, and stale run records. It performs no
+cleanup.
 
-`Brevity task cleanup-orphan-branches --dry-run` reports local `task/*` branches
-that have no matching `.brevity\tasks.json` metadata and are not currently
-checked out in any registered Git worktree. It prints whether each branch is
-merged into the current `HEAD` when Git can report that easily, plus the manual
-`git branch -D <branch>` command. Without `--dry-run`, it refuses safely.
+`go run ./cmd/brevity cleanup plan <candidate-id> --json` and
+`go run ./cmd/brevity cleanup plan --all --json` build native orphan cleanup
+plans from the inspection candidates. Plans include the candidate id and kind,
+worktree path, branch, dirty state, branch merge state when available,
+removable/destructive/force flags, expected argv-style Git commands, blockers,
+warnings, and expected metadata mutation. Orphan cleanup plans are separate from
+selected task cleanup plans.
+
+`go run ./cmd/brevity cleanup execute <candidate-id> --force --json` and
+`go run ./cmd/brevity cleanup execute --all --force --json` are the native
+orphan cleanup execution paths. Execution refuses to run without explicit
+`--force`, refuses dirty orphan worktrees, refuses unmerged orphan branches, and
+uses only safe branch deletion with `git branch -d`. It does not use
+`git branch -D`, does not launch providers or workers, and does not remove
+selected task metadata. In `--all` mode, blocked candidates are skipped and
+reported while unblocked candidates may still be cleaned.
+
+The older PowerShell orphan cleanup commands remain legacy/reference behavior.
+They are not removed, but the Go CLI is the target runtime authority for native
+orphan cleanup planning and execution.
 
 `Brevity task merge <slug>` is implemented by the native Go CLI. It first builds
 a merge plan from `.brevity\tasks.json` and read-only Git inspection, including

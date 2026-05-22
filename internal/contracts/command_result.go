@@ -121,6 +121,63 @@ type TaskCleanupPlanPayload struct {
 	GeneratedAt              string          `json:"generatedAt"`
 }
 
+type OrphanCleanupPlanSetPayload struct {
+	Schema      string                     `json:"schema"`
+	Version     int                        `json:"version"`
+	CandidateID string                     `json:"candidateId,omitempty"`
+	All         bool                       `json:"all"`
+	Plans       []OrphanCleanupPlanPayload `json:"plans"`
+	GeneratedAt string                     `json:"generatedAt"`
+}
+
+type OrphanCleanupPlanPayload struct {
+	Schema                   string          `json:"schema"`
+	Version                  int             `json:"version"`
+	CandidateID              string          `json:"candidateId"`
+	CandidateKind            string          `json:"candidateKind"`
+	WorktreePath             string          `json:"worktreePath,omitempty"`
+	Branch                   string          `json:"branch,omitempty"`
+	RepoRoot                 string          `json:"repoRoot"`
+	Dirty                    bool            `json:"dirty"`
+	BranchMerged             bool            `json:"branchMerged"`
+	BranchMergedKnown        bool            `json:"branchMergedKnown"`
+	WorktreeExists           bool            `json:"worktreeExists"`
+	WorktreeRegistered       bool            `json:"worktreeRegistered"`
+	BranchExists             bool            `json:"branchExists"`
+	Removable                bool            `json:"removable"`
+	Destructive              bool            `json:"destructive"`
+	RequiresForce            bool            `json:"requiresForce"`
+	ExpectedGitCommands      [][]string      `json:"expectedGitCommands"`
+	ExpectedMetadataMutation string          `json:"expectedMetadataMutation"`
+	Blockers                 []ResultMessage `json:"blockers"`
+	Warnings                 []ResultMessage `json:"warnings"`
+	GeneratedAt              string          `json:"generatedAt"`
+}
+
+type OrphanCleanupExecutionPayload struct {
+	Schema          string                     `json:"schema"`
+	Version         int                        `json:"version"`
+	CandidateID     string                     `json:"candidateId,omitempty"`
+	All             bool                       `json:"all"`
+	Force           bool                       `json:"force"`
+	Plans           []OrphanCleanupPlanPayload `json:"plans"`
+	Results         []OrphanCleanupResult      `json:"results"`
+	GitCommands     []GitCommandResult         `json:"gitCommands,omitempty"`
+	WorktreeRemoved int                        `json:"worktreeRemoved"`
+	BranchRemoved   int                        `json:"branchRemoved"`
+	Skipped         int                        `json:"skipped"`
+	GeneratedAt     string                     `json:"generatedAt"`
+}
+
+type OrphanCleanupResult struct {
+	CandidateID     string `json:"candidateId"`
+	CandidateKind   string `json:"candidateKind"`
+	WorktreeRemoved bool   `json:"worktreeRemoved"`
+	BranchRemoved   bool   `json:"branchRemoved"`
+	Skipped         bool   `json:"skipped"`
+	Message         string `json:"message,omitempty"`
+}
+
 type TaskNewPayload struct {
 	Slug                string `json:"slug"`
 	State               string `json:"state,omitempty"`
@@ -516,6 +573,28 @@ func ParseTaskCleanupPlanPayload(result CommandResult) (TaskCleanupPlanPayload, 
 	}
 	if payload.Slug == "" {
 		return TaskCleanupPlanPayload{}, errors.New("invalid task cleanup plan payload: missing slug")
+	}
+	return payload, nil
+}
+
+func ParseOrphanCleanupPlanSetPayload(result CommandResult) (OrphanCleanupPlanSetPayload, error) {
+	if len(result.Payload) == 0 {
+		return OrphanCleanupPlanSetPayload{}, errors.New("orphan cleanup plan result missing payload")
+	}
+	var payload OrphanCleanupPlanSetPayload
+	if err := json.Unmarshal(result.Payload, &payload); err != nil {
+		return OrphanCleanupPlanSetPayload{}, fmt.Errorf("invalid orphan cleanup plan payload: %w", err)
+	}
+	return payload, nil
+}
+
+func ParseOrphanCleanupExecutionPayload(result CommandResult) (OrphanCleanupExecutionPayload, error) {
+	if len(result.Payload) == 0 {
+		return OrphanCleanupExecutionPayload{}, errors.New("orphan cleanup execute result missing payload")
+	}
+	var payload OrphanCleanupExecutionPayload
+	if err := json.Unmarshal(result.Payload, &payload); err != nil {
+		return OrphanCleanupExecutionPayload{}, fmt.Errorf("invalid orphan cleanup execute payload: %w", err)
 	}
 	return payload, nil
 }
