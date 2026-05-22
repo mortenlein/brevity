@@ -72,12 +72,20 @@ type TaskUpdateOptions struct {
 	LockOptions locking.Options
 }
 
+type TaskCreateOptions struct {
+	LockOptions locking.Options
+}
+
 type TaskUpdate struct {
 	Previous Task
 	Updated  Task
 }
 
 type TaskMutator func(task map[string]json.RawMessage) error
+
+type TaskCreate struct {
+	Created Task
+}
 
 type TaskWorktree struct {
 	Exists     bool   `json:"exists"`
@@ -181,6 +189,48 @@ func UpdateTask(store Store, slug string, options TaskUpdateOptions, mutate Task
 	return TaskUpdate{Previous: previous, Updated: updated}, nil
 }
 
+func CreateTask(store Store, task Task, options TaskCreateOptions) (TaskCreate, error) {
+	slug := strings.TrimSpace(task.Key())
+	if slug == "" {
+		return TaskCreate{}, fmt.Errorf("task slug is required")
+	}
+	lockOptions := options.LockOptions
+	if lockOptions.Timeout == 0 {
+		lockOptions.Timeout = 5 * time.Second
+	}
+	lock, err := locking.Acquire(store.LockPath(), lockOptions)
+	if err != nil {
+		return TaskCreate{}, fmt.Errorf("task metadata locked: %w", err)
+	}
+	defer lock.Release()
+
+	rawTasks, err := loadRawTasksAllowMissing(store)
+	if err != nil {
+		return TaskCreate{}, err
+	}
+	for _, rawTask := range rawTasks {
+		if rawTaskKey(rawTask) == slug {
+			return TaskCreate{}, fmt.Errorf("task already exists: %s", slug)
+		}
+	}
+	data, err := json.Marshal(task)
+	if err != nil {
+		return TaskCreate{}, fmt.Errorf("marshal task %s: %w", slug, err)
+	}
+	var rawTask map[string]json.RawMessage
+	if err := json.Unmarshal(data, &rawTask); err != nil {
+		return TaskCreate{}, fmt.Errorf("marshal task %s: %w", slug, err)
+	}
+	rawTasks = append(rawTasks, rawTask)
+	sort.SliceStable(rawTasks, func(i, j int) bool {
+		return rawTaskKey(rawTasks[i]) < rawTaskKey(rawTasks[j])
+	})
+	if err := writeRawTasks(store, rawTasks); err != nil {
+		return TaskCreate{}, err
+	}
+	return TaskCreate{Created: task}, nil
+}
+
 func UpdateTaskRunMetadata(store Store, record RunRecord, options TaskUpdateOptions) error {
 	_, err := UpdateTask(store, record.Slug, options, func(task map[string]json.RawMessage) error {
 		setRaw(task, "workerStatus", record.WorkerStatus)
@@ -259,6 +309,17 @@ func loadRawTasks(store Store) ([]map[string]json.RawMessage, error) {
 		return nil, err
 	}
 	return rawTasks, nil
+}
+
+func loadRawTasksAllowMissing(store Store) ([]map[string]json.RawMessage, error) {
+	rawTasks, err := loadRawTasks(store)
+	if err == nil {
+		return rawTasks, nil
+	}
+	if strings.Contains(err.Error(), ".brevity/"+TasksFile+" is missing") {
+		return []map[string]json.RawMessage{}, nil
+	}
+	return nil, err
 }
 
 func writeRawTasks(store Store, rawTasks []map[string]json.RawMessage) error {

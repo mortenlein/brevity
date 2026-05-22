@@ -97,11 +97,16 @@ type TaskCleanupPayload struct {
 }
 
 type TaskNewPayload struct {
-	Slug         string `json:"slug"`
-	Branch       string `json:"branch"`
-	WorktreePath string `json:"worktreePath"`
-	PromptPath   string `json:"promptPath"`
-	MetadataPath string `json:"metadataPath"`
+	Slug                string `json:"slug"`
+	State               string `json:"state,omitempty"`
+	Branch              string `json:"branch"`
+	WorktreePath        string `json:"worktreePath"`
+	PromptPath          string `json:"promptPath"`
+	SpecPath            string `json:"specPath,omitempty"`
+	MetadataPath        string `json:"metadataPath"`
+	CreatedAt           string `json:"createdAt,omitempty"`
+	NoProviderExecution bool   `json:"noProviderExecution,omitempty"`
+	NoWorkerExecution   bool   `json:"noWorkerExecution,omitempty"`
 }
 
 type TaskStartPayload struct {

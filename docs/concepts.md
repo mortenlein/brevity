@@ -485,9 +485,11 @@ and a worktree named:
 worktrees\active\<repo-name>-<slug>
 ```
 
-Brevity should keep that convention for `Brevity task new`. The command also writes
-a simple `prompt.md` file into the new worktree so a worker has a durable task
-starting point without launching any automation.
+Brevity keeps that convention for `Brevity task new`. The Go command owns this
+flow: it runs native preflight, creates the branch/worktree required by current
+semantics, writes `prompt.md`, refreshes bounded `.brevity\context` files from
+AI-Vault when configured, and appends task metadata under the advisory
+`.brevity\state.lock`. It does not launch providers or workers.
 
 Task metadata lives in the source repository:
 
@@ -504,8 +506,10 @@ Each record includes:
 - `specPath`
 - `status`
 - `createdAt`
+- `updatedAt`
 
-New task records use `ready-for-worker` status.
+New task records use deterministic `ready-for-worker` status and
+`normalizedState`.
 
 `Brevity task activate <slug>` is the vault-backed task creation flow. It reads
 `.brevity\config.json` and uses:
@@ -625,8 +629,11 @@ materialize execution logs. Run Worker in the Bubble Tea dashboard consumes this
 native plan and remains plan-only.
 
 `Brevity task run <slug> --execute [--profile <name>] [--smoke] [--force-provider]`
-remains the legacy PowerShell execution path. Native Go execution is not
-implemented yet.
+is native Go provider execution. It uses the same preflight and plan envelope,
+executes the provider command with argv-style `os/exec`, writes worker logs,
+appends `.brevity\runs.jsonl`, and updates task runtime metadata under the
+advisory state lock. Merge and cleanup execution remain outside the native Go
+authority slice.
 
 The task-run command reads the matching task record and plans:
 

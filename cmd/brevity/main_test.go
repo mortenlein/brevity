@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -1352,10 +1353,10 @@ func TestRunTaskCleanupReturnsErrorWhenResultFails(t *testing.T) {
 	}
 }
 
-func TestRunTaskNewUsesClientAndRendersResult(t *testing.T) {
-	client := &fakeRuntimeClient{
-		taskNew: []byte(`{"schema":"brevity.command-result.v1","command":"task new","success":true,"severity":"info","suggestedNextActions":["refresh-runtime-state"],"payload":{"slug":"my-task","branch":"task/my-task","worktreePath":"C:\\repo\\worktrees\\active\\brevity-my-task","promptPath":"C:\\repo\\worktrees\\active\\brevity-my-task\\prompt.md","metadataPath":"C:\\repo\\.brevity\\tasks.json"}}`),
-	}
+func TestRunTaskNewUsesNativeServiceAndRendersResult(t *testing.T) {
+	repoRoot := tempGitRepoForTaskNew(t)
+	t.Chdir(repoRoot)
+	client := &fakeRuntimeClient{}
 
 	var stdout bytes.Buffer
 	err := runWithOptions(&stdout, client, cliOptions{kind: commandTaskNew, slug: "my-task"})
@@ -1363,18 +1364,21 @@ func TestRunTaskNewUsesClientAndRendersResult(t *testing.T) {
 		t.Fatalf("runWithOptions returned error: %v", err)
 	}
 
-	if len(client.calls) != 1 || client.calls[0] != "task-new:my-task" {
-		t.Fatalf("calls = %#v, want task new only", client.calls)
+	if len(client.calls) != 0 {
+		t.Fatalf("calls = %#v, want no PowerShell client calls", client.calls)
 	}
 
 	output := stdout.String()
 	for _, want := range []string{
 		"Task new: success",
 		"slug: my-task",
+		"state: ready-for-worker",
 		"branch: task/my-task",
-		"worktreePath: C:\\repo\\worktrees\\active\\brevity-my-task",
-		"promptPath: C:\\repo\\worktrees\\active\\brevity-my-task\\prompt.md",
-		"metadataPath: C:\\repo\\.brevity\\tasks.json",
+		"worktreePath:",
+		"promptPath:",
+		"metadataPath:",
+		"providerExecution: false",
+		"workerExecution: false",
 		"- refresh-runtime-state",
 	} {
 		if !strings.Contains(output, want) {
@@ -1383,24 +1387,71 @@ func TestRunTaskNewUsesClientAndRendersResult(t *testing.T) {
 	}
 }
 
-func TestRunTaskNewReturnsErrorWhenResultFails(t *testing.T) {
-	client := &fakeRuntimeClient{
-		taskNew: []byte(`{"schema":"brevity.command-result.v1","command":"task new","success":false,"severity":"error","errors":[{"code":"task-already-exists","message":"Task metadata already exists: my-task","details":{"slug":"my-task","metadataPath":"C:\\repo\\.brevity\\tasks.json"}}],"payload":{}}`),
-	}
+func TestRunTaskNewReturnsErrorWhenDuplicate(t *testing.T) {
+	repoRoot := tempGitRepoForTaskNew(t)
+	t.Chdir(repoRoot)
+	client := &fakeRuntimeClient{}
 
 	var stdout bytes.Buffer
+	if err := runWithOptions(&stdout, client, cliOptions{kind: commandTaskNew, slug: "my-task"}); err != nil {
+		t.Fatalf("first task new returned error: %v", err)
+	}
+	stdout.Reset()
 	err := runWithOptions(&stdout, client, cliOptions{kind: commandTaskNew, slug: "my-task"})
 	if err == nil {
 		t.Fatal("runWithOptions returned nil error")
 	}
-	if !strings.Contains(err.Error(), "task new reported success=false") {
+	if !strings.Contains(err.Error(), "task new preflight blocked mutation") {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if !strings.Contains(stdout.String(), "slug: my-task") {
 		t.Fatalf("output missing slug fallback:\n%s", stdout.String())
 	}
-	if !strings.Contains(stdout.String(), "error: task-already-exists: Task metadata already exists: my-task") {
+	if !strings.Contains(stdout.String(), "error: preflight-blocked: task new preflight blocked mutation") {
 		t.Fatalf("output missing structured error:\n%s", stdout.String())
+	}
+	if len(client.calls) != 0 {
+		t.Fatalf("calls = %#v, want no PowerShell client calls", client.calls)
+	}
+}
+
+func TestRunTaskNewDisposableFixtureUpdatesStatusAndRuntimeState(t *testing.T) {
+	repoRoot := tempGitRepoForTaskNew(t)
+	t.Chdir(repoRoot)
+	client := &fakeRuntimeClient{}
+
+	var stdout bytes.Buffer
+	err := runWithOptions(&stdout, client, cliOptions{kind: commandTaskNew, slug: "fixture-new-task", json: true})
+	if err != nil {
+		t.Fatalf("task new returned error: %v\n%s", err, stdout.String())
+	}
+	data, err := os.ReadFile(filepath.Join(repoRoot, ".brevity", "tasks.json"))
+	if err != nil {
+		t.Fatalf("ReadFile tasks returned error: %v", err)
+	}
+	for _, want := range []string{`"slug": "fixture-new-task"`, `"status": "ready-for-worker"`, `"branch": "task/fixture-new-task"`} {
+		if !strings.Contains(string(data), want) {
+			t.Fatalf("tasks.json missing %q:\n%s", want, string(data))
+		}
+	}
+
+	stdout.Reset()
+	if err := runWithOptions(&stdout, client, cliOptions{kind: commandTaskStatus}); err != nil {
+		t.Fatalf("task status returned error: %v", err)
+	}
+	if !strings.Contains(stdout.String(), "fixture-new-task") {
+		t.Fatalf("task status missing created task:\n%s", stdout.String())
+	}
+
+	stdout.Reset()
+	if err := runWithOptions(&stdout, client, cliOptions{kind: commandRuntimeState}); err != nil {
+		t.Fatalf("runtime state returned error: %v", err)
+	}
+	if !strings.Contains(stdout.String(), "fixture-new-task") {
+		t.Fatalf("runtime state missing created task:\n%s", stdout.String())
+	}
+	if len(client.calls) != 0 {
+		t.Fatalf("calls = %#v, want no PowerShell client calls", client.calls)
 	}
 }
 
@@ -1604,6 +1655,44 @@ func tempRepoWithProviderHealth(t *testing.T, health string) string {
 		t.Fatalf("WriteFile returned error: %v", err)
 	}
 	return repoRoot
+}
+
+func tempGitRepoForTaskNew(t *testing.T) string {
+	t.Helper()
+	repoRoot := t.TempDir()
+	runTestCommand(t, repoRoot, "git", "init")
+	runTestCommand(t, repoRoot, "git", "config", "user.email", "brevity@example.test")
+	runTestCommand(t, repoRoot, "git", "config", "user.name", "Brevity Test")
+	if err := os.WriteFile(filepath.Join(repoRoot, "README.md"), []byte("fixture\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile README returned error: %v", err)
+	}
+	runTestCommand(t, repoRoot, "git", "add", "README.md")
+	runTestCommand(t, repoRoot, "git", "commit", "-m", "initial")
+	brevityRoot := filepath.Join(repoRoot, ".brevity")
+	if err := os.MkdirAll(brevityRoot, 0o755); err != nil {
+		t.Fatalf("MkdirAll returned error: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(brevityRoot, "tasks.json"), []byte("[]\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile tasks returned error: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(brevityRoot, "provider-health.json"), []byte(`{"codex":{"status":"healthy"}}`+"\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile provider health returned error: %v", err)
+	}
+	config := fmt.Sprintf(`{"vaultPath":"","worktreesRoot":%q}`, filepath.Join(repoRoot, "worktrees", "active"))
+	if err := os.WriteFile(filepath.Join(brevityRoot, "config.json"), []byte(config+"\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile config returned error: %v", err)
+	}
+	return repoRoot
+}
+
+func runTestCommand(t *testing.T, dir string, name string, args ...string) {
+	t.Helper()
+	command := exec.Command(name, args...)
+	command.Dir = dir
+	output, err := command.CombinedOutput()
+	if err != nil {
+		t.Fatalf("%s %s failed: %v\n%s", name, strings.Join(args, " "), err, string(output))
+	}
 }
 
 func tempRepoWithTasks(t *testing.T, tasks string) string {

@@ -346,11 +346,17 @@ func preflightActionFromWord(word string) (preflight.Action, bool) {
 }
 
 func parseTaskNewOptions(args []string) (cliOptions, error) {
-	if len(args) != 3 || args[2] == "" {
+	if len(args) < 3 || args[2] == "" {
 		return cliOptions{}, usageError(commands.TaskNew)
 	}
-
-	return cliOptions{kind: commandTaskNew, slug: args[2]}, nil
+	options := cliOptions{kind: commandTaskNew, slug: args[2]}
+	for _, arg := range args[3:] {
+		if arg != "--json" {
+			return cliOptions{}, usageError(commands.TaskNew)
+		}
+		options.json = true
+	}
+	return options, nil
 }
 
 func parseTaskStartOptions(args []string) (cliOptions, error) {
@@ -1150,12 +1156,29 @@ func runDoctor(stdout io.Writer, options cliOptions) error {
 }
 
 func runTaskNew(stdout io.Writer, client runtimeclient.Client, options cliOptions) error {
-	return runPowerShellAction(stdout, actionSpec{
-		call: func() ([]byte, error) {
-			return client.TaskNewJSON(options.slug)
-		},
-		render: actions.RenderTaskNewResult,
-	})
+	store, err := state.NewStore("")
+	if err != nil {
+		return err
+	}
+	result, runErr := actions.TaskNewService{Store: store}.Create(options.slug)
+	if options.json {
+		output, err := json.Marshal(result)
+		if err != nil {
+			return err
+		}
+		if _, err := stdout.Write(append(output, '\n')); err != nil {
+			return err
+		}
+	} else if renderErr := actions.RenderTaskNewResult(stdout, result); renderErr != nil {
+		return renderErr
+	}
+	if runErr != nil {
+		return runErr
+	}
+	if !result.Success {
+		return fmt.Errorf("%s reported success=false", result.Command)
+	}
+	return nil
 }
 
 func runTaskStart(stdout io.Writer, options cliOptions) error {
