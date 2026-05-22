@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"sort"
 	"strings"
 	"time"
 
@@ -549,7 +550,11 @@ func (model Model) headerStatusSegments() []statusSegment {
 	}
 
 	if warnings.total() > 0 {
-		segments = append(segments, statusSegment{text: fmt.Sprintf("p:%d t:%d c:%d", warnings.provider, warnings.task, warnings.cleanup), priority: 2})
+		warningParts := []string{fmt.Sprintf("p:%d", warnings.provider), fmt.Sprintf("t:%d", warnings.task), fmt.Sprintf("c:%d", warnings.cleanup)}
+		if warnings.queue > 0 {
+			warningParts = append(warningParts, fmt.Sprintf("q:%d", warnings.queue))
+		}
+		segments = append(segments, statusSegment{text: strings.Join(warningParts, " "), priority: 2})
 	}
 	if strings.TrimSpace(model.state.GeneratedAt) != "" {
 		segments = append(segments, statusSegment{text: "generated " + model.state.GeneratedAt, compact: model.state.GeneratedAt, priority: 3})
@@ -598,10 +603,11 @@ type dashboardWarningCounts struct {
 	provider int
 	task     int
 	cleanup  int
+	queue    int
 }
 
 func (counts dashboardWarningCounts) total() int {
-	return counts.provider + counts.task + counts.cleanup
+	return counts.provider + counts.task + counts.cleanup + counts.queue
 }
 
 func (model Model) warningCounts() dashboardWarningCounts {
@@ -615,6 +621,9 @@ func (model Model) warningCounts() dashboardWarningCounts {
 	}
 	if state.Cleanup != nil && state.Cleanup.Summary != nil {
 		counts.cleanup = state.Cleanup.Summary.TotalCandidates
+	}
+	if queueWarningCount(state.Queue) > 0 {
+		counts.queue = 1
 	}
 	return counts
 }
@@ -791,6 +800,9 @@ func (model Model) renderSummary() string {
 	} else {
 		fmt.Fprintln(&output, "  cleanup   none")
 	}
+	if state.Queue != nil {
+		fmt.Fprintf(&output, "%s\n", model.renderLine("  queue     "+queueSummary(state.Queue)))
+	}
 	return output.String()
 }
 
@@ -818,7 +830,74 @@ func runtimeSummaryWarningCount(state contracts.RuntimeState) int {
 	if state.Cleanup != nil && state.Cleanup.Summary != nil {
 		warnings += state.Cleanup.Summary.TotalCandidates
 	}
+	warnings += queueWarningCount(state.Queue)
 	return warnings
+}
+
+func queueSummary(queue *contracts.RuntimeQueue) string {
+	if queue == nil {
+		return "unknown"
+	}
+	parts := []string{
+		fmt.Sprintf("%s file", fallback(queue.State, "unknown")),
+		fmt.Sprintf("%d items", queue.TotalItems),
+	}
+	statuses := sortedQueueStatuses(queue.CountsByStatus)
+	if len(statuses) == 0 {
+		parts = append(parts, "0 statuses")
+	} else {
+		counts := make([]string, 0, len(statuses))
+		for _, status := range statuses {
+			counts = append(counts, fmt.Sprintf("%s:%d", status, queue.CountsByStatus[status]))
+		}
+		parts = append(parts, strings.Join(counts, " "))
+	}
+	parts = append(parts, "oldest "+fallback(queue.OldestQueuedItemAge, "-"))
+	if warning := queueWarningText(queue); warning != "" {
+		parts = append(parts, warning+renderWarningCount(1))
+	} else {
+		parts[len(parts)-1] += renderWarningCount(0)
+	}
+	return strings.Join(parts, " | ")
+}
+
+func sortedQueueStatuses(counts map[string]int) []string {
+	statuses := make([]string, 0, len(counts))
+	for status := range counts {
+		status = strings.TrimSpace(status)
+		if status != "" {
+			statuses = append(statuses, status)
+		}
+	}
+	sort.Strings(statuses)
+	return statuses
+}
+
+func queueWarningCount(queue *contracts.RuntimeQueue) int {
+	if queueWarningText(queue) == "" {
+		return 0
+	}
+	return 1
+}
+
+func queueWarningText(queue *contracts.RuntimeQueue) string {
+	if queue == nil {
+		return ""
+	}
+	switch strings.ToLower(strings.TrimSpace(queue.State)) {
+	case "corrupted":
+		return "corrupted"
+	case "invalid":
+		if queue.UnsupportedFutureVersion {
+			return "future-version"
+		}
+		return "invalid"
+	default:
+		if strings.TrimSpace(queue.Error) != "" {
+			return "warning"
+		}
+		return ""
+	}
 }
 
 func (model Model) renderListAndDetails() string {

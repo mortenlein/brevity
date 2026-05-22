@@ -3139,6 +3139,95 @@ func TestModelRefreshCommandReadsRuntimeState(t *testing.T) {
 	}
 }
 
+func TestQueueVisibilityRendersEmptyMissingValidAndCorruptedStates(t *testing.T) {
+	tests := []struct {
+		name  string
+		queue *contracts.RuntimeQueue
+		want  []string
+	}{
+		{
+			name: "empty queue",
+			queue: &contracts.RuntimeQueue{
+				State:          "valid",
+				Version:        1,
+				TotalItems:     0,
+				CountsByStatus: map[string]int{},
+			},
+			want: []string{"queue     valid file | 0 items | 0 statuses | oldest - ok"},
+		},
+		{
+			name: "valid queue summary",
+			queue: &contracts.RuntimeQueue{
+				State:               "valid",
+				Version:             1,
+				TotalItems:          3,
+				CountsByStatus:      map[string]int{"queued": 2, "cancelled": 1},
+				OldestQueuedItemAge: "2h0m0s",
+			},
+			want: []string{"queue     valid file | 3 items | cancelled:1 queued:2 | oldest 2h0m0s ok"},
+		},
+		{
+			name: "corrupted queue warning",
+			queue: &contracts.RuntimeQueue{
+				State:          "corrupted",
+				Version:        1,
+				TotalItems:     0,
+				CountsByStatus: map[string]int{},
+				Error:          "parse runtime-queue.json: invalid character",
+			},
+			want: []string{"queue     corrupted file | 0 items | 0 statuses | oldest - | corrupted !"},
+		},
+		{
+			name: "missing queue file",
+			queue: &contracts.RuntimeQueue{
+				State:          "missing",
+				Version:        1,
+				TotalItems:     0,
+				CountsByStatus: map[string]int{},
+			},
+			want: []string{"queue     missing file | 0 items | 0 statuses | oldest - ok"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			model := NewModelWithSource(&fakeClient{}, time.Second, "native")
+			model.state = emptyBubbleState()
+			model.state.Queue = tt.queue
+			model.hasState = true
+
+			output := plainView(model.renderSummary())
+			for _, want := range tt.want {
+				if !strings.Contains(output, want) {
+					t.Fatalf("queue summary missing %q:\n%s", want, output)
+				}
+			}
+		})
+	}
+}
+
+func TestQueueVisibilityWidthSafety(t *testing.T) {
+	model := NewModelWithSource(&fakeClient{}, time.Second, "native")
+	model.state = emptyBubbleState()
+	model.state.Queue = &contracts.RuntimeQueue{
+		State:               "invalid",
+		Version:             99,
+		SupportedVersion:    1,
+		TotalItems:          12345,
+		CountsByStatus:      map[string]int{"queued-with-a-very-long-future-status": 12345},
+		OldestQueuedItemAge: "999999h0m0s",
+		Error:               strings.Repeat("future version ", 20),
+	}
+	model.hasState = true
+	model.width = 42
+
+	output := plainView(model.View())
+	if !strings.Contains(output, "queue") {
+		t.Fatalf("narrow queue view missing queue summary:\n%s", output)
+	}
+	assertLinesWithinWidth(t, output, model.width)
+}
+
 func bubbleState() contracts.RuntimeState {
 	return contracts.RuntimeState{
 		Schema:   contracts.RuntimeStateSchema,

@@ -13,6 +13,7 @@ type RuntimeState struct {
 	RepoRoot              string           `json:"repoRoot"`
 	GeneratedAt           string           `json:"generatedAt"`
 	Providers             Providers        `json:"providers"`
+	Queue                 *RuntimeQueue    `json:"queue,omitempty"`
 	TaskCounts            TaskCounts       `json:"taskCounts"`
 	Tasks                 []TaskSummary    `json:"tasks"`
 	Cleanup               *Cleanup         `json:"cleanup,omitempty"`
@@ -40,6 +41,21 @@ type ProviderHealth struct {
 	Status    string `json:"status"`
 	UpdatedAt string `json:"updatedAt"`
 	Note      string `json:"note"`
+}
+
+type RuntimeQueue struct {
+	Path                     string         `json:"path"`
+	State                    string         `json:"state"`
+	Version                  int            `json:"version"`
+	SupportedVersion         int            `json:"supportedVersion"`
+	TotalItems               int            `json:"totalItems"`
+	CountsByStatus           map[string]int `json:"countsByStatus"`
+	OldestQueuedItemAge      string         `json:"oldestQueuedItemAge,omitempty"`
+	NewestQueuedItemAge      string         `json:"newestQueuedItemAge,omitempty"`
+	DuplicateIDs             []string       `json:"duplicateIds,omitempty"`
+	InvalidItems             []string       `json:"invalidItems,omitempty"`
+	UnsupportedFutureVersion bool           `json:"unsupportedFutureVersion"`
+	Error                    string         `json:"error,omitempty"`
 }
 
 type TaskCounts struct {

@@ -16,6 +16,7 @@ import (
 	nativecleanup "github.com/mortenlein/brevity/internal/cleanup"
 	"github.com/mortenlein/brevity/internal/contracts"
 	"github.com/mortenlein/brevity/internal/diagnostics"
+	runtimequeue "github.com/mortenlein/brevity/internal/runtime/queue"
 	"github.com/mortenlein/brevity/internal/state"
 )
 
@@ -83,6 +84,13 @@ func (client NativeClient) RuntimeState() (contracts.RuntimeState, error) {
 		runtimeState.SuggestedNextActions = append(runtimeState.SuggestedNextActions, "No .brevity\\provider-health.json found.")
 	}
 
+	queueStore := runtimequeue.Store{Store: store, Now: func() time.Time { return now().UTC() }}
+	queueInspection := queueStore.Inspect()
+	runtimeState.Queue = queueInspectionToContract(queueInspection)
+	if queueInspection.State == "corrupted" || queueInspection.State == "invalid" {
+		runtimeState.SuggestedNextActions = append(runtimeState.SuggestedNextActions, "Inspect .brevity\\runtime-queue.json before relying on queued work visibility.")
+	}
+
 	taskStore, missingTasks, err := state.LoadTasks(store)
 	if err != nil {
 		return contracts.RuntimeState{}, err
@@ -122,6 +130,27 @@ func (client NativeClient) RuntimeState() (contracts.RuntimeState, error) {
 	}
 
 	return runtimeState, nil
+}
+
+func queueInspectionToContract(inspection runtimequeue.Inspection) *contracts.RuntimeQueue {
+	counts := map[string]int{}
+	for status, count := range inspection.CountsByStatus {
+		counts[status] = count
+	}
+	return &contracts.RuntimeQueue{
+		Path:                     inspection.Path,
+		State:                    inspection.State,
+		Version:                  inspection.Version,
+		SupportedVersion:         inspection.SupportedVersion,
+		TotalItems:               inspection.TotalItems,
+		CountsByStatus:           counts,
+		OldestQueuedItemAge:      inspection.OldestQueuedItemAge,
+		NewestQueuedItemAge:      inspection.NewestQueuedItemAge,
+		DuplicateIDs:             append([]string{}, inspection.DuplicateIDs...),
+		InvalidItems:             append([]string{}, inspection.InvalidItems...),
+		UnsupportedFutureVersion: inspection.UnsupportedFutureVersion,
+		Error:                    inspection.Error,
+	}
 }
 
 func attachPromptFiles(tasks []contracts.TaskSummary) {

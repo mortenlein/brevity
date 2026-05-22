@@ -254,6 +254,72 @@ func TestNativeRuntimeStateMissingFiles(t *testing.T) {
 	if len(state.SuggestedNextActions) < 3 {
 		t.Fatalf("suggested actions = %#v, want missing-file notes", state.SuggestedNextActions)
 	}
+	if state.Queue == nil || state.Queue.State != "missing" || state.Queue.TotalItems != 0 {
+		t.Fatalf("queue = %#v, want missing empty queue visibility", state.Queue)
+	}
+}
+
+func TestNativeRuntimeStateIncludesQueueSummaryWithoutMutation(t *testing.T) {
+	repoRoot := nativeTestRepo(t)
+	writeNativeTestFile(t, repoRoot, ".brevity/provider-health.json", `{}`)
+	writeNativeTestFile(t, repoRoot, ".brevity/tasks.json", `[]`)
+	writeNativeTestFile(t, repoRoot, ".brevity/runtime-queue.json", `{
+		"version":1,
+		"items":[
+			{"id":"q-old","task":"task-one","provider":"codex","profile":"default","status":"queued","createdAt":"2026-05-19T08:00:00Z","updatedAt":"2026-05-19T08:00:00Z"},
+			{"id":"q-new","task":"task-two","provider":"codex","profile":"default","status":"cancelled","createdAt":"2026-05-19T09:00:00Z","updatedAt":"2026-05-19T09:00:00Z"}
+		]
+	}`)
+	queuePath := filepath.Join(repoRoot, ".brevity", "runtime-queue.json")
+	before, err := os.ReadFile(queuePath)
+	if err != nil {
+		t.Fatalf("read queue before: %v", err)
+	}
+
+	state := nativeState(t, repoRoot)
+	after, err := os.ReadFile(queuePath)
+	if err != nil {
+		t.Fatalf("read queue after: %v", err)
+	}
+	if string(after) != string(before) {
+		t.Fatalf("runtime state mutated queue file\nbefore:%s\nafter:%s", before, after)
+	}
+	if state.Queue == nil {
+		t.Fatal("Queue = nil, want summary")
+	}
+	if state.Queue.State != "valid" || state.Queue.TotalItems != 2 {
+		t.Fatalf("queue = %#v, want valid two-item summary", state.Queue)
+	}
+	if state.Queue.CountsByStatus["queued"] != 1 || state.Queue.CountsByStatus["cancelled"] != 1 {
+		t.Fatalf("queue counts = %#v, want queued and cancelled counts", state.Queue.CountsByStatus)
+	}
+	if state.Queue.OldestQueuedItemAge != "2h0m0s" {
+		t.Fatalf("OldestQueuedItemAge = %q, want 2h0m0s", state.Queue.OldestQueuedItemAge)
+	}
+}
+
+func TestNativeRuntimeStateIncludesCorruptedQueueWarning(t *testing.T) {
+	repoRoot := nativeTestRepo(t)
+	writeNativeTestFile(t, repoRoot, ".brevity/provider-health.json", `{}`)
+	writeNativeTestFile(t, repoRoot, ".brevity/tasks.json", `[]`)
+	writeNativeTestFile(t, repoRoot, ".brevity/runtime-queue.json", `{not-json}`)
+
+	state := nativeState(t, repoRoot)
+	if state.Queue == nil || state.Queue.State != "corrupted" {
+		t.Fatalf("queue = %#v, want corrupted summary", state.Queue)
+	}
+	if state.Queue.Error == "" {
+		t.Fatalf("queue error is empty: %#v", state.Queue)
+	}
+	found := false
+	for _, action := range state.SuggestedNextActions {
+		if action == "Inspect .brevity\\runtime-queue.json before relying on queued work visibility." {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("suggested actions missing queue warning: %#v", state.SuggestedNextActions)
+	}
 }
 
 func TestParseGitWorktreePorcelain(t *testing.T) {

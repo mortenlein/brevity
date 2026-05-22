@@ -25,7 +25,8 @@ Runtime queue persistence and inspection are Go-native. `queue add`, `queue
 list`, `queue inspect`, and `queue remove` manage or read
 `.brevity\runtime-queue.json` as inert infrastructure state only; they do not
 execute providers, spawn workers, start the supervisor, or mutate task lifecycle
-state.
+state. The Bubble Tea dashboard now displays queue file health, item/status
+counts, corruption warnings, and oldest queued age as read-only visibility only.
 
 Go-owned `.brevity` writes must go through `internal/state` and the advisory
 `.brevity/state.lock` protocol. Provider execution and worker execution for
@@ -63,7 +64,7 @@ go run ./cmd/brevity support matrix --json
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | Dashboard/watch console | Implemented; default PowerShell source, native source optional | Implemented legacy TUI scaffold | Go for future operator UX | read-only | unit tests | Go dashboard and Bubble Tea | migrated frontend direction | Keep improving native source |
 | Runtime state JSON | Native reader implemented | Implemented legacy producer | Go | read-only | unit and contract tests | native source supported | migrated | Keep compatibility schema additive |
-| Runtime queue persistence and inspection | Native add, list, inspect, remove for `.brevity\runtime-queue.json` | Not PowerShell-owned | Go | inert runtime metadata mutation / read-only diagnostics | unit tests | planned operator surface | migrated foundation | Keep queue execution out of v1 |
+| Runtime queue persistence and inspection | Native add, list, inspect, remove for `.brevity\runtime-queue.json`; Bubble Tea displays read-only queue health | Not PowerShell-owned | Go | inert runtime metadata mutation / read-only diagnostics | unit tests | Bubble Tea read-only visibility | migrated foundation | Keep queue execution out of v1 |
 | Provider health read/write | Native read, set, reset | Implemented legacy compatibility | Go | mutating metadata | unit tests | actions available | migrated | Deprecate PowerShell-first docs |
 | Task metadata/runtime reads | Native task status, detail, runtime-info | Implemented legacy views | Go | read-only | unit tests | native TUI source | migrated | Keep Go as authority |
 | Task new worktree creation | Native implementation | Implemented legacy compatibility | Go | mutating git and metadata | fixture tests | action available | migrated | Keep PowerShell as fallback only |

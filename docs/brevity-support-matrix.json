@@ -41,12 +41,12 @@
   {
     "id": "runtime-queue",
     "capability": "Runtime queue persistence and inspection",
-    "goSupport": "Native add, list, inspect, remove for runtime-queue.json",
+    "goSupport": "Native add, list, inspect, remove for runtime-queue.json; Bubble Tea displays read-only queue health",
     "powerShellSupport": "Not PowerShell-owned",
     "currentAuthority": "Go",
     "safetyClass": "inert runtime metadata / read-only diagnostics",
     "testCoverage": "unit tests",
-    "tuiSupport": "planned operator surface",
+    "tuiSupport": "Bubble Tea read-only visibility",
     "migrationStatus": "foundation migrated",
     "nextAction": "Keep execution/draining out of queue v1",
     "powerShellDisposition": "none"

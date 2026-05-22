@@ -294,6 +294,11 @@ the queue, and `Brevity queue remove <id>` removes one queue item by id. These
 commands do not execute providers, spawn workers, start the supervisor, drain
 the queue, or mutate task lifecycle metadata.
 
+The native Bubble Tea dashboard surfaces this queue as read-only operator
+visibility: file state, item count, status counts, corruption/invalid warnings,
+and oldest queued age when available. It does not add queue controls, repair the
+file, schedule work, or start execution.
+
 The contract, allowed statuses, locking expectations, and safety invariants are
 documented in
 [`docs/runtime-queue-contract.md`](runtime-queue-contract.md).
