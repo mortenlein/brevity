@@ -240,24 +240,32 @@ command-result contracts and remain explicit.
 
 ### Go Runtime Client
 
-The Go CLI under `cmd\brevity` is currently a frontend/runtime client over the
-PowerShell backend. It can render the dashboard and dispatch selected
-PowerShell-backed action runners, but it does not own runtime state and does
-not write `.brevity` metadata directly.
+The Go CLI under `cmd\brevity` is the primary runtime authority for migrated
+capabilities. PowerShell remains legacy/reference/fallback unless a capability
+is explicitly documented as PowerShell-owned.
 
 The Go dashboard and watch mode are the active direction for the future
 operator UX. The PowerShell TUI remains useful as a lightweight reference
-scaffold, and both dashboard paths currently consume PowerShell-produced
-runtime-state style data.
+scaffold. The default Go dashboard still supports PowerShell-produced runtime
+state for compatibility, while `--json-source native` uses Go runtime state
+directly.
 
-The supported Go command surface is intentionally smaller than the PowerShell
-surface. The authoritative command list and implementation status live in the
-[Go frontend support matrix](go-support-matrix.md).
+The authoritative ownership map lives in the
+[Go support matrix](go-support-matrix.md), with machine-readable metadata in
+[`brevity-support-matrix.json`](brevity-support-matrix.json). Operators can
+inspect the same matrix from the CLI:
 
-PowerShell JSON contracts are the source of truth for both read-only runtime
-state and mutating command results. There is no interactive mutation UI yet in
-either the PowerShell TUI or the Go dashboard, and native Go `.brevity` state
-ownership remains a future migration step.
+```powershell
+go run ./cmd/brevity support matrix
+go run ./cmd/brevity support matrix --json
+```
+
+New runtime features should be Go-native unless they are explicitly
+compatibility-only. New PowerShell-first behavior should be treated as authority
+drift and should update the support matrix with a clear reason before it is
+accepted. Mutating Go commands should keep using native preflight, structured
+command-result contracts, argv-style process execution, and the advisory
+`.brevity\state.lock` where `.brevity` state is written.
 
 The v1 snapshot includes these major sections:
 

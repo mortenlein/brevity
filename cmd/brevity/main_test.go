@@ -799,6 +799,26 @@ func TestParseOptionsAcceptsHelp(t *testing.T) {
 	}
 }
 
+func TestParseOptionsAcceptsSupportMatrix(t *testing.T) {
+	options, err := parseOptions([]string{"support", "matrix", "--json"})
+	if err != nil {
+		t.Fatalf("parseOptions returned error: %v", err)
+	}
+	if options.kind != commandSupportMatrix || !options.json {
+		t.Fatalf("options = %#v", options)
+	}
+}
+
+func TestRunSupportMatrixJSON(t *testing.T) {
+	var stdout bytes.Buffer
+	if err := run(&stdout, []string{"support", "matrix", "--json"}); err != nil {
+		t.Fatalf("run returned error: %v", err)
+	}
+	if !strings.Contains(stdout.String(), `"id": "provider-health"`) {
+		t.Fatalf("support matrix JSON missing provider-health: %s", stdout.String())
+	}
+}
+
 func TestRunWritesHelp(t *testing.T) {
 	var stdout bytes.Buffer
 	if err := run(&stdout, []string{"--help"}); err != nil {

@@ -36,9 +36,80 @@ behavior, while cleanup execution remains separate.
 The dashboard UX and interactive action roadmap is documented in
 [`docs/go-dashboard-ux-plan.md`](go-dashboard-ux-plan.md).
 
-This matrix is intentionally conservative. "Mutating" means the command can
-cause PowerShell to change runtime state, worktrees, branches, logs, or provider
-metadata. It does not mean Go writes those files itself.
+This matrix is intentionally conservative. Go is the primary runtime authority
+where a capability is marked migrated. PowerShell remains available as
+legacy/reference/fallback unless the row says the capability is still
+PowerShell-owned. "Mutating" means the command can change runtime state,
+worktrees, branches, logs, or provider metadata.
+
+The machine-readable companion lives at
+[`docs/brevity-support-matrix.json`](brevity-support-matrix.json). The CLI can
+render the same native support data with:
+
+```powershell
+go run ./cmd/brevity support matrix
+go run ./cmd/brevity support matrix --json
+```
+
+## Ownership Matrix
+
+| Capability | Go support | PowerShell support | Current authority | Safety class | Test coverage | TUI support | Migration status | Next action |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| Dashboard/watch console | Implemented; default PowerShell source, native source optional | Implemented legacy TUI scaffold | Go for future operator UX | read-only | unit tests | Go dashboard and Bubble Tea | migrated frontend direction | Keep improving native source |
+| Runtime state JSON | Native reader implemented | Implemented legacy producer | Go | read-only | unit and contract tests | native source supported | migrated | Keep compatibility schema additive |
+| Provider health read/write | Native read, set, reset | Implemented legacy compatibility | Go | mutating metadata | unit tests | actions available | migrated | Deprecate PowerShell-first docs |
+| Task metadata/runtime reads | Native task status, detail, runtime-info | Implemented legacy views | Go | read-only | unit tests | native TUI source | migrated | Keep Go as authority |
+| Task new worktree creation | Native implementation | Implemented legacy compatibility | Go | mutating git and metadata | fixture tests | action available | migrated | Keep PowerShell as fallback only |
+| Task start metadata transition | Native implementation | Legacy manual start helper | Go | mutating metadata | unit tests | action available | migrated | Clarify PowerShell legacy semantics |
+| Task run planning | Native plan envelope | Implemented legacy plan | Go | read-only provider plan | unit tests | action available | migrated | Keep plan contract stable |
+| Task run provider execution | Native argv execution | Implemented legacy execution | Go | provider-executing mutation | fake-provider tests | action available | migrated | Keep no-real-provider test rule |
+| Task context refresh | Native implementation | Implemented legacy compatibility | Go | mutating prompt/context metadata | unit tests | action available | migrated | Keep alias `task context refresh` |
+| Task merge | Native plan and execute | Implemented legacy merge | Go | mutating git and metadata | fixture tests | planned TUI enrichment | migrated | Add merge confirmation UI later |
+| Selected task cleanup | Native plan and explicit force execute | Implemented legacy cleanup | Go | destructive git cleanup | fixture tests | planned TUI enrichment | migrated | Keep cleanup separate from merge |
+| Orphan cleanup | Native inspect, plan, execute | Implemented legacy orphan helpers | Go | destructive cleanup | fixture tests | inspection in TUI | migrated | Prefer native candidate IDs |
+| Doctor diagnostics | Native read-only diagnostics | Implemented with repair paths | Go for read-only doctor; PowerShell for repair | read-only / mutating repair | unit tests | not direct | partially migrated | Migrate repair only if still needed |
+| Run history reads | Native runs and runtime summaries | Implemented legacy reads | Go | read-only | unit tests | native source supported | migrated | Keep JSONL contract stable |
+| Run history maintenance | Native runs inspect and compact | PowerShell task runs reconcile/retention/compact remains | Go for native compact; PowerShell for reconcile/retention | read-only / mutating compact | unit tests | not direct | partially migrated | Migrate reconcile and retention next |
+| Workspace init/repair | Not native | Implemented | PowerShell | mutating skeleton/config | PowerShell manual coverage | none | not migrated | Migrate before PowerShell deprecation |
+| Planner prompt generation/application | Not native | Implemented | PowerShell | mutating prompt/tasks/worktrees depending on flags | PowerShell manual coverage | none | not migrated | Split prompt generation from task creation |
+| Memory notes, logs, session summary | Not native or partial via run reads | Implemented | PowerShell | read-only and memory mutation | PowerShell manual coverage | dashboard reads runtime memory | not migrated | Migrate small read-only views when needed |
+| Provider profiles/profile aliases | Duplicated in task-run planning | Implemented source matrix | Mixed | read-only config | unit tests for Go planning | indirect | partially migrated | Move profile matrix to shared native metadata |
+
+## PowerShell Command Surface
+
+| Command | Class | Go equivalent | PowerShell status | Risk | Recommended disposition |
+| --- | --- | --- | --- | --- | --- |
+| `help` | read-only | `--help` | compatibility | low | keep wrapper |
+| `status` | read-only | partial via `doctor`, `runtime state` | PowerShell-only | low | migrate later |
+| `init [--repair]` | mutating skeleton/config | none | PowerShell-owned | medium | migrate next |
+| `plan`, `plan backlog`, `plan workers` | mutating prompt files / read-only profile docs | partial profile logic in Go | PowerShell-owned | medium | migrate later |
+| `plan apply` | mutating tasks/worktrees, optional provider start | none | PowerShell-owned legacy | high | deprecate or redesign before migrating |
+| `board` | read-only | `task status`, dashboard | legacy view | low | deprecate duplicate |
+| `doctor [--json]` | read-only | `doctor [--json]` | legacy/fallback | low | keep fallback |
+| `doctor --repair` | mutating repair | none | PowerShell-owned | medium | migrate next if repair remains |
+| `doctor execution-policy` | read-only helper | none | PowerShell helper | low | keep permanently as Windows helper |
+| `memory note` | mutating memory log | none | PowerShell-owned | low | migrate later or keep helper |
+| `logs recent`, `logs task` | read-only | partial via run history | PowerShell-owned | low | migrate later |
+| `runtime state [--json]` | read-only | `runtime state --json` | legacy/fallback | low | keep fallback |
+| `tui` | read-only | dashboard/Bubble Tea | reference scaffold | low | deprecate later |
+| `session summary` | read-only | none | PowerShell-owned | low | migrate later |
+| `onboard` | not implemented | none | planned | low | implement in Go when requested |
+| `provider status/set/reset` | read-only/mutating metadata | native equivalent | legacy/fallback | medium | keep wrapper/fallback |
+| `provider docs/profiles` | read-only | partial profile planning | PowerShell-owned reference | low | migrate profile metadata next |
+| `task new` | mutating git/metadata | native equivalent | legacy/fallback | high | keep wrapper now, deprecate later |
+| `task activate` | mutating git/metadata from vault spec | none | PowerShell-owned | high | migrate next if still needed |
+| `task spec` | read-only | none | PowerShell-owned | low | migrate later |
+| `task start` | read-only manual handoff | native metadata transition | legacy divergent behavior | medium | deprecate or rename legacy helper |
+| `task run` | read-only plan or provider-executing mutation | native equivalent | legacy/fallback | high | keep fallback with no new authority |
+| `task status` | read-only | native equivalent | legacy/fallback | low | keep wrapper |
+| `task runtime-info` | read-only | native equivalent | legacy/fallback | low | keep wrapper |
+| `task runs <slug>` | read-only | native equivalent | legacy/fallback | low | keep wrapper |
+| `task runs reconcile/retention/compact` | dry-run read-only or compact mutation | partial native runs compact | mixed legacy | medium | migrate reconcile/retention next |
+| `task context refresh/status` | mutating refresh / read-only status | native refresh, no native status | mixed legacy | medium | keep alias, migrate status |
+| `task merge` | mutating git/metadata | native equivalent | legacy/fallback | high | keep fallback |
+| `task cleanup` | destructive git/metadata | native equivalent | legacy/fallback | high | keep fallback |
+| `task cleanup-orphans` | destructive cleanup | native cleanup execute | duplicate legacy | high | deprecate after operator confidence |
+| `task cleanup-orphan-branches` | destructive cleanup | native cleanup execute | duplicate legacy | high | deprecate after operator confidence |
 
 | Command | Category | Backend | Read-only / Mutating | Status | Notes |
 | --- | --- | --- | --- | --- | --- |

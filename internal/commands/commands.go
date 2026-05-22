@@ -30,6 +30,7 @@ const (
 	CleanupInspectID     ID = "cleanup-inspect"
 	CleanupPlanID        ID = "cleanup-plan"
 	CleanupExecuteID     ID = "cleanup-execute"
+	SupportMatrixID      ID = "support-matrix"
 )
 
 type Command struct {
@@ -168,6 +169,11 @@ var (
 		Words: []string{"cleanup", "execute"},
 		Usage: "brevity cleanup execute <candidate-id>|--all --force [--json]",
 	}
+	SupportMatrix = Command{
+		ID:    SupportMatrixID,
+		Words: []string{"support", "matrix"},
+		Usage: "brevity support matrix [--json]",
+	}
 	TaskMerge = Command{
 		ID:    TaskMergeID,
 		Words: []string{"task", "merge"},
@@ -206,4 +212,5 @@ var UsageCommands = []Command{
 	CleanupExecute,
 	TaskCleanup,
 	TaskMerge,
+	SupportMatrix,
 }

@@ -24,6 +24,7 @@ import (
 	"github.com/mortenlein/brevity/internal/runmaintenance"
 	"github.com/mortenlein/brevity/internal/runtimeclient"
 	"github.com/mortenlein/brevity/internal/state"
+	"github.com/mortenlein/brevity/internal/support"
 )
 
 func main() {
@@ -61,6 +62,7 @@ const (
 	commandCleanupInspect    commandKind = commandKind(commands.CleanupInspectID)
 	commandCleanupPlan       commandKind = commandKind(commands.CleanupPlanID)
 	commandCleanupExecute    commandKind = commandKind(commands.CleanupExecuteID)
+	commandSupportMatrix     commandKind = "support-matrix"
 )
 
 type cliOptions struct {
@@ -129,6 +131,9 @@ func parseOptions(args []string) (cliOptions, error) {
 	if len(args) > 0 && args[0] == "cleanup" {
 		return parseCleanupOptions(args)
 	}
+	if len(args) > 0 && args[0] == "support" {
+		return parseSupportOptions(args)
+	}
 
 	flags := flag.NewFlagSet("brevity", flag.ContinueOnError)
 	flags.SetOutput(io.Discard)
@@ -167,6 +172,20 @@ func parseOptions(args []string) (cliOptions, error) {
 		return cliOptions{}, fmt.Errorf("unexpected argument: %s", flags.Arg(0))
 	}
 
+	return options, nil
+}
+
+func parseSupportOptions(args []string) (cliOptions, error) {
+	if len(args) < 2 || args[1] != "matrix" {
+		return cliOptions{}, fmt.Errorf("usage: brevity support matrix [--json]")
+	}
+	options := cliOptions{kind: commandSupportMatrix}
+	for _, arg := range args[2:] {
+		if arg != "--json" {
+			return cliOptions{}, fmt.Errorf("usage: brevity support matrix [--json]")
+		}
+		options.json = true
+	}
 	return options, nil
 }
 
@@ -697,6 +716,8 @@ func runWithContextOptions(ctx context.Context, stdout io.Writer, client runtime
 		return routeRunsCommand(stdout, options)
 	case commandCleanupInspect, commandCleanupPlan, commandCleanupExecute:
 		return routeCleanupCommand(stdout, options)
+	case commandSupportMatrix:
+		return routeSupportMatrixCommand(stdout, options)
 	default:
 		if options.bubble {
 			if options.refresh <= 0 {
@@ -716,6 +737,13 @@ func runWithContextOptions(ctx context.Context, stdout io.Writer, client runtime
 		}
 		return routeDashboardCommand(stdout, client)
 	}
+}
+
+func routeSupportMatrixCommand(stdout io.Writer, options cliOptions) error {
+	if options.json {
+		return support.WriteJSON(stdout)
+	}
+	return support.WriteHuman(stdout)
 }
 
 func routeTaskPreflightCommand(stdout io.Writer, options cliOptions) error {
