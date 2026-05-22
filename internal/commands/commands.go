@@ -10,6 +10,7 @@ const (
 	ProviderStatusID     ID = "provider-status"
 	ProviderSetID        ID = "provider-set"
 	ProviderResetID      ID = "provider-reset"
+	InitID               ID = "init"
 	TaskContextRefreshID ID = "context-refresh"
 	TaskStatusID         ID = "task-status"
 	DoctorID             ID = "doctor"
@@ -17,6 +18,8 @@ const (
 	TaskMergeID          ID = "task-merge"
 	TaskPreflightID      ID = "task-preflight"
 	TaskNewID            ID = "task-new"
+	TaskActivateID       ID = "task-activate"
+	TaskSpecID           ID = "task-spec"
 	TaskStartID          ID = "task-start"
 	TaskRunID            ID = "task-run"
 	TaskRuntimeInfoID    ID = "task-runtime-info"
@@ -84,6 +87,11 @@ var (
 		Words: []string{"provider", "reset"},
 		Usage: "brevity provider reset <provider>",
 	}
+	Init = Command{
+		ID:    InitID,
+		Words: []string{"init"},
+		Usage: "brevity init [--repair] [--json]",
+	}
 	TaskContextRefresh = Command{
 		ID:    TaskContextRefreshID,
 		Words: []string{"task", "refresh-context"},
@@ -93,6 +101,16 @@ var (
 		ID:    TaskNewID,
 		Words: []string{"task", "new"},
 		Usage: "brevity task new <slug>",
+	}
+	TaskActivate = Command{
+		ID:    TaskActivateID,
+		Words: []string{"task", "activate"},
+		Usage: "brevity task activate <slug> [--json]",
+	}
+	TaskSpec = Command{
+		ID:    TaskSpecID,
+		Words: []string{"task", "spec"},
+		Usage: "brevity task spec <slug> [--json]",
 	}
 	TaskStart = Command{
 		ID:    TaskStartID,
@@ -193,9 +211,12 @@ var UsageCommands = []Command{
 	ProviderStatus,
 	ProviderSet,
 	ProviderReset,
+	Init,
 	TaskContextRefresh,
 	TaskStatus,
 	TaskNew,
+	TaskActivate,
+	TaskSpec,
 	TaskStart,
 	TaskRun,
 	TaskPreflight,

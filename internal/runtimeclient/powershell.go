@@ -25,6 +25,7 @@ type Client interface {
 	TaskRunsReconcileJSON() ([]byte, error)
 	TaskRunsRetentionJSON() ([]byte, error)
 	TaskRunsCompactJSON() ([]byte, error)
+	CleanupInspectJSON() ([]byte, error)
 }
 
 type PowerShellClient struct {
@@ -105,6 +106,10 @@ func (client PowerShellClient) TaskRunsRetentionJSON() ([]byte, error) {
 
 func (client PowerShellClient) TaskRunsCompactJSON() ([]byte, error) {
 	return client.runJSON(jsonDescription(commands.TaskRunsCompact, "--dry-run"), commands.TaskRunsCompact.JSONArgs("--dry-run")...)
+}
+
+func (client PowerShellClient) CleanupInspectJSON() ([]byte, error) {
+	return nil, errors.New("cleanup inspect is native Go only")
 }
 
 func jsonDescription(command commands.Command, extra ...string) string {

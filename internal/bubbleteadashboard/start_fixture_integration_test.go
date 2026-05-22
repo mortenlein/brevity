@@ -143,7 +143,7 @@ func TestRunWorkerDryRunFixtureIntegrationDoesNotExecute(t *testing.T) {
 		t.Fatalf("fixture tasks = %d, want 1", len(state.Tasks))
 	}
 	state.Tasks[0].Provider = "codex"
-	state.Tasks[0].Profile = ""
+	state.Tasks[0].Profile = "codex-balanced"
 	state.Tasks[0].Status = "ready-for-worker"
 	state.Tasks[0].NormalizedState = "ready-for-worker"
 
@@ -157,24 +157,22 @@ func TestRunWorkerDryRunFixtureIntegrationDoesNotExecute(t *testing.T) {
 
 	updated, cmd := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	model = updated.(Model)
-	if cmd != nil {
-		t.Fatal("Run worker fixture should require confirmation before execution")
-	}
-	if model.confirmation == nil {
-		t.Fatal("Run worker fixture did not open confirmation")
-	}
-	updated, cmd = model.Update(tea.KeyMsg{Type: tea.KeyEnter})
-	model = updated.(Model)
 	if cmd == nil {
-		t.Fatal("Run worker fixture confirmation did not execute")
+		t.Fatal("Run worker fixture did not load native plan")
 	}
 	updated, _ = model.Update(cmd())
 	model = updated.(Model)
 	output := plainView(model.View())
-	for _, want := range []string{"Run worker", fixtureStartTaskSlug} {
+	for _, want := range []string{"Run worker", fixtureStartTaskSlug, "Run Worker Execution Plan", "dry-run       yes", "no execution  yes", "native-go"} {
 		if !strings.Contains(output, want) {
 			t.Fatalf("fixture run output missing %q:\n%s", want, output)
 		}
+	}
+	if _, err := os.Stat(filepath.Join(fixture.repoRoot, ".brevity", "runs.jsonl")); !os.IsNotExist(err) {
+		t.Fatalf("Run worker dry-run should not write runs.jsonl: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(fixture.repoRoot, ".brevity", "logs")); !os.IsNotExist(err) {
+		t.Fatalf("Run worker dry-run should not write logs: %v", err)
 	}
 }
 
@@ -211,7 +209,7 @@ func newStartTaskFixture(t *testing.T) startTaskFixture {
 	)
 	writeFile(t, filepath.Join(repoRoot, ".brevity", "provider-health.json"), `{
   "codex": {
-    "status": "unknown",
+    "status": "healthy",
     "updatedAt": "2026-05-21T00:00:00Z",
     "note": "fixture only; no provider or worker is started"
   }
@@ -230,6 +228,10 @@ func newStartTaskFixture(t *testing.T) startTaskFixture {
     "promptPath": "`+jsonPath(promptPath)+`",
     "specPath": "",
     "status": "ready-for-worker",
+    "normalizedState": "ready-for-worker",
+    "provider": "codex",
+    "profile": "codex-balanced",
+    "promptRefreshedAt": "2030-01-01T00:00:00Z",
     "createdAt": "2026-05-21T00:00:00Z"
   }
 ]`)

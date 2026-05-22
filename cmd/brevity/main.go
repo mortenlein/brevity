@@ -42,6 +42,7 @@ const (
 	commandProviderStatus    commandKind = commandKind(commands.ProviderStatusID)
 	commandProviderSet       commandKind = commandKind(commands.ProviderSetID)
 	commandProviderReset     commandKind = commandKind(commands.ProviderResetID)
+	commandInit              commandKind = commandKind(commands.InitID)
 	commandContextRefresh    commandKind = commandKind(commands.TaskContextRefreshID)
 	commandTaskStatus        commandKind = commandKind(commands.TaskStatusID)
 	commandDoctor            commandKind = commandKind(commands.DoctorID)
@@ -49,6 +50,8 @@ const (
 	commandTaskMerge         commandKind = commandKind(commands.TaskMergeID)
 	commandTaskPreflight     commandKind = "task-preflight"
 	commandTaskNew           commandKind = commandKind(commands.TaskNewID)
+	commandTaskActivate      commandKind = commandKind(commands.TaskActivateID)
+	commandTaskSpec          commandKind = commandKind(commands.TaskSpecID)
 	commandTaskStart         commandKind = commandKind(commands.TaskStartID)
 	commandTaskRun           commandKind = commandKind(commands.TaskRunID)
 	commandTaskRuntimeInfo   commandKind = commandKind(commands.TaskRuntimeInfoID)
@@ -86,6 +89,7 @@ type cliOptions struct {
 	smoke           bool
 	json            bool
 	all             bool
+	repair          bool
 	candidateID     string
 	preflightAction preflight.Action
 }
@@ -115,6 +119,9 @@ func parseOptions(args []string) (cliOptions, error) {
 
 	if len(args) > 0 && args[0] == "provider" {
 		return parseProviderOptions(args)
+	}
+	if len(args) > 0 && args[0] == "init" {
+		return parseInitOptions(args)
 	}
 	if len(args) > 0 && args[0] == "doctor" {
 		return parseDoctorOptions(args)
@@ -172,6 +179,21 @@ func parseOptions(args []string) (cliOptions, error) {
 		return cliOptions{}, fmt.Errorf("unexpected argument: %s", flags.Arg(0))
 	}
 
+	return options, nil
+}
+
+func parseInitOptions(args []string) (cliOptions, error) {
+	options := cliOptions{kind: commandInit}
+	for _, arg := range args[1:] {
+		switch arg {
+		case "--repair":
+			options.repair = true
+		case "--json":
+			options.json = true
+		default:
+			return cliOptions{}, usageError(commands.Init)
+		}
+	}
 	return options, nil
 }
 
@@ -367,7 +389,7 @@ func parseProviderOptions(args []string) (cliOptions, error) {
 
 func parseTaskOptions(args []string) (cliOptions, error) {
 	if len(args) < 2 {
-		return cliOptions{}, fmt.Errorf("missing task command: supported commands: status, refresh-context, context refresh, runtime-info, detail, runs, new, start, run, merge, cleanup, preflight")
+		return cliOptions{}, fmt.Errorf("missing task command: supported commands: status, refresh-context, context refresh, runtime-info, detail, runs, new, activate, spec, start, run, merge, cleanup, preflight")
 	}
 	if args[1] == "status" {
 		if len(args) != 2 {
@@ -413,6 +435,12 @@ func parseTaskOptions(args []string) (cliOptions, error) {
 	if args[1] == "new" {
 		return parseTaskNewOptions(args)
 	}
+	if args[1] == "activate" {
+		return parseTaskSlugJSONOptions(args, commandTaskActivate, commands.TaskActivate)
+	}
+	if args[1] == "spec" {
+		return parseTaskSlugJSONOptions(args, commandTaskSpec, commands.TaskSpec)
+	}
 	if args[1] == "start" {
 		return parseTaskStartOptions(args)
 	}
@@ -433,6 +461,20 @@ func parseTaskOptions(args []string) (cliOptions, error) {
 	}
 
 	return cliOptions{}, fmt.Errorf("unsupported task command %q: supported commands: status, refresh-context, context refresh, runtime-info, detail, runs, new, start, run, merge, cleanup, preflight", args[1])
+}
+
+func parseTaskSlugJSONOptions(args []string, kind commandKind, command commands.Command) (cliOptions, error) {
+	if len(args) < 3 || args[2] == "" {
+		return cliOptions{}, usageError(command)
+	}
+	options := cliOptions{kind: kind, slug: args[2]}
+	for _, arg := range args[3:] {
+		if arg != "--json" {
+			return cliOptions{}, usageError(command)
+		}
+		options.json = true
+	}
+	return options, nil
 }
 
 func parseTaskMergeOptions(args []string) (cliOptions, error) {
@@ -700,13 +742,15 @@ func runWithContextOptions(ctx context.Context, stdout io.Writer, client runtime
 		return routeRuntimeStateCommand(stdout)
 	case commandProviderStatus, commandProviderSet, commandProviderReset:
 		return routeProviderCommand(stdout, options)
+	case commandInit:
+		return runInit(stdout, options)
 	case commandTaskStatus:
 		return routeTaskStatusCommand(stdout)
 	case commandContextRefresh:
 		return routeTaskContextCommand(stdout, client, options)
 	case commandDoctor:
 		return routeDoctorCommand(stdout, options)
-	case commandTaskCleanup, commandTaskNew, commandTaskStart, commandTaskRun, commandTaskMerge, commandTaskRuntimeInfo, commandTaskDetail:
+	case commandTaskCleanup, commandTaskNew, commandTaskActivate, commandTaskSpec, commandTaskStart, commandTaskRun, commandTaskMerge, commandTaskRuntimeInfo, commandTaskDetail:
 		return routeTaskCommand(stdout, client, options)
 	case commandTaskPreflight:
 		return routeTaskPreflightCommand(stdout, options)
@@ -1360,6 +1404,10 @@ func routeTaskCommand(stdout io.Writer, client runtimeclient.Client, options cli
 		return runTaskCleanup(stdout, client, options)
 	case commandTaskNew:
 		return runTaskNew(stdout, client, options)
+	case commandTaskActivate:
+		return runTaskActivate(stdout, options)
+	case commandTaskSpec:
+		return runTaskSpec(stdout, options)
 	case commandTaskStart:
 		return runTaskStart(stdout, options)
 	case commandTaskRun:
@@ -1371,6 +1419,32 @@ func routeTaskCommand(stdout io.Writer, client runtimeclient.Client, options cli
 	default:
 		return fmt.Errorf("unsupported task command: %s", options.kind)
 	}
+}
+
+func runInit(stdout io.Writer, options cliOptions) error {
+	store, err := state.NewStore("")
+	if err != nil {
+		return err
+	}
+	result, runErr := actions.InitService{Store: store, Repair: options.repair}.Run()
+	if options.json {
+		output, err := json.Marshal(result)
+		if err != nil {
+			return err
+		}
+		if _, err := stdout.Write(append(output, '\n')); err != nil {
+			return err
+		}
+	} else if renderErr := actions.RenderInitResult(stdout, result); renderErr != nil {
+		return renderErr
+	}
+	if runErr != nil {
+		return runErr
+	}
+	if !result.Success {
+		return fmt.Errorf("%s reported success=false", result.Command)
+	}
+	return nil
 }
 
 func runTaskMerge(stdout io.Writer, options cliOptions) error {
@@ -1535,6 +1609,58 @@ func runTaskNew(stdout io.Writer, client runtimeclient.Client, options cliOption
 			return err
 		}
 	} else if renderErr := actions.RenderTaskNewResult(stdout, result); renderErr != nil {
+		return renderErr
+	}
+	if runErr != nil {
+		return runErr
+	}
+	if !result.Success {
+		return fmt.Errorf("%s reported success=false", result.Command)
+	}
+	return nil
+}
+
+func runTaskActivate(stdout io.Writer, options cliOptions) error {
+	store, err := state.NewStore("")
+	if err != nil {
+		return err
+	}
+	result, runErr := actions.TaskActivateService{Store: store}.Activate(options.slug)
+	if options.json {
+		output, err := json.Marshal(result)
+		if err != nil {
+			return err
+		}
+		if _, err := stdout.Write(append(output, '\n')); err != nil {
+			return err
+		}
+	} else if renderErr := actions.RenderTaskActivateResult(stdout, result); renderErr != nil {
+		return renderErr
+	}
+	if runErr != nil {
+		return runErr
+	}
+	if !result.Success {
+		return fmt.Errorf("%s reported success=false", result.Command)
+	}
+	return nil
+}
+
+func runTaskSpec(stdout io.Writer, options cliOptions) error {
+	store, err := state.NewStore("")
+	if err != nil {
+		return err
+	}
+	result, runErr := actions.TaskSpecService{Store: store}.Show(options.slug)
+	if options.json {
+		output, err := json.Marshal(result)
+		if err != nil {
+			return err
+		}
+		if _, err := stdout.Write(append(output, '\n')); err != nil {
+			return err
+		}
+	} else if renderErr := actions.RenderTaskSpecResult(stdout, result); renderErr != nil {
 		return renderErr
 	}
 	if runErr != nil {

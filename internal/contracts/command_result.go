@@ -27,6 +27,31 @@ type ResultMessage struct {
 	Text    string         `json:"-"`
 }
 
+type InitPayload struct {
+	ProjectName         string        `json:"projectName,omitempty"`
+	RepoRoot            string        `json:"repoRoot,omitempty"`
+	DevRoot             string        `json:"devRoot,omitempty"`
+	VaultPath           string        `json:"vaultPath,omitempty"`
+	WorktreesRoot       string        `json:"worktreesRoot,omitempty"`
+	Repair              bool          `json:"repair"`
+	Items               []InitItem    `json:"items,omitempty"`
+	RepairFields        []RepairField `json:"repairFields,omitempty"`
+	NoProviderExecution bool          `json:"noProviderExecution,omitempty"`
+	NoWorkerExecution   bool          `json:"noWorkerExecution,omitempty"`
+}
+
+type InitItem struct {
+	Status string `json:"status"`
+	Path   string `json:"path"`
+}
+
+type RepairField struct {
+	Status   string `json:"status"`
+	Name     string `json:"name"`
+	OldValue any    `json:"oldValue,omitempty"`
+	NewValue any    `json:"newValue,omitempty"`
+}
+
 func (message *ResultMessage) UnmarshalJSON(input []byte) error {
 	var text string
 	if err := json.Unmarshal(input, &text); err == nil {
@@ -187,6 +212,33 @@ type TaskNewPayload struct {
 	SpecPath            string `json:"specPath,omitempty"`
 	MetadataPath        string `json:"metadataPath"`
 	CreatedAt           string `json:"createdAt,omitempty"`
+	NoProviderExecution bool   `json:"noProviderExecution,omitempty"`
+	NoWorkerExecution   bool   `json:"noWorkerExecution,omitempty"`
+}
+
+type TaskActivatePayload struct {
+	Slug                string `json:"slug"`
+	Branch              string `json:"branch"`
+	WorktreePath        string `json:"worktreePath"`
+	PromptPath          string `json:"promptPath"`
+	SpecPath            string `json:"specPath"`
+	ContextPath         string `json:"contextPath,omitempty"`
+	MetadataPath        string `json:"metadataPath"`
+	CreatedAt           string `json:"createdAt,omitempty"`
+	NoProviderExecution bool   `json:"noProviderExecution,omitempty"`
+	NoWorkerExecution   bool   `json:"noWorkerExecution,omitempty"`
+}
+
+type TaskSpecPayload struct {
+	Slug                string `json:"slug"`
+	SpecPath            string `json:"specPath"`
+	SpecExists          bool   `json:"specExists"`
+	PromptPath          string `json:"promptPath,omitempty"`
+	PromptExists        bool   `json:"promptExists,omitempty"`
+	WorktreePath        string `json:"worktreePath,omitempty"`
+	TaskExists          bool   `json:"taskExists"`
+	Content             string `json:"content,omitempty"`
+	NoMutation          bool   `json:"noMutation"`
 	NoProviderExecution bool   `json:"noProviderExecution,omitempty"`
 	NoWorkerExecution   bool   `json:"noWorkerExecution,omitempty"`
 }
@@ -469,6 +521,17 @@ func ParseProviderActionPayload(result CommandResult) (ProviderActionPayload, er
 	return payload, nil
 }
 
+func ParseInitPayload(result CommandResult) (InitPayload, error) {
+	if len(result.Payload) == 0 {
+		return InitPayload{}, errors.New("init result missing payload")
+	}
+	var payload InitPayload
+	if err := json.Unmarshal(result.Payload, &payload); err != nil {
+		return InitPayload{}, fmt.Errorf("invalid init payload: %w", err)
+	}
+	return payload, nil
+}
+
 func ParseTaskContextRefreshPayload(result CommandResult) (TaskContextRefreshPayload, error) {
 	if len(result.Payload) == 0 {
 		return TaskContextRefreshPayload{}, errors.New("task context refresh result missing payload")
@@ -505,6 +568,28 @@ func ParseTaskNewPayload(result CommandResult) (TaskNewPayload, error) {
 		return TaskNewPayload{}, fmt.Errorf("invalid task new payload: %w", err)
 	}
 
+	return payload, nil
+}
+
+func ParseTaskActivatePayload(result CommandResult) (TaskActivatePayload, error) {
+	if len(result.Payload) == 0 {
+		return TaskActivatePayload{}, errors.New("task activate result missing payload")
+	}
+	var payload TaskActivatePayload
+	if err := json.Unmarshal(result.Payload, &payload); err != nil {
+		return TaskActivatePayload{}, fmt.Errorf("invalid task activate payload: %w", err)
+	}
+	return payload, nil
+}
+
+func ParseTaskSpecPayload(result CommandResult) (TaskSpecPayload, error) {
+	if len(result.Payload) == 0 {
+		return TaskSpecPayload{}, errors.New("task spec result missing payload")
+	}
+	var payload TaskSpecPayload
+	if err := json.Unmarshal(result.Payload, &payload); err != nil {
+		return TaskSpecPayload{}, fmt.Errorf("invalid task spec payload: %w", err)
+	}
 	return payload, nil
 }
 

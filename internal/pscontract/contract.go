@@ -16,6 +16,7 @@ const (
 	ActionProviderStatus ActionID = "provider-status"
 	ActionTaskStatus     ActionID = "task-status"
 	ActionStartTask      ActionID = "start-task"
+	ActionRefreshContext ActionID = "refresh-context"
 	ActionRunWorker      ActionID = "run-worker"
 	ActionMergeTask      ActionID = "merge-task"
 	ActionCleanupTask    ActionID = "cleanup-task"
@@ -118,6 +119,20 @@ func DashboardDescriptors() []CommandDescriptor {
 			TimeoutCategory:      TimeoutNormal,
 			SafetyWarning:        "PowerShell remains authoritative for task state changes.",
 			DisabledReason:       "not enabled yet; select a task row to enable Start task",
+			RefreshAfterSuccess:  true,
+		},
+		{
+			ActionID:             ActionRefreshContext,
+			Label:                "Refresh context",
+			Command:              commands.TaskContextRefresh,
+			ExecutionKind:        ExecutionKindStateMutation,
+			Mutating:             true,
+			RequiresConfirmation: true,
+			Enabled:              false,
+			ResultMode:           ResultModeJSON,
+			TimeoutCategory:      TimeoutNormal,
+			SafetyWarning:        "Go native context refresh rewrites prompt.md and bounded local context only; no provider or worker execution.",
+			DisabledReason:       "not enabled yet; select a task row to enable Refresh context",
 			RefreshAfterSuccess:  true,
 		},
 		{

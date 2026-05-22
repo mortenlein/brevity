@@ -235,7 +235,12 @@ func (client NativeClient) TaskCleanupJSON(slug string) ([]byte, error) {
 	return nil, nativeUnsupported("task cleanup")
 }
 func (client NativeClient) TaskNewJSON(slug string) ([]byte, error) {
-	return nil, nativeUnsupported("task new")
+	store, err := state.NewStore(client.RepoRoot)
+	if err != nil {
+		return nil, err
+	}
+	result, _ := actions.TaskNewService{Store: store, Now: client.Now}.Create(slug)
+	return json.Marshal(result)
 }
 func (client NativeClient) TaskRunJSON(slug string, profile string, smoke bool) ([]byte, error) {
 	store, err := state.NewStore(client.RepoRoot)

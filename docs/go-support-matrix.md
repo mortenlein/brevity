@@ -70,7 +70,8 @@ go run ./cmd/brevity support matrix --json
 | Doctor diagnostics | Native read-only diagnostics | Implemented with repair paths | Go for read-only doctor; PowerShell for repair | read-only / mutating repair | unit tests | not direct | partially migrated | Migrate repair only if still needed |
 | Run history reads | Native runs and runtime summaries | Implemented legacy reads | Go | read-only | unit tests | native source supported | migrated | Keep JSONL contract stable |
 | Run history maintenance | Native runs inspect and compact | PowerShell task runs reconcile/retention/compact remains | Go for native compact; PowerShell for reconcile/retention | read-only / mutating compact | unit tests | not direct | partially migrated | Migrate reconcile and retention next |
-| Workspace init/repair | Not native | Implemented | PowerShell | mutating skeleton/config | PowerShell manual coverage | none | not migrated | Migrate before PowerShell deprecation |
+| Workspace init/repair | Native init and repair | Implemented legacy compatibility | Go | mutating skeleton/config | unit and fixture tests | none | migrated | Keep PowerShell as reference/fallback |
+| Task activate/spec | Native activate and read-only spec | Implemented legacy compatibility | Go | mutating git/metadata for activate; read-only for spec | fixture tests | none | migrated | Keep no-provider execution boundary |
 | Planner prompt generation/application | Not native | Implemented | PowerShell | mutating prompt/tasks/worktrees depending on flags | PowerShell manual coverage | none | not migrated | Split prompt generation from task creation |
 | Memory notes, logs, session summary | Not native or partial via run reads | Implemented | PowerShell | read-only and memory mutation | PowerShell manual coverage | dashboard reads runtime memory | not migrated | Migrate small read-only views when needed |
 | Provider profiles/profile aliases | Duplicated in task-run planning | Implemented source matrix | Mixed | read-only config | unit tests for Go planning | indirect | partially migrated | Move profile matrix to shared native metadata |
@@ -81,7 +82,7 @@ go run ./cmd/brevity support matrix --json
 | --- | --- | --- | --- | --- | --- |
 | `help` | read-only | `--help` | compatibility | low | keep wrapper |
 | `status` | read-only | partial via `doctor`, `runtime state` | PowerShell-only | low | migrate later |
-| `init [--repair]` | mutating skeleton/config | none | PowerShell-owned | medium | migrate next |
+| `init [--repair]` | mutating skeleton/config | `go run ./cmd/brevity init [--repair]` | Go-owned | medium | keep PowerShell as reference |
 | `plan`, `plan backlog`, `plan workers` | mutating prompt files / read-only profile docs | partial profile logic in Go | PowerShell-owned | medium | migrate later |
 | `plan apply` | mutating tasks/worktrees, optional provider start | none | PowerShell-owned legacy | high | deprecate or redesign before migrating |
 | `board` | read-only | `task status`, dashboard | legacy view | low | deprecate duplicate |
@@ -97,8 +98,8 @@ go run ./cmd/brevity support matrix --json
 | `provider status/set/reset` | read-only/mutating metadata | native equivalent | legacy/fallback | medium | keep wrapper/fallback |
 | `provider docs/profiles` | read-only | partial profile planning | PowerShell-owned reference | low | migrate profile metadata next |
 | `task new` | mutating git/metadata | native equivalent | legacy/fallback | high | keep wrapper now, deprecate later |
-| `task activate` | mutating git/metadata from vault spec | none | PowerShell-owned | high | migrate next if still needed |
-| `task spec` | read-only | none | PowerShell-owned | low | migrate later |
+| `task activate` | mutating git/metadata from vault spec | `go run ./cmd/brevity task activate <slug>` | Go-owned | high | keep PowerShell as reference |
+| `task spec` | read-only | `go run ./cmd/brevity task spec <slug>` | Go-owned | low | keep PowerShell as reference |
 | `task start` | read-only manual handoff | native metadata transition | legacy divergent behavior | medium | deprecate or rename legacy helper |
 | `task run` | read-only plan or provider-executing mutation | native equivalent | legacy/fallback | high | keep fallback with no new authority |
 | `task status` | read-only | native equivalent | legacy/fallback | low | keep wrapper |
@@ -123,10 +124,13 @@ go run ./cmd/brevity support matrix --json
 | `go run ./cmd/brevity provider status` | Native state inspection | Go `.brevity/provider-health.json` reader | Read-only | Implemented | Reads provider health through `internal/state`; no PowerShell call. |
 | `go run ./cmd/brevity provider set <provider> <status> [--note <note>]` | Native state action | Go state store + `.brevity/state.lock` | Mutating | Implemented | Updates provider health without PowerShell or provider execution. |
 | `go run ./cmd/brevity provider reset <provider>` | Native state action | Go state store + `.brevity/state.lock` | Mutating | Implemented | Resets provider health to `unknown` without PowerShell or provider execution. |
+| `go run ./cmd/brevity init [--repair] [--json]` | Native setup action | Go state store + `.brevity/state.lock` | Mutating | Implemented | Creates or repairs `.brevity`, config, provider health, task metadata, vault folders, and default memory files without PowerShell, providers, or workers. |
 | `go run ./cmd/brevity task status` | Native state inspection | Go `.brevity/tasks.json` reader | Read-only | Implemented | Lists tracked task metadata through `internal/state`; no PowerShell call and no task mutation. |
 | `go run ./cmd/brevity task preflight <new|start|run|merge|cleanup> <slug> [--json]` | Native mutation safety gate | Go state readers + read-only cleanup/provider checks | Read-only | Implemented | Emits human or stable `brevity.task-preflight.v1` JSON with status, checks, blockers, warnings, expected mutations, destructive/provider-execution flags, and suggested next action. |
 | `go run ./cmd/brevity task start <slug> [--json]` | Native state action | Go preflight + state store + `.brevity/state.lock` | Mutating | Implemented | Transitions allowed task states to `ready-for-worker`, updates `updatedAt` and `startedAt` when absent, preserves unrelated and unknown task fields, emits `brevity.command-result.v1`, and launches no provider/worker. |
 | `go run ./cmd/brevity task new <slug> [--json]` | Native state action | Go preflight + Git worktree + state store + `.brevity/state.lock` | Mutating | Implemented | Creates the branch/worktree required by current semantics, materializes prompt/context from the optional vault spec, appends task metadata, emits `brevity.command-result.v1`, and launches no provider/worker. |
+| `go run ./cmd/brevity task activate <slug> [--json]` | Native state action | Go Git worktree + state store + `.brevity/state.lock` | Mutating | Implemented | Requires a vault task spec, creates the task branch/worktree, materializes prompt/context, appends metadata, and launches no provider/worker. |
+| `go run ./cmd/brevity task spec <slug> [--json]` | Native inspection | Go config + vault task spec reader | Read-only | Implemented | Prints or returns the vault task spec and related task prompt/worktree metadata without mutation. |
 | `go run ./cmd/brevity task merge <slug> --plan [--json]` | Native merge planning | Go state reader + read-only Git inspector | Read-only | Implemented | Builds a `brevity.task-merge-plan.v1` payload with source/target branches, worktree dirty state, expected argv git commands, state mutation, blockers, warnings, and cleanup-required signal. It does not mutate Git or task metadata. |
 | `go run ./cmd/brevity task merge <slug> [--json]` | Native merge execution | Go merge plan + argv `git` + state store + `.brevity/state.lock` | Mutating | Implemented | Refuses blocked plans, checks out the target branch, runs `git merge <sourceBranch>` without shell concatenation, marks task metadata `merged` only on success, and never deletes branches/worktrees or runs cleanup. Tests use disposable Git fixtures. |
 | `go run ./cmd/brevity task cleanup <slug> --plan [--json]` | Native cleanup planning | Go state reader + read-only Git inspector | Read-only | Implemented | Emits `brevity.task-cleanup-plan.v1` with worktree/branch facts, dirty and merge-state checks, expected argv Git commands, force requirement, blockers, and warnings. |
@@ -158,11 +162,12 @@ go run ./cmd/brevity support matrix --json
 
 ## Documentation Notes
 
-- Go owns provider health read/write, `.brevity/tasks.json` reading and locked
+- Go owns init/repair, provider health read/write, `.brevity/tasks.json` reading and locked
   task-new, task-start, and prompt/context refresh writes,
   `.brevity/runs.jsonl` run-history reading, native runtime-state building,
   native task status, task runtime/detail inspection, doctor diagnostics,
   cleanup/orphan inspection reports, orphan cleanup planning/execution,
+  task activation, task spec inspection,
   task mutation preflight gates,
   `task run --plan` execution envelopes, native task merge
   planning/execution, and the Bubble Tea native source.

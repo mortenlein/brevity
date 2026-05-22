@@ -370,7 +370,7 @@ func (model Model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				return model, nil
 			}
 			model.paletteOpen = false
-			if action.ID == ActionProviderStatus || action.ID == ActionTaskStatus {
+			if action.ID == ActionProviderStatus || action.ID == ActionTaskStatus || action.ID == ActionRunWorker {
 				model.startCommandRun(action)
 			}
 			return model, cmd
@@ -1366,7 +1366,7 @@ func (model Model) confirmationForAction(action ActionDescriptor) (pscontract.Co
 			return pscontract.ConfirmationState{}, false
 		}
 		confirmation.Prompt = fmt.Sprintf(
-			"Run worker for %s executes the native task-run provider command. Review provider/profile and logs after completion.",
+			"Run worker for %s loads the native task-run plan only. No provider or worker is launched.",
 			task.Slug,
 		)
 	}
@@ -1388,7 +1388,7 @@ func (model Model) renderConfirmation(usedRows ...int) string {
 		} else if model.confirmAction.ID == ActionRunWorker {
 			args := []string{"brevity", "task", "run"}
 			if task, ok := model.selectedRunnableTask(); ok {
-				args = append(args, task.Slug, "--execute")
+				args = append(args, task.Slug, "--plan")
 				if profile := taskProfile(task); profile != "" {
 					args = append(args, "--profile", profile)
 				}
@@ -1406,7 +1406,7 @@ func (model Model) renderConfirmation(usedRows ...int) string {
 		authority = "native Go task start service"
 	}
 	if model.confirmAction != nil && model.confirmAction.ID == ActionRunWorker {
-		authority = "native Go task-run execution service"
+		authority = "native Go task-run planning service"
 	}
 	lines := []string{
 		"  action        " + actionLabel,

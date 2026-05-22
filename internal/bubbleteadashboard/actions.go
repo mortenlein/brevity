@@ -270,15 +270,15 @@ func (model Model) actionDescriptors() []ActionDescriptor {
 		case ActionRunWorker:
 			if runnable {
 				actions[index].Enabled = true
-				actions[index].Kind = ActionKindMutating
-				actions[index].Description = "native provider execution for " + runTask.Slug
-				actions[index].ConfirmationRequired = true
-				actions[index].Command.Arguments = []string{"--execute"}
+				actions[index].Kind = ActionKindDryRun
+				actions[index].Description = "native execution envelope for " + runTask.Slug
+				actions[index].ConfirmationRequired = false
+				actions[index].Command.Arguments = []string{"--plan"}
 				actions[index].Command.Provider = taskProvider(runTask)
 				actions[index].Command.Profile = taskProfile(runTask)
 				actions[index].Command.Enabled = true
 				actions[index].Command.DisabledReason = ""
-				actions[index].Command.SafetyWarning = "Native Go will execute the provider command shown by the task-run plan."
+				actions[index].Command.SafetyWarning = "Native Go builds a task-run plan only; no provider or worker execution occurs."
 			} else {
 				actions[index].Enabled = false
 				actions[index].Description = "plan preview only; select a runnable task row"
@@ -328,7 +328,7 @@ func (model Model) commandForAction(action ActionDescriptor) tea.Cmd {
 		if !ok {
 			return nil
 		}
-		return model.executeTaskRunCmd(task.Slug, taskProfile(task))
+		return model.loadTaskRunPlanCmd(task.Slug, taskProfile(task))
 	default:
 		return nil
 	}

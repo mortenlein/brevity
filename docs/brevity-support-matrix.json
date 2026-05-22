@@ -197,15 +197,28 @@
   {
     "id": "init-repair",
     "capability": "Workspace init/repair",
-    "goSupport": "Not native",
-    "powerShellSupport": "Implemented",
-    "currentAuthority": "PowerShell",
+    "goSupport": "Native init and repair",
+    "powerShellSupport": "Implemented legacy compatibility",
+    "currentAuthority": "Go",
     "safetyClass": "mutating skeleton/config",
-    "testCoverage": "PowerShell manual coverage",
+    "testCoverage": "unit and fixture tests",
     "tuiSupport": "none",
-    "migrationStatus": "not migrated",
-    "nextAction": "Migrate before PowerShell deprecation",
-    "powerShellDisposition": "migrate next"
+    "migrationStatus": "migrated",
+    "nextAction": "Keep PowerShell as reference/fallback",
+    "powerShellDisposition": "keep reference"
+  },
+  {
+    "id": "task-activate-spec",
+    "capability": "Task activate/spec",
+    "goSupport": "Native activate and read-only spec",
+    "powerShellSupport": "Implemented legacy compatibility",
+    "currentAuthority": "Go",
+    "safetyClass": "mutating git/metadata for activate; read-only for spec",
+    "testCoverage": "fixture tests",
+    "tuiSupport": "none",
+    "migrationStatus": "migrated",
+    "nextAction": "Keep no-provider execution boundary",
+    "powerShellDisposition": "keep reference"
   },
   {
     "id": "planner-prompts",

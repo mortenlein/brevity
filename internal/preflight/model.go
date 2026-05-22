@@ -93,14 +93,14 @@ func (result *Result) recompute() {
 	case StatusBlocked:
 		result.SuggestedNextAction = "Resolve blockers, then rerun preflight."
 	case StatusWarn:
-		if result.Action == ActionTaskStart {
+		if result.Action == ActionTaskStart || result.Action == ActionTaskNew {
 			result.SuggestedNextAction = "Review warnings before executing the native Go mutation."
 		} else {
 			result.SuggestedNextAction = "Review warnings before executing the PowerShell-owned mutation."
 		}
 	default:
-		if result.Action == ActionTaskStart {
-			result.SuggestedNextAction = "Mutation may proceed through native Go task start."
+		if result.Action == ActionTaskStart || result.Action == ActionTaskNew {
+			result.SuggestedNextAction = "Mutation may proceed through native Go."
 		} else {
 			result.SuggestedNextAction = "Mutation may proceed through the current PowerShell authority path."
 		}

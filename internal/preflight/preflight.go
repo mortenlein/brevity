@@ -54,6 +54,16 @@ func Run(options Options) (Result, error) {
 		return finish(result), nil
 	}
 	if missingTasks {
+		if options.Action == ActionTaskNew {
+			result.AddCheck("tasks-json", StatusAllowed, SeverityInfo, ".brevity/tasks.json is missing; native task new will create it")
+			if !slugPattern.MatchString(strings.TrimSpace(options.Slug)) {
+				result.AddCheck("slug-valid", StatusBlocked, SeverityError, "slug must contain only letters, numbers, dot, underscore, or dash and start with a letter or number")
+				return finish(result), nil
+			}
+			result.AddCheck("slug-valid", StatusAllowed, SeverityInfo, "slug syntax is valid")
+			result.AddCheck("task-absence", StatusAllowed, SeverityInfo, "task does not already exist")
+			return finish(result), nil
+		}
 		result.AddCheck("tasks-json", StatusBlocked, SeverityError, ".brevity/tasks.json is missing")
 		return finish(result), nil
 	}

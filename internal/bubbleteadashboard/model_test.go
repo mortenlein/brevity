@@ -69,6 +69,10 @@ type fakeCommandBridge struct {
 	planSlug     string
 	planProfile  string
 	planRepo     string
+	runCalls     int
+	runSlug      string
+	runProfile   string
+	runRepo      string
 }
 
 func (bridge *fakeCommandBridge) RefreshRuntimeState() (contracts.RuntimeState, error) {
@@ -141,10 +145,10 @@ func (bridge *fakeCommandBridge) LoadTaskRunPlan(slug string, profile string, re
 }
 
 func (bridge *fakeCommandBridge) ExecuteTaskRun(slug string, profile string, repoRoot string) pscontract.ExecutionResult {
-	bridge.planCalls++
-	bridge.planSlug = slug
-	bridge.planProfile = profile
-	bridge.planRepo = repoRoot
+	bridge.runCalls++
+	bridge.runSlug = slug
+	bridge.runProfile = profile
+	bridge.runRepo = repoRoot
 	if bridge.result.CommandDisplayLabel == "" {
 		bridge.result.CommandDisplayLabel = "Run worker"
 	}
@@ -643,10 +647,10 @@ func TestSelectedRunnableTaskOnlyComesFromRunnableTaskRows(t *testing.T) {
 	}
 }
 
-func TestRunWorkerConfirmationExecutesNative(t *testing.T) {
+func TestRunWorkerLoadsNativePlanWithoutExecution(t *testing.T) {
 	bridge := &fakeCommandBridge{result: pscontract.ExecutionResult{
 		ExitCode: 0,
-		Stdout:   `{"schema":"brevity.command-result.v1","command":"task run","success":true,"severity":"info","payload":{"slug":"task-one","provider":"codex","profile":"large","worktreePath":"C:\\repo\\worktrees\\active\\brevity-task-one","promptPath":"C:\\repo\\.brevity\\tasks\\task-one\\prompt.md","workerCommand":{"provider":"codex","command":"codex","arguments":["run"],"display":"codex run <prompt>","workingDirectory":"C:\\repo\\worktrees\\active\\brevity-task-one"},"approvalMode":"future-confirmation-required","executionKind":"worker-provider","providerExecutionWouldOccur":true,"isolatedWorktreeRequired":true,"dryRunOnly":true,"noExecutionOccurred":true,"authority":"PowerShell-owned execution plan; Go renders only.","safetyNotes":["No worker/provider process was launched."]}}`,
+		Stdout:   `{"schema":"brevity.command-result.v1","command":"task run","success":true,"severity":"info","payload":{"schema":"brevity.task-run-plan.v1","slug":"task-one","provider":"codex","profile":"large","worktreePath":"C:\\repo\\worktrees\\active\\brevity-task-one","promptPath":"C:\\repo\\.brevity\\tasks\\task-one\\prompt.md","workerCommand":{"provider":"codex","command":"codex","arguments":["exec","-C","C:\\repo\\worktrees\\active\\brevity-task-one","C:\\repo\\.brevity\\tasks\\task-one\\prompt.md"],"display":"codex exec <prompt>","workingDirectory":"C:\\repo\\worktrees\\active\\brevity-task-one"},"approvalMode":"future-confirmation-required","executionKind":"worker-provider","providerExecutionWouldOccur":true,"isolatedWorktreeRequired":true,"dryRunOnly":true,"noExecutionOccurred":true,"authority":"native-go","safetyNotes":["No worker/provider process was launched."]}}`,
 	}}
 	model := NewModelWithSource(&fakeClient{}, time.Second, "native")
 	model.commandBridge = bridge
@@ -661,16 +665,8 @@ func TestRunWorkerConfirmationExecutesNative(t *testing.T) {
 
 	updated, cmd := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	model = updated.(Model)
-	if cmd != nil {
-		t.Fatal("Run worker should wait for confirmation")
-	}
-	if model.confirmation == nil {
-		t.Fatal("Run worker did not open confirmation")
-	}
-	updated, cmd = model.Update(tea.KeyMsg{Type: tea.KeyEnter})
-	model = updated.(Model)
 	if cmd == nil {
-		t.Fatal("Run worker confirmation did not execute")
+		t.Fatal("Run worker did not load native plan")
 	}
 	if model.commandRun == nil || model.commandRun.status != commandRunning {
 		t.Fatalf("Run worker status = %#v, want running", model.commandRun)
@@ -680,6 +676,8 @@ func TestRunWorkerConfirmationExecutesNative(t *testing.T) {
 	output := plainView(model.View())
 	for _, want := range []string{
 		"Run worker",
+		"dry-run       yes",
+		"no execution  yes",
 	} {
 		if !strings.Contains(output, want) {
 			t.Fatalf("Run worker preview missing %q:\n%s", want, output)
@@ -689,8 +687,8 @@ func TestRunWorkerConfirmationExecutesNative(t *testing.T) {
 
 	updated, cmd = model.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	model = updated.(Model)
-	if cmd != nil || bridge.executeCalls != 0 || bridge.mutateCalls != 0 || bridge.planCalls != 1 {
-		t.Fatalf("enter in plan result executed unexpected command: cmd=%v execute=%d mutate=%d plan=%d", cmd, bridge.executeCalls, bridge.mutateCalls, bridge.planCalls)
+	if cmd != nil || bridge.executeCalls != 0 || bridge.mutateCalls != 0 || bridge.planCalls != 1 || bridge.runCalls != 0 {
+		t.Fatalf("enter in plan result executed unexpected command: cmd=%v execute=%d mutate=%d plan=%d run=%d", cmd, bridge.executeCalls, bridge.mutateCalls, bridge.planCalls, bridge.runCalls)
 	}
 }
 
