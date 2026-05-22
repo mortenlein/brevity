@@ -21,6 +21,7 @@ import (
 	"github.com/mortenlein/brevity/internal/dashboard"
 	"github.com/mortenlein/brevity/internal/diagnostics"
 	"github.com/mortenlein/brevity/internal/preflight"
+	"github.com/mortenlein/brevity/internal/runmaintenance"
 	"github.com/mortenlein/brevity/internal/runtimeclient"
 	"github.com/mortenlein/brevity/internal/state"
 )
@@ -35,29 +36,31 @@ func main() {
 type commandKind string
 
 const (
-	commandDashboard       commandKind = commandKind(commands.DashboardID)
-	commandRuntimeState    commandKind = commandKind(commands.RuntimeStateID)
-	commandProviderStatus  commandKind = commandKind(commands.ProviderStatusID)
-	commandProviderSet     commandKind = commandKind(commands.ProviderSetID)
-	commandProviderReset   commandKind = commandKind(commands.ProviderResetID)
-	commandContextRefresh  commandKind = commandKind(commands.TaskContextRefreshID)
-	commandTaskStatus      commandKind = commandKind(commands.TaskStatusID)
-	commandDoctor          commandKind = commandKind(commands.DoctorID)
-	commandTaskCleanup     commandKind = commandKind(commands.TaskCleanupID)
-	commandTaskMerge       commandKind = commandKind(commands.TaskMergeID)
-	commandTaskPreflight   commandKind = "task-preflight"
-	commandTaskNew         commandKind = commandKind(commands.TaskNewID)
-	commandTaskStart       commandKind = commandKind(commands.TaskStartID)
-	commandTaskRun         commandKind = commandKind(commands.TaskRunID)
-	commandTaskRuntimeInfo commandKind = commandKind(commands.TaskRuntimeInfoID)
-	commandTaskDetail      commandKind = commandKind(commands.TaskDetailID)
-	commandTaskRuns        commandKind = commandKind(commands.TaskRunsID)
-	commandRunsReconcile   commandKind = commandKind(commands.TaskRunsReconcileID)
-	commandRunsRetention   commandKind = commandKind(commands.TaskRunsRetentionID)
-	commandRunsCompact     commandKind = commandKind(commands.TaskRunsCompactID)
-	commandCleanupInspect  commandKind = commandKind(commands.CleanupInspectID)
-	commandCleanupPlan     commandKind = commandKind(commands.CleanupPlanID)
-	commandCleanupExecute  commandKind = commandKind(commands.CleanupExecuteID)
+	commandDashboard         commandKind = commandKind(commands.DashboardID)
+	commandRuntimeState      commandKind = commandKind(commands.RuntimeStateID)
+	commandProviderStatus    commandKind = commandKind(commands.ProviderStatusID)
+	commandProviderSet       commandKind = commandKind(commands.ProviderSetID)
+	commandProviderReset     commandKind = commandKind(commands.ProviderResetID)
+	commandContextRefresh    commandKind = commandKind(commands.TaskContextRefreshID)
+	commandTaskStatus        commandKind = commandKind(commands.TaskStatusID)
+	commandDoctor            commandKind = commandKind(commands.DoctorID)
+	commandTaskCleanup       commandKind = commandKind(commands.TaskCleanupID)
+	commandTaskMerge         commandKind = commandKind(commands.TaskMergeID)
+	commandTaskPreflight     commandKind = "task-preflight"
+	commandTaskNew           commandKind = commandKind(commands.TaskNewID)
+	commandTaskStart         commandKind = commandKind(commands.TaskStartID)
+	commandTaskRun           commandKind = commandKind(commands.TaskRunID)
+	commandTaskRuntimeInfo   commandKind = commandKind(commands.TaskRuntimeInfoID)
+	commandTaskDetail        commandKind = commandKind(commands.TaskDetailID)
+	commandTaskRuns          commandKind = commandKind(commands.TaskRunsID)
+	commandRunsReconcile     commandKind = commandKind(commands.TaskRunsReconcileID)
+	commandRunsRetention     commandKind = commandKind(commands.TaskRunsRetentionID)
+	commandRunsCompact       commandKind = commandKind(commands.TaskRunsCompactID)
+	commandRunsInspect       commandKind = "runs-inspect"
+	commandRunsNativeCompact commandKind = "runs-compact"
+	commandCleanupInspect    commandKind = commandKind(commands.CleanupInspectID)
+	commandCleanupPlan       commandKind = commandKind(commands.CleanupPlanID)
+	commandCleanupExecute    commandKind = commandKind(commands.CleanupExecuteID)
 )
 
 type cliOptions struct {
@@ -120,6 +123,9 @@ func parseOptions(args []string) (cliOptions, error) {
 	if len(args) > 0 && args[0] == "task" {
 		return parseTaskOptions(args)
 	}
+	if len(args) > 0 && args[0] == "runs" {
+		return parseRunsOptions(args)
+	}
 	if len(args) > 0 && args[0] == "cleanup" {
 		return parseCleanupOptions(args)
 	}
@@ -162,6 +168,46 @@ func parseOptions(args []string) (cliOptions, error) {
 	}
 
 	return options, nil
+}
+
+func parseRunsOptions(args []string) (cliOptions, error) {
+	if len(args) < 2 {
+		return cliOptions{}, fmt.Errorf("missing runs command: supported commands: inspect, compact")
+	}
+	switch args[1] {
+	case "inspect":
+		options := cliOptions{kind: commandRunsInspect}
+		for _, arg := range args[2:] {
+			if arg != "--json" {
+				return cliOptions{}, fmt.Errorf("usage: brevity runs inspect [--json]")
+			}
+			options.json = true
+		}
+		return options, nil
+	case "compact":
+		options := cliOptions{kind: commandRunsNativeCompact}
+		for _, arg := range args[2:] {
+			switch arg {
+			case "--plan":
+				options.plan = true
+			case "--force":
+				options.force = true
+			case "--json":
+				options.json = true
+			default:
+				return cliOptions{}, fmt.Errorf("usage: brevity runs compact --plan|--force [--json]")
+			}
+		}
+		if options.plan && options.force {
+			return cliOptions{}, fmt.Errorf("brevity runs compact cannot combine --plan and --force")
+		}
+		if !options.plan && !options.force {
+			return cliOptions{}, fmt.Errorf("brevity runs compact requires --plan or --force")
+		}
+		return options, nil
+	default:
+		return cliOptions{}, fmt.Errorf("unsupported runs command %q: supported commands: inspect, compact", args[1])
+	}
 }
 
 func parseCleanupOptions(args []string) (cliOptions, error) {
@@ -647,6 +693,8 @@ func runWithContextOptions(ctx context.Context, stdout io.Writer, client runtime
 		return routeTaskPreflightCommand(stdout, options)
 	case commandTaskRuns, commandRunsReconcile, commandRunsRetention, commandRunsCompact:
 		return routeTaskRunsCommand(stdout, client, options)
+	case commandRunsInspect, commandRunsNativeCompact:
+		return routeRunsCommand(stdout, options)
 	case commandCleanupInspect, commandCleanupPlan, commandCleanupExecute:
 		return routeCleanupCommand(stdout, options)
 	default:
@@ -696,6 +744,105 @@ func routeCleanupCommand(stdout io.Writer, options cliOptions) error {
 		return runOrphanCleanupExecute(stdout, options)
 	default:
 		return fmt.Errorf("unsupported cleanup command: %s", options.kind)
+	}
+}
+
+func routeRunsCommand(stdout io.Writer, options cliOptions) error {
+	store, err := state.NewStore("")
+	if err != nil {
+		return err
+	}
+	switch options.kind {
+	case commandRunsInspect:
+		plan, _, err := runmaintenance.BuildRunMaintenancePlan(runmaintenance.RunMaintenanceOptions{Store: store})
+		if err != nil {
+			return err
+		}
+		if options.json {
+			output, err := json.Marshal(plan)
+			if err != nil {
+				return err
+			}
+			_, err = stdout.Write(append(output, '\n'))
+			return err
+		}
+		renderRunMaintenancePlan(stdout, "Run history inspection", plan)
+		return nil
+	case commandRunsNativeCompact:
+		if options.plan {
+			plan, _, err := runmaintenance.BuildRunMaintenancePlan(runmaintenance.RunMaintenanceOptions{Store: store})
+			if err != nil {
+				return err
+			}
+			if options.json {
+				result := runMaintenanceCommandResult("runs compact", true, "info", plan)
+				output, err := json.Marshal(result)
+				if err != nil {
+					return err
+				}
+				_, err = stdout.Write(append(output, '\n'))
+				return err
+			}
+			renderRunMaintenancePlan(stdout, "Run history compaction plan", plan)
+			return nil
+		}
+		result, runErr := runmaintenance.ExecuteRunCompaction(runmaintenance.RunMaintenanceOptions{Store: store}, options.force)
+		if options.json {
+			output, err := json.Marshal(result)
+			if err != nil {
+				return err
+			}
+			if _, err := stdout.Write(append(output, '\n')); err != nil {
+				return err
+			}
+		} else {
+			var plan runmaintenance.RunMaintenancePlan
+			_ = json.Unmarshal(result.Payload, &plan)
+			renderRunMaintenancePlan(stdout, "Run history compaction", plan)
+			fmt.Fprintf(stdout, "success: %t\n", result.Success)
+		}
+		if runErr != nil {
+			return runErr
+		}
+		if !result.Success {
+			return fmt.Errorf("%s reported success=false", result.Command)
+		}
+		return nil
+	default:
+		return fmt.Errorf("unsupported runs command: %s", options.kind)
+	}
+}
+
+func renderRunMaintenancePlan(stdout io.Writer, title string, plan runmaintenance.RunMaintenancePlan) {
+	fmt.Fprintln(stdout, title)
+	fmt.Fprintf(stdout, "runsPath: %s\n", plan.RunsPath)
+	fmt.Fprintf(stdout, "totalRuns: %d\n", plan.TotalRuns)
+	fmt.Fprintf(stdout, "validRuns: %d\n", plan.ValidRuns)
+	fmt.Fprintf(stdout, "malformedRows: %d\n", len(plan.MalformedRows))
+	fmt.Fprintf(stdout, "duplicateRunIds: %d\n", len(plan.DuplicateRunIDs))
+	fmt.Fprintf(stdout, "incompleteRuns: %d\n", len(plan.IncompleteRuns))
+	fmt.Fprintf(stdout, "staleIncompleteRuns: %d\n", len(plan.StaleIncompleteRuns))
+	fmt.Fprintf(stdout, "missingLogReferences: %d\n", len(plan.MissingLogReferences))
+	fmt.Fprintf(stdout, "compactableRows: %d\n", len(plan.CompactableRows))
+	fmt.Fprintf(stdout, "wouldRewriteRunsFile: %t\n", plan.WouldRewriteRunsFile)
+	fmt.Fprintf(stdout, "wouldDeleteLogs: %t\n", plan.WouldDeleteLogs)
+	fmt.Fprintf(stdout, "requiresForce: %t\n", plan.RequiresForce)
+	if plan.QuarantinePath != "" {
+		fmt.Fprintf(stdout, "quarantinePath: %s\n", plan.QuarantinePath)
+	}
+}
+
+func runMaintenanceCommandResult(command string, success bool, severity string, plan runmaintenance.RunMaintenancePlan) contracts.CommandResult {
+	payload, _ := json.Marshal(plan)
+	return contracts.CommandResult{
+		Schema:               contracts.CommandResultSchema,
+		Command:              command,
+		Success:              success,
+		Severity:             severity,
+		Warnings:             plan.Warnings,
+		Errors:               []contracts.ResultMessage{},
+		SuggestedNextActions: []string{},
+		Payload:              payload,
 	}
 }
 

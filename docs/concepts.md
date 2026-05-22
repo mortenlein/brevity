@@ -156,27 +156,27 @@ The default retention policy for future run-index compaction is:
 - Treat retention warnings in a future TUI as advisory until an operator chooses
   an explicit action.
 
-Only dry-run compaction planning exists. Future mutating compaction must be
-explicit, dry-run-first, and protected by locking before it mutates
-`.brevity\runs.jsonl`.
-
-The planned future mutation command shape is:
+Go now owns native run-history maintenance:
 
 ```powershell
-.\brevity.ps1 task runs compact --execute
-.\brevity.ps1 task runs compact --execute --archive
+go run ./cmd/brevity runs inspect
+go run ./cmd/brevity runs inspect --json
+go run ./cmd/brevity runs compact --plan --json
+go run ./cmd/brevity runs compact --force --json
 ```
 
-These commands are not implemented yet. Before any future implementation writes
-the run index, it must acquire `.brevity\runs.lock`, reread
-`.brevity\runs.jsonl` under that lock, recompute the compaction plan, create a
-backup, write and validate a compacted temporary file, validate archive records
-when produced, replace `.brevity\runs.jsonl` atomically when possible on
-Windows, report the backup path, and release the lock in a `finally` block.
-Failed validation must abort before replacement, failed replacement must leave
-the original run index in place, and backups must never be deleted
-automatically. Compaction remains explicit rather than automatic, and a future
-TUI must show the exact action before executing it.
+Inspection and `compact --plan` are read-only. The native plan reports malformed
+rows, duplicate run IDs, incomplete runs, stale incomplete runs, missing log
+references, compactable rows, force requirements, and whether logs would be
+deleted. Logs are not deleted by default, and v0 does not expose a log-deletion
+flag.
+
+`compact --force` is the explicit native rewrite path. It acquires the advisory
+state lock, preserves the latest valid record for duplicate run IDs
+deterministically, quarantines malformed rows to
+`.brevity\runs-malformed.jsonl`, rewrites `.brevity\runs.jsonl` atomically, and
+then reads back through the native run reader in fixture tests. PowerShell run
+maintenance remains legacy/reference behavior.
 
 ### Run Index Archive Format
 

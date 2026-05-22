@@ -321,16 +321,22 @@ The default retention policy for future run-index compaction is conservative:
 - Treat retention warnings in a future TUI as advisory operator signals, not as
   automatic cleanup instructions.
 
-For now, `.\brevity.ps1 task runs retention --dry-run` is report-only. Any
-future compaction must be explicit, dry-run-first, and guarded by locking before
-it mutates `.brevity\runs.jsonl`.
+PowerShell run maintenance remains legacy/reference behavior:
+`.\brevity.ps1 task runs retention --dry-run` and
+`.\brevity.ps1 task runs compact --dry-run` are report-only operator views.
 
-`.\brevity.ps1 task runs compact --dry-run` prints a read-only compaction plan
-for `.brevity\runs.jsonl`. The plan preserves at least the latest 20 indexed
-runs per task, stale or incomplete records, and failed records; older successful
-completed runs are reported as archive/summary candidates. It never rewrites,
-truncates, archives, or deletes run-index records or worker logs. Use `--json`
-for the `brevity.command-result.v1` contract with compact candidate summaries.
+Native Go now owns run-history maintenance. `go run ./cmd/brevity runs inspect`
+is read-only and reports malformed rows, duplicate run IDs, stale incomplete
+runs, missing log references, and whether compaction would rewrite the hot run
+index. `go run ./cmd/brevity runs compact --plan --json` emits the same plan in
+a command-result envelope without mutation.
+
+`go run ./cmd/brevity runs compact --force [--json]` is the explicit native
+rewrite path. It uses the native state lock, preserves the latest valid record
+for duplicate run IDs deterministically, quarantines malformed rows to
+`.brevity\runs-malformed.jsonl`, rewrites `.brevity\runs.jsonl` atomically, and
+does not delete worker logs by default. Log deletion is intentionally unsupported
+in v0.
 
 The init command prepares the current Git repository for Brevity. It creates
 repo-local Brevity state when missing:

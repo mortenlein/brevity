@@ -25,6 +25,8 @@ const (
 	TaskRunsReconcileID  ID = "task-runs-reconcile"
 	TaskRunsRetentionID  ID = "task-runs-retention"
 	TaskRunsCompactID    ID = "task-runs-compact"
+	RunsInspectID        ID = "runs-inspect"
+	RunsCompactID        ID = "runs-compact"
 	CleanupInspectID     ID = "cleanup-inspect"
 	CleanupPlanID        ID = "cleanup-plan"
 	CleanupExecuteID     ID = "cleanup-execute"
@@ -136,6 +138,16 @@ var (
 		Words: []string{"task", "runs", "compact"},
 		Usage: "brevity task runs compact --dry-run",
 	}
+	RunsInspect = Command{
+		ID:    RunsInspectID,
+		Words: []string{"runs", "inspect"},
+		Usage: "brevity runs inspect [--json]",
+	}
+	RunsCompact = Command{
+		ID:    RunsCompactID,
+		Words: []string{"runs", "compact"},
+		Usage: "brevity runs compact --plan|--force [--json]",
+	}
 	TaskCleanup = Command{
 		ID:    TaskCleanupID,
 		Words: []string{"task", "cleanup"},
@@ -187,6 +199,8 @@ var UsageCommands = []Command{
 	TaskRunsReconcile,
 	TaskRunsRetention,
 	TaskRunsCompact,
+	RunsInspect,
+	RunsCompact,
 	CleanupInspect,
 	CleanupPlan,
 	CleanupExecute,

@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/mortenlein/brevity/internal/contracts"
+	"github.com/mortenlein/brevity/internal/runmaintenance"
 	"github.com/mortenlein/brevity/internal/state"
 )
 
@@ -158,6 +159,7 @@ func Run(options Options) (Report, error) {
 	checkProviderHealth(&builder, store)
 	tasks, tasksOK := checkTasks(&builder, store)
 	checkRuns(&builder, store, now().UTC())
+	checkRunMaintenance(&builder, store, now().UTC())
 	checkLock(&builder, store, "state-lock", "State lock", store.LockPath())
 	checkLock(&builder, store, "tasks-lock", "Task metadata lock", store.Path("tasks.lock"))
 	checkLock(&builder, store, "provider-health-lock", "Provider health lock", store.Path("provider-health.lock"))
@@ -180,6 +182,28 @@ func Run(options Options) (Report, error) {
 	report.SuggestedNextActions = suggestedActions(report.Checks)
 	report.LegacyPayload = legacyPayload(report, tasks)
 	return report, nil
+}
+
+func checkRunMaintenance(builder *reportBuilder, store state.Store, now time.Time) {
+	plan, _, err := runmaintenance.BuildRunMaintenancePlan(runmaintenance.RunMaintenanceOptions{
+		Store: store,
+		Now:   func() time.Time { return now },
+	})
+	path := store.Path(state.RunsFile)
+	if err != nil {
+		builder.add("runs-maintenance", "Run history maintenance", StatusWarn, SeverityWarn, "Run maintenance plan could not be built.", err.Error(), path, "Inspect .brevity\\runs.jsonl before compacting run history.", "native-go")
+		return
+	}
+	if plan.MissingRunsFile {
+		builder.add("runs-maintenance", "Run history maintenance", StatusSkipped, SeverityInfo, "Run maintenance skipped because run history is missing.", "", path, "", "native-go")
+		return
+	}
+	if len(plan.MalformedRows)+len(plan.DuplicateRunIDs)+len(plan.StaleIncompleteRuns) > 0 {
+		detail := fmt.Sprintf("malformed=%d duplicateRunIds=%d staleIncomplete=%d missingLogs=%d", len(plan.MalformedRows), len(plan.DuplicateRunIDs), len(plan.StaleIncompleteRuns), len(plan.MissingLogReferences))
+		builder.add("runs-maintenance", "Run history maintenance", StatusWarn, SeverityWarn, "Run history maintenance found issues.", detail, path, "Run brevity runs inspect before relying on latest run summaries.", "native-go")
+		return
+	}
+	builder.add("runs-maintenance", "Run history maintenance", StatusOK, SeverityInfo, "Run history maintenance found no compaction warnings.", "", path, "", "native-go")
 }
 
 type reportBuilder struct {
