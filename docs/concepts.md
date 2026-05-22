@@ -305,8 +305,9 @@ scheduler behavior. The planning semantics are documented in
 
 The native Bubble Tea dashboard surfaces this queue as read-only operator
 visibility: file state, item count, status counts, corruption/invalid warnings,
-and oldest queued age when available. It does not add queue controls, repair the
-file, schedule work, or start execution.
+oldest queued age when available, and a compact queue plan summary with
+runnable/skipped counts, the next runnable task, and the first skip reason. It
+does not add queue controls, repair the file, schedule work, or start execution.
 
 The contract, allowed statuses, locking expectations, and safety invariants are
 documented in

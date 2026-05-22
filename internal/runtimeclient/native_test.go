@@ -257,6 +257,9 @@ func TestNativeRuntimeStateMissingFiles(t *testing.T) {
 	if state.Queue == nil || state.Queue.State != "missing" || state.Queue.TotalItems != 0 {
 		t.Fatalf("queue = %#v, want missing empty queue visibility", state.Queue)
 	}
+	if state.Queue.Plan == nil || state.Queue.Plan.Runnable != 0 || state.Queue.Plan.Skipped != 0 || !state.Queue.Plan.ReadOnly {
+		t.Fatalf("queue plan = %#v, want empty read-only plan visibility", state.Queue.Plan)
+	}
 }
 
 func TestNativeRuntimeStateIncludesQueueSummaryWithoutMutation(t *testing.T) {
@@ -295,6 +298,12 @@ func TestNativeRuntimeStateIncludesQueueSummaryWithoutMutation(t *testing.T) {
 	}
 	if state.Queue.OldestQueuedItemAge != "2h0m0s" {
 		t.Fatalf("OldestQueuedItemAge = %q, want 2h0m0s", state.Queue.OldestQueuedItemAge)
+	}
+	if state.Queue.Plan == nil {
+		t.Fatal("Queue.Plan = nil, want plan summary")
+	}
+	if state.Queue.Plan.Runnable != 1 || state.Queue.Plan.Skipped != 1 || state.Queue.Plan.NextRunnableTask != "task-one" || state.Queue.Plan.FirstSkipReason != "unsupported status: cancelled" || !state.Queue.Plan.ReadOnly {
+		t.Fatalf("queue plan = %#v, want read-only runnable/skipped summary", state.Queue.Plan)
 	}
 }
 

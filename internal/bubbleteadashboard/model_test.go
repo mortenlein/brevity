@@ -3152,8 +3152,9 @@ func TestQueueVisibilityRendersEmptyMissingValidAndCorruptedStates(t *testing.T)
 				Version:        1,
 				TotalItems:     0,
 				CountsByStatus: map[string]int{},
+				Plan:           &contracts.QueuePlan{State: "missing", Runnable: 0, Skipped: 0, ReadOnly: true},
 			},
-			want: []string{"queue     valid file | 0 items | 0 statuses | oldest - ok"},
+			want: []string{"queue     valid file | 0 items | 0 statuses | oldest - ok", "plan      0 runnable | 0 skipped | next - | skip - ok"},
 		},
 		{
 			name: "valid queue summary",
@@ -3163,8 +3164,9 @@ func TestQueueVisibilityRendersEmptyMissingValidAndCorruptedStates(t *testing.T)
 				TotalItems:          3,
 				CountsByStatus:      map[string]int{"queued": 2, "cancelled": 1},
 				OldestQueuedItemAge: "2h0m0s",
+				Plan:                &contracts.QueuePlan{State: "valid", Runnable: 1, Skipped: 1, NextRunnableTask: "task-alpha", FirstSkipReason: "unsupported status: cancelled", ReadOnly: true},
 			},
-			want: []string{"queue     valid file | 3 items | cancelled:1 queued:2 | oldest 2h0m0s ok"},
+			want: []string{"queue     valid file | 3 items | cancelled:1 queued:2 | oldest 2h0m0s ok", "plan      1 runnable | 1 skipped | next task-alpha | skip unsupported status: cancelled ok"},
 		},
 		{
 			name: "corrupted queue warning",
@@ -3174,8 +3176,9 @@ func TestQueueVisibilityRendersEmptyMissingValidAndCorruptedStates(t *testing.T)
 				TotalItems:     0,
 				CountsByStatus: map[string]int{},
 				Error:          "parse runtime-queue.json: invalid character",
+				Plan:           &contracts.QueuePlan{State: "corrupted", Runnable: 0, Skipped: 0, Error: "parse runtime-queue.json: invalid character", ReadOnly: true},
 			},
-			want: []string{"queue     corrupted file | 0 items | 0 statuses | oldest - | corrupted !"},
+			want: []string{"queue     corrupted file | 0 items | 0 statuses | oldest - | corrupted !", "plan      0 runnable | 0 skipped | next - | skip - | corrupted !"},
 		},
 		{
 			name: "missing queue file",
@@ -3184,8 +3187,9 @@ func TestQueueVisibilityRendersEmptyMissingValidAndCorruptedStates(t *testing.T)
 				Version:        1,
 				TotalItems:     0,
 				CountsByStatus: map[string]int{},
+				Plan:           &contracts.QueuePlan{State: "missing", Runnable: 0, Skipped: 0, ReadOnly: true},
 			},
-			want: []string{"queue     missing file | 0 items | 0 statuses | oldest - ok"},
+			want: []string{"queue     missing file | 0 items | 0 statuses | oldest - ok", "plan      0 runnable | 0 skipped | next - | skip - ok"},
 		},
 	}
 
@@ -3206,6 +3210,29 @@ func TestQueueVisibilityRendersEmptyMissingValidAndCorruptedStates(t *testing.T)
 	}
 }
 
+func TestQueuePlanVisibilityRendersPlanningError(t *testing.T) {
+	model := NewModelWithSource(&fakeClient{}, time.Second, "native")
+	model.state = emptyBubbleState()
+	model.state.Queue = &contracts.RuntimeQueue{
+		State:          "valid",
+		Version:        1,
+		TotalItems:     1,
+		CountsByStatus: map[string]int{"queued": 1},
+		Plan:           &contracts.QueuePlan{State: "invalid", Runnable: 0, Skipped: 0, Error: "unsupported runtime-queue.json version 0", ReadOnly: true},
+	}
+	model.hasState = true
+
+	output := plainView(model.renderSummary())
+	for _, want := range []string{
+		"queue     valid file | 1 items | queued:1 | oldest - ok",
+		"plan      0 runnable | 0 skipped | next - | skip - | invalid !",
+	} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("queue plan error output missing %q:\n%s", want, output)
+		}
+	}
+}
+
 func TestQueueVisibilityWidthSafety(t *testing.T) {
 	model := NewModelWithSource(&fakeClient{}, time.Second, "native")
 	model.state = emptyBubbleState()
@@ -3216,6 +3243,7 @@ func TestQueueVisibilityWidthSafety(t *testing.T) {
 		TotalItems:          12345,
 		CountsByStatus:      map[string]int{"queued-with-a-very-long-future-status": 12345},
 		OldestQueuedItemAge: "999999h0m0s",
+		Plan:                &contracts.QueuePlan{State: "invalid", Runnable: 12345, Skipped: 12345, NextRunnableTask: strings.Repeat("long-task-", 12), FirstSkipReason: strings.Repeat("blocked because ", 12), Error: strings.Repeat("future version ", 20), ReadOnly: true},
 		Error:               strings.Repeat("future version ", 20),
 	}
 	model.hasState = true

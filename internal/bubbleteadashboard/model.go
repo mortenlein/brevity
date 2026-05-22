@@ -802,6 +802,9 @@ func (model Model) renderSummary() string {
 	}
 	if state.Queue != nil {
 		fmt.Fprintf(&output, "%s\n", model.renderLine("  queue     "+queueSummary(state.Queue)))
+		if state.Queue.Plan != nil {
+			fmt.Fprintf(&output, "%s\n", model.renderLine("  plan      "+queuePlanSummary(state.Queue.Plan)))
+		}
 	}
 	return output.String()
 }
@@ -861,6 +864,41 @@ func queueSummary(queue *contracts.RuntimeQueue) string {
 	return strings.Join(parts, " | ")
 }
 
+func queuePlanSummary(plan *contracts.QueuePlan) string {
+	if plan == nil {
+		return "unknown"
+	}
+	parts := []string{
+		fmt.Sprintf("%d runnable", plan.Runnable),
+		fmt.Sprintf("%d skipped", plan.Skipped),
+		"next " + fallback(plan.NextRunnableTask, "-"),
+		"skip " + fallback(plan.FirstSkipReason, "-"),
+	}
+	if warning := queuePlanWarningText(plan); warning != "" {
+		parts = append(parts, warning+renderWarningCount(1))
+	} else {
+		parts[len(parts)-1] += renderWarningCount(0)
+	}
+	return strings.Join(parts, " | ")
+}
+
+func queuePlanWarningText(plan *contracts.QueuePlan) string {
+	if plan == nil {
+		return ""
+	}
+	switch strings.ToLower(strings.TrimSpace(plan.State)) {
+	case "corrupted":
+		return "corrupted"
+	case "invalid":
+		return "invalid"
+	default:
+		if strings.TrimSpace(plan.Error) != "" {
+			return "planning-error"
+		}
+		return ""
+	}
+}
+
 func sortedQueueStatuses(counts map[string]int) []string {
 	statuses := make([]string, 0, len(counts))
 	for status := range counts {
@@ -874,10 +912,14 @@ func sortedQueueStatuses(counts map[string]int) []string {
 }
 
 func queueWarningCount(queue *contracts.RuntimeQueue) int {
-	if queueWarningText(queue) == "" {
-		return 0
+	count := 0
+	if queueWarningText(queue) != "" {
+		count++
 	}
-	return 1
+	if queue != nil && queuePlanWarningText(queue.Plan) != "" {
+		count++
+	}
+	return count
 }
 
 func queueWarningText(queue *contracts.RuntimeQueue) string {

@@ -86,7 +86,8 @@ func (client NativeClient) RuntimeState() (contracts.RuntimeState, error) {
 
 	queueStore := runtimequeue.Store{Store: store, Now: func() time.Time { return now().UTC() }}
 	queueInspection := queueStore.Inspect()
-	runtimeState.Queue = queueInspectionToContract(queueInspection)
+	queuePlan := queueStore.Plan()
+	runtimeState.Queue = queueInspectionToContract(queueInspection, queuePlan)
 	if queueInspection.State == "corrupted" || queueInspection.State == "invalid" {
 		runtimeState.SuggestedNextActions = append(runtimeState.SuggestedNextActions, "Inspect .brevity\\runtime-queue.json before relying on queued work visibility.")
 	}
@@ -132,7 +133,7 @@ func (client NativeClient) RuntimeState() (contracts.RuntimeState, error) {
 	return runtimeState, nil
 }
 
-func queueInspectionToContract(inspection runtimequeue.Inspection) *contracts.RuntimeQueue {
+func queueInspectionToContract(inspection runtimequeue.Inspection, plan runtimequeue.Plan) *contracts.RuntimeQueue {
 	counts := map[string]int{}
 	for status, count := range inspection.CountsByStatus {
 		counts[status] = count
@@ -146,11 +147,29 @@ func queueInspectionToContract(inspection runtimequeue.Inspection) *contracts.Ru
 		CountsByStatus:           counts,
 		OldestQueuedItemAge:      inspection.OldestQueuedItemAge,
 		NewestQueuedItemAge:      inspection.NewestQueuedItemAge,
+		Plan:                     queuePlanToContract(plan),
 		DuplicateIDs:             append([]string{}, inspection.DuplicateIDs...),
 		InvalidItems:             append([]string{}, inspection.InvalidItems...),
 		UnsupportedFutureVersion: inspection.UnsupportedFutureVersion,
 		Error:                    inspection.Error,
 	}
+}
+
+func queuePlanToContract(plan runtimequeue.Plan) *contracts.QueuePlan {
+	summary := &contracts.QueuePlan{
+		State:    plan.State,
+		Runnable: plan.Summary.Runnable,
+		Skipped:  plan.Summary.Skipped,
+		Error:    plan.Error,
+		ReadOnly: plan.ReadOnly,
+	}
+	if len(plan.Runnable) > 0 {
+		summary.NextRunnableTask = plan.Runnable[0].Task
+	}
+	if len(plan.Skipped) > 0 {
+		summary.FirstSkipReason = plan.Skipped[0].Reason
+	}
+	return summary
 }
 
 func attachPromptFiles(tasks []contracts.TaskSummary) {

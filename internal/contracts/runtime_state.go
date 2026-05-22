@@ -52,10 +52,21 @@ type RuntimeQueue struct {
 	CountsByStatus           map[string]int `json:"countsByStatus"`
 	OldestQueuedItemAge      string         `json:"oldestQueuedItemAge,omitempty"`
 	NewestQueuedItemAge      string         `json:"newestQueuedItemAge,omitempty"`
+	Plan                     *QueuePlan     `json:"plan,omitempty"`
 	DuplicateIDs             []string       `json:"duplicateIds,omitempty"`
 	InvalidItems             []string       `json:"invalidItems,omitempty"`
 	UnsupportedFutureVersion bool           `json:"unsupportedFutureVersion"`
 	Error                    string         `json:"error,omitempty"`
+}
+
+type QueuePlan struct {
+	State            string `json:"state"`
+	Runnable         int    `json:"runnable"`
+	Skipped          int    `json:"skipped"`
+	NextRunnableTask string `json:"nextRunnableTask,omitempty"`
+	FirstSkipReason  string `json:"firstSkipReason,omitempty"`
+	Error            string `json:"error,omitempty"`
+	ReadOnly         bool   `json:"readOnly"`
 }
 
 type TaskCounts struct {
