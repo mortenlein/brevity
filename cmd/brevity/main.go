@@ -47,6 +47,7 @@ const (
 	commandRuntimeStatus     commandKind = commandKind(commands.RuntimeStatusID)
 	commandQueueAdd          commandKind = commandKind(commands.QueueAddID)
 	commandQueueList         commandKind = commandKind(commands.QueueListID)
+	commandQueueInspect      commandKind = commandKind(commands.QueueInspectID)
 	commandQueueRemove       commandKind = commandKind(commands.QueueRemoveID)
 	commandProviderStatus    commandKind = commandKind(commands.ProviderStatusID)
 	commandProviderSet       commandKind = commandKind(commands.ProviderSetID)
@@ -196,7 +197,7 @@ func parseOptions(args []string) (cliOptions, error) {
 
 func parseQueueOptions(args []string) (cliOptions, error) {
 	if len(args) < 2 {
-		return cliOptions{}, fmt.Errorf("missing queue command: supported commands: add, list, remove")
+		return cliOptions{}, fmt.Errorf("missing queue command: supported commands: add, list, inspect, remove")
 	}
 	switch args[1] {
 	case "add":
@@ -209,13 +210,22 @@ func parseQueueOptions(args []string) (cliOptions, error) {
 			return cliOptions{}, usageError(commands.QueueList)
 		}
 		return cliOptions{kind: commandQueueList}, nil
+	case "inspect":
+		options := cliOptions{kind: commandQueueInspect}
+		for _, arg := range args[2:] {
+			if arg != "--json" {
+				return cliOptions{}, usageError(commands.QueueInspect)
+			}
+			options.json = true
+		}
+		return options, nil
 	case "remove":
 		if len(args) != 3 || strings.TrimSpace(args[2]) == "" {
 			return cliOptions{}, usageError(commands.QueueRemove)
 		}
 		return cliOptions{kind: commandQueueRemove, candidateID: args[2]}, nil
 	default:
-		return cliOptions{}, fmt.Errorf("unsupported queue command %q: supported commands: add, list, remove", args[1])
+		return cliOptions{}, fmt.Errorf("unsupported queue command %q: supported commands: add, list, inspect, remove", args[1])
 	}
 }
 
@@ -799,7 +809,7 @@ func runWithContextOptions(ctx context.Context, stdout io.Writer, client runtime
 		return routeRuntimeStateCommand(stdout)
 	case commandRuntimeStart, commandRuntimeStop, commandRuntimeStatus:
 		return routeRuntimeSupervisorCommand(ctx, stdout, options)
-	case commandQueueAdd, commandQueueList, commandQueueRemove:
+	case commandQueueAdd, commandQueueList, commandQueueInspect, commandQueueRemove:
 		return routeQueueCommand(stdout, options)
 	case commandProviderStatus, commandProviderSet, commandProviderReset:
 		return routeProviderCommand(stdout, options)
@@ -878,6 +888,18 @@ func routeQueueCommand(stdout io.Writer, options cliOptions) error {
 			fmt.Fprintf(stdout, "%s\t%s\t%s\t%s\t%s\t%s\n", item.ID, item.Task, item.Provider, item.Profile, item.Status, item.CreatedAt)
 		}
 		return nil
+	case commandQueueInspect:
+		inspection := store.Inspect()
+		if options.json {
+			output, err := json.Marshal(inspection)
+			if err != nil {
+				return err
+			}
+			_, err = stdout.Write(append(output, '\n'))
+			return err
+		}
+		renderQueueInspection(stdout, inspection)
+		return nil
 	case commandQueueRemove:
 		item, err := store.Remove(options.candidateID)
 		if err != nil {
@@ -891,6 +913,47 @@ func routeQueueCommand(stdout io.Writer, options cliOptions) error {
 	default:
 		return fmt.Errorf("unsupported queue command: %s", options.kind)
 	}
+}
+
+func renderQueueInspection(stdout io.Writer, inspection runtimequeue.Inspection) {
+	fmt.Fprintln(stdout, "Runtime queue inspection")
+	fmt.Fprintf(stdout, "Path: %s\n", inspection.Path)
+	fmt.Fprintf(stdout, "State: %s\n", inspection.State)
+	fmt.Fprintf(stdout, "Version: %d (supported: %d)\n", inspection.Version, inspection.SupportedVersion)
+	fmt.Fprintf(stdout, "Items: %d\n", inspection.TotalItems)
+	fmt.Fprintln(stdout)
+	fmt.Fprintln(stdout, "Status counts:")
+	if len(inspection.CountsByStatus) == 0 {
+		fmt.Fprintln(stdout, "  none")
+	} else {
+		statuses := make([]string, 0, len(inspection.CountsByStatus))
+		for status := range inspection.CountsByStatus {
+			statuses = append(statuses, status)
+		}
+		sort.Strings(statuses)
+		for _, status := range statuses {
+			fmt.Fprintf(stdout, "  %s: %d\n", status, inspection.CountsByStatus[status])
+		}
+	}
+	fmt.Fprintf(stdout, "Oldest queued item age: %s\n", fallbackDash(inspection.OldestQueuedItemAge))
+	fmt.Fprintf(stdout, "Newest queued item age: %s\n", fallbackDash(inspection.NewestQueuedItemAge))
+	fmt.Fprintf(stdout, "Duplicate ids: %s\n", joinOrNone(inspection.DuplicateIDs))
+	fmt.Fprintf(stdout, "Invalid items: %s\n", joinOrNone(inspection.InvalidItems))
+	if inspection.UnsupportedFutureVersion {
+		fmt.Fprintln(stdout, "Warning: unsupported future queue version.")
+	}
+	if strings.TrimSpace(inspection.Error) != "" {
+		fmt.Fprintf(stdout, "Error: %s\n", inspection.Error)
+	}
+	fmt.Fprintln(stdout)
+	fmt.Fprintln(stdout, "Read-only: inspection does not schedule, execute, start the supervisor, or rewrite the queue file.")
+}
+
+func joinOrNone(values []string) string {
+	if len(values) == 0 {
+		return "none"
+	}
+	return strings.Join(values, "; ")
 }
 
 func routeSupportMatrixCommand(stdout io.Writer, options cliOptions) error {

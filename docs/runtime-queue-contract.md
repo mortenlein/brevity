@@ -53,17 +53,41 @@ has a separate contract update.
 
 `brevity queue add <task>` appends an item with status `queued` and persists the
 file atomically. `brevity queue list` reads and prints the queue. `brevity queue
-remove <id>` removes one queue item by queue item id.
+inspect` reads queue infrastructure diagnostics. `brevity queue remove <id>`
+removes one queue item by queue item id.
 
 These commands do not drain the queue, run providers, spawn workers, start the
 supervisor, or mutate task execution state.
+
+## Inspection
+
+`brevity queue inspect` is read-only operator visibility. It reports:
+
+- queue file path
+- queue file state: `missing`, `valid`, `corrupted`, or `invalid`
+- queue version and supported version
+- total item count
+- count by status
+- oldest and newest queued item age
+- duplicate queue item ids
+- invalid item fields
+- unsupported future version warning
+
+`brevity queue inspect --json` emits the same diagnostics as a compact
+machine-readable object. The JSON shape is intentionally small and diagnostic;
+operators should not treat it as a scheduling contract.
+
+Inspection must tolerate a missing file, an empty queue, corrupted JSON,
+unsupported future versions, duplicate ids, and invalid item fields. It must not
+repair, normalize, rewrite, or otherwise mutate `.brevity\runtime-queue.json`.
+Invalid queue infrastructure state is not task failure.
 
 ## Ownership And Locking
 
 The Go runtime owns `.brevity\runtime-queue.json`. Mutating queue commands must
 use a native advisory queue lock and atomic JSON replacement through the native
-state store. Read-only listing does not acquire the mutation lock and must not
-rewrite the file.
+state store. Read-only listing and inspection do not acquire the mutation lock
+and must not rewrite the file.
 
 PowerShell may remain a compatibility reference, but new queue behavior must be
 Go-native.
@@ -71,8 +95,8 @@ Go-native.
 ## Relationship To Supervisor
 
 The runtime queue can exist while the supervisor is stopped or missing. The
-supervisor must not be required for `queue add`, `queue list`, or `queue
-remove`.
+supervisor must not be required for `queue add`, `queue list`, `queue inspect`,
+or `queue remove`.
 
 The current supervisor foundation is observational and must not drain
 `.brevity\runtime-queue.json`.
@@ -82,9 +106,15 @@ The current supervisor foundation is observational and must not drain
 - Queue state is infrastructure state, not task state.
 - Adding to the queue must not execute anything.
 - Listing the queue must be read-only.
+- Inspecting the queue must be read-only.
+- Inspecting the queue is not scheduling.
+- Inspecting the queue is not execution.
+- Inspecting the queue must not start the runtime supervisor.
+- Inspecting the queue must not repair or rewrite queue files automatically.
 - The queue does not require the supervisor to be running.
 - Missing `.brevity\runtime-queue.json` is an empty queue.
 - Corrupted queue JSON must be reported safely with a clear error.
+- Invalid queue infrastructure state is not task failure.
 - Dry-run paths must never drain the queue.
 - Provider failures are not queue corruption.
 - Queue remove deletes only the matching queue item id.

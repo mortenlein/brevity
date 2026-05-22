@@ -3,9 +3,13 @@ package queue
 import (
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 	"time"
 
@@ -49,6 +53,21 @@ type Store struct {
 	LockOptions locking.Options
 }
 
+type Inspection struct {
+	Path                     string         `json:"path"`
+	State                    string         `json:"state"`
+	Version                  int            `json:"version"`
+	SupportedVersion         int            `json:"supportedVersion"`
+	TotalItems               int            `json:"totalItems"`
+	CountsByStatus           map[string]int `json:"countsByStatus"`
+	OldestQueuedItemAge      string         `json:"oldestQueuedItemAge,omitempty"`
+	NewestQueuedItemAge      string         `json:"newestQueuedItemAge,omitempty"`
+	DuplicateIDs             []string       `json:"duplicateIds,omitempty"`
+	InvalidItems             []string       `json:"invalidItems,omitempty"`
+	UnsupportedFutureVersion bool           `json:"unsupportedFutureVersion"`
+	Error                    string         `json:"error,omitempty"`
+}
+
 func NewStore(repoRoot string) (Store, error) {
 	store, err := bstate.NewStore(repoRoot)
 	if err != nil {
@@ -81,6 +100,102 @@ func (store Store) Load() (Queue, bool, error) {
 		queue.Items = []Item{}
 	}
 	return queue, false, nil
+}
+
+func (store Store) Inspect() Inspection {
+	result := Inspection{
+		Path:             store.QueuePath(),
+		State:            "missing",
+		SupportedVersion: Version,
+		CountsByStatus:   map[string]int{},
+	}
+	data, err := os.ReadFile(filepath.Clean(store.QueuePath()))
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			result.Version = Version
+			return result
+		}
+		result.State = "invalid"
+		result.Error = fmt.Sprintf("read %s: %v", FileName, err)
+		return result
+	}
+	if len(strings.TrimSpace(string(data))) == 0 {
+		result.State = "corrupted"
+		result.Error = fmt.Sprintf("read %s: file is empty", FileName)
+		return result
+	}
+	var queue Queue
+	if err := json.Unmarshal(data, &queue); err != nil {
+		result.State = "corrupted"
+		result.Error = fmt.Sprintf("parse %s: %v", FileName, err)
+		return result
+	}
+	result.State = "valid"
+	result.Version = queue.Version
+	result.TotalItems = len(queue.Items)
+	result.UnsupportedFutureVersion = queue.Version > Version
+	if queue.Version != Version {
+		result.State = "invalid"
+		if queue.Version > Version {
+			result.Error = fmt.Sprintf("unsupported future runtime-queue.json version %d; supported version is %d", queue.Version, Version)
+		} else {
+			result.Error = fmt.Sprintf("unsupported runtime-queue.json version %d; supported version is %d", queue.Version, Version)
+		}
+	}
+
+	seen := map[string]struct{}{}
+	duplicates := map[string]struct{}{}
+	var oldest, newest time.Time
+	for index, item := range queue.Items {
+		status := strings.ToLower(strings.TrimSpace(item.Status))
+		if status == "" {
+			status = "(missing)"
+		}
+		result.CountsByStatus[status]++
+		if strings.TrimSpace(item.ID) == "" {
+			result.InvalidItems = append(result.InvalidItems, fmt.Sprintf("item[%d] id is required", index))
+		} else if _, exists := seen[item.ID]; exists {
+			duplicates[item.ID] = struct{}{}
+		} else {
+			seen[item.ID] = struct{}{}
+		}
+		if _, err := NormalizeTaskSlug(item.Task); err != nil {
+			result.InvalidItems = append(result.InvalidItems, fmt.Sprintf("item[%d] task is invalid: %v", index, err))
+		}
+		if status != StatusQueued && status != StatusCancelled {
+			result.InvalidItems = append(result.InvalidItems, fmt.Sprintf("item[%d] status %q is not recognized", index, item.Status))
+		}
+		createdAt, err := parseTime(item.CreatedAt)
+		if err != nil {
+			result.InvalidItems = append(result.InvalidItems, fmt.Sprintf("item[%d] createdAt is invalid: %v", index, err))
+		} else if status == StatusQueued {
+			createdAt = createdAt.UTC()
+			if oldest.IsZero() || createdAt.Before(oldest) {
+				oldest = createdAt
+			}
+			if newest.IsZero() || createdAt.After(newest) {
+				newest = createdAt
+			}
+		}
+		if _, err := parseTime(item.UpdatedAt); err != nil {
+			result.InvalidItems = append(result.InvalidItems, fmt.Sprintf("item[%d] updatedAt is invalid: %v", index, err))
+		}
+	}
+	for id := range duplicates {
+		result.DuplicateIDs = append(result.DuplicateIDs, id)
+	}
+	sort.Strings(result.DuplicateIDs)
+	if len(result.DuplicateIDs) > 0 || len(result.InvalidItems) > 0 {
+		result.State = "invalid"
+	}
+	now := store.now().UTC()
+	if !oldest.IsZero() {
+		result.OldestQueuedItemAge = formatAge(now.Sub(oldest))
+	}
+	if !newest.IsZero() {
+		result.NewestQueuedItemAge = formatAge(now.Sub(newest))
+	}
+	return result
 }
 
 func (store Store) Add(task string) (Item, error) {
@@ -276,4 +391,11 @@ func parseTime(value string) (time.Time, error) {
 		return parsed, nil
 	}
 	return time.Parse(time.RFC3339, value)
+}
+
+func formatAge(duration time.Duration) string {
+	if duration < 0 {
+		duration = 0
+	}
+	return duration.Truncate(time.Second).String()
 }

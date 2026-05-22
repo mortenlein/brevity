@@ -92,6 +92,115 @@ func TestCorruptedQueueFileReportsUsefulError(t *testing.T) {
 	}
 }
 
+func TestInspectMissingQueueFile(t *testing.T) {
+	store := testStore(t)
+	inspection := store.Inspect()
+	if inspection.State != "missing" {
+		t.Fatalf("state = %q, want missing", inspection.State)
+	}
+	if inspection.TotalItems != 0 || len(inspection.CountsByStatus) != 0 {
+		t.Fatalf("inspection = %#v, want empty missing inspection", inspection)
+	}
+}
+
+func TestInspectEmptyQueueFile(t *testing.T) {
+	store := testStore(t)
+	writeQueue(t, store, Queue{Version: Version, Items: []Item{}})
+	inspection := store.Inspect()
+	if inspection.State != "valid" {
+		t.Fatalf("state = %q, want valid", inspection.State)
+	}
+	if inspection.Version != Version || inspection.TotalItems != 0 {
+		t.Fatalf("inspection = %#v, want empty v1 queue", inspection)
+	}
+}
+
+func TestInspectValidQueueWithCounts(t *testing.T) {
+	store := testStore(t)
+	writeQueue(t, store, Queue{Version: Version, Items: []Item{
+		testItem("old", "alpha", StatusQueued, "2026-05-22T10:00:00Z"),
+		testItem("new", "beta", StatusQueued, "2026-05-22T11:30:00Z"),
+		testItem("cancelled", "gamma", StatusCancelled, "2026-05-22T11:45:00Z"),
+	}})
+	inspection := store.Inspect()
+	if inspection.State != "valid" {
+		t.Fatalf("state = %q, want valid", inspection.State)
+	}
+	if inspection.TotalItems != 3 {
+		t.Fatalf("total = %d, want 3", inspection.TotalItems)
+	}
+	if inspection.CountsByStatus[StatusQueued] != 2 || inspection.CountsByStatus[StatusCancelled] != 1 {
+		t.Fatalf("counts = %#v", inspection.CountsByStatus)
+	}
+	if inspection.OldestQueuedItemAge != "2h0m0s" || inspection.NewestQueuedItemAge != "30m0s" {
+		t.Fatalf("ages oldest=%q newest=%q", inspection.OldestQueuedItemAge, inspection.NewestQueuedItemAge)
+	}
+}
+
+func TestInspectDuplicateIDs(t *testing.T) {
+	store := testStore(t)
+	writeQueue(t, store, Queue{Version: Version, Items: []Item{
+		testItem("same", "alpha", StatusQueued, "2026-05-22T10:00:00Z"),
+		testItem("same", "beta", StatusQueued, "2026-05-22T11:00:00Z"),
+	}})
+	inspection := store.Inspect()
+	if inspection.State != "invalid" {
+		t.Fatalf("state = %q, want invalid", inspection.State)
+	}
+	if len(inspection.DuplicateIDs) != 1 || inspection.DuplicateIDs[0] != "same" {
+		t.Fatalf("duplicate ids = %#v", inspection.DuplicateIDs)
+	}
+}
+
+func TestInspectCorruptedQueueFile(t *testing.T) {
+	store := testStore(t)
+	writeRawQueue(t, store, `{"version":1,"items":[`)
+	inspection := store.Inspect()
+	if inspection.State != "corrupted" {
+		t.Fatalf("state = %q, want corrupted", inspection.State)
+	}
+	if !strings.Contains(inspection.Error, "parse runtime-queue.json") {
+		t.Fatalf("error = %q, want parse runtime-queue.json", inspection.Error)
+	}
+}
+
+func TestInspectUnsupportedFutureVersion(t *testing.T) {
+	store := testStore(t)
+	writeQueue(t, store, Queue{Version: Version + 1, Items: []Item{}})
+	inspection := store.Inspect()
+	if inspection.State != "invalid" {
+		t.Fatalf("state = %q, want invalid", inspection.State)
+	}
+	if !inspection.UnsupportedFutureVersion {
+		t.Fatalf("unsupported future version = false, want true")
+	}
+}
+
+func TestInspectInvalidItem(t *testing.T) {
+	store := testStore(t)
+	writeQueue(t, store, Queue{Version: Version, Items: []Item{
+		testItem("", "../bad", "running", "not-a-time"),
+	}})
+	inspection := store.Inspect()
+	if inspection.State != "invalid" {
+		t.Fatalf("state = %q, want invalid", inspection.State)
+	}
+	if len(inspection.InvalidItems) < 4 {
+		t.Fatalf("invalid items = %#v, want multiple item diagnostics", inspection.InvalidItems)
+	}
+}
+
+func TestInspectDoesNotMutateQueueFile(t *testing.T) {
+	store := testStore(t)
+	writeRawQueue(t, store, `{"version":1,"items":[]}`)
+	before := readFile(t, store.QueuePath())
+	_ = store.Inspect()
+	after := readFile(t, store.QueuePath())
+	if before != after {
+		t.Fatalf("Inspect mutated queue file\nbefore: %s\nafter: %s", before, after)
+	}
+}
+
 func TestRemoveByID(t *testing.T) {
 	store := testStore(t)
 	first, err := store.Add("first")
@@ -171,4 +280,33 @@ func readFile(t *testing.T, path string) string {
 		t.Fatal(err)
 	}
 	return string(data)
+}
+
+func writeQueue(t *testing.T, store Store, queue Queue) {
+	t.Helper()
+	if err := store.Store.WriteJSON(FileName, queue); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func writeRawQueue(t *testing.T, store Store, contents string) {
+	t.Helper()
+	if err := os.MkdirAll(store.Store.BrevityRoot(), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(store.QueuePath(), []byte(contents), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func testItem(id, task, status, createdAt string) Item {
+	return Item{
+		ID:        id,
+		Task:      task,
+		Provider:  "gemini",
+		Profile:   "default",
+		Status:    status,
+		CreatedAt: createdAt,
+		UpdatedAt: createdAt,
+	}
 }
