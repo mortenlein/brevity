@@ -41,6 +41,8 @@ go run ./cmd/brevity execution mark-ready <execution-id>
 go run ./cmd/brevity execution mark-planned <execution-id>
 go run ./cmd/brevity execution preflight <execution-id>
 go run ./cmd/brevity execution preflight <execution-id> --json
+go run ./cmd/brevity execution launch-dry-run <execution-id>
+go run ./cmd/brevity execution launch-dry-run <execution-id> --json
 go run ./cmd/brevity scheduler plan-execution
 ```
 
@@ -84,6 +86,18 @@ Preflight does not write any runtime file. It does not start providers, spawn
 workers, start the supervisor, drain the queue, mutate task state, create run
 history, or mark an execution running, succeeded, or failed.
 
+`execution launch-dry-run <execution-id>` is the provider launch preparation
+contract. It first runs the same read-only execution preflight checks, then
+loads task metadata, resolves provider/profile configuration, resolves the
+expected worktree and prompt paths, and builds the argv-style provider launch
+intent that a later launch contract may consume.
+
+Launch dry-run is payload preparation only. It prints what would be launched,
+including provider, profile, worktree, prompt, command argv, and dry-run mode.
+It does not call provider binaries, create subprocesses, start workers, start
+the supervisor, mutate queue/task/execution state, create run history, or add
+running/succeeded/failed statuses.
+
 Human output reports each check clearly:
 
 ```text
@@ -110,6 +124,12 @@ Compact JSON output is available with `--json`:
 {"executionId":"exec-20260522T120000-abc123ef","task":"some-task","status":"ready","passed":true,"checks":[{"name":"execution exists","passed":true}]}
 ```
 
+Launch dry-run JSON is compact and uses argv-style command arrays:
+
+```json
+{"executionId":"exec-20260522T120000-abc123ef","task":"some-task","status":"ready","launchEligible":true,"provider":"gemini","profile":"default","command":["gemini","-p","C:\\worktrees\\active\\some-task\\prompt.md"],"checks":[{"name":"execution exists","passed":true}]}
+```
+
 ## Reservation vs Execution Plan
 
 A queue reservation records orchestration ownership intent on
@@ -130,8 +150,9 @@ Execution records do not launch Codex, Gemini, Copilot, or any worker process.
 They do not create logs, append `.brevity\runs.jsonl`, change task metadata, or
 mark a task as running, succeeded, or failed.
 
-Provider execution will be introduced by a later contract. That future layer can
-consume ready execution records, but it must add its own explicit state
+Launch dry-run is still not provider execution. It is the final preview layer
+between `ready` execution records and a later provider launch contract. Provider
+execution will be introduced by a separate contract with its own explicit state
 transition and safety checks.
 
 ## Lifecycle
@@ -169,10 +190,10 @@ Execution records must never:
 - mark success or failure
 - introduce running, completed, succeeded, or failed statuses
 
-`execution list`, `execution inspect`, and `execution preflight` are read-only.
-`execution plan-from-reservation`, `execution mark-ready`, and `execution
-mark-planned` write only `.brevity\runtime-executions.json` and its advisory
-lock file.
+`execution list`, `execution inspect`, `execution preflight`, and
+`execution launch-dry-run` are read-only. `execution plan-from-reservation`,
+`execution mark-ready`, and `execution mark-planned` write only
+`.brevity\runtime-executions.json` and its advisory lock file.
 
 ## Non-Goals
 

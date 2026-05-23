@@ -22,6 +22,7 @@ import (
 	"github.com/mortenlein/brevity/internal/dashboard"
 	"github.com/mortenlein/brevity/internal/diagnostics"
 	"github.com/mortenlein/brevity/internal/preflight"
+	"github.com/mortenlein/brevity/internal/providers"
 	"github.com/mortenlein/brevity/internal/runmaintenance"
 	runtimeexecution "github.com/mortenlein/brevity/internal/runtime/execution"
 	runtimequeue "github.com/mortenlein/brevity/internal/runtime/queue"
@@ -43,55 +44,56 @@ func main() {
 type commandKind string
 
 const (
-	commandDashboard            commandKind = commandKind(commands.DashboardID)
-	commandRuntimeState         commandKind = commandKind(commands.RuntimeStateID)
-	commandRuntimeStart         commandKind = commandKind(commands.RuntimeStartID)
-	commandRuntimeStop          commandKind = commandKind(commands.RuntimeStopID)
-	commandRuntimeStatus        commandKind = commandKind(commands.RuntimeStatusID)
-	commandQueueAdd             commandKind = commandKind(commands.QueueAddID)
-	commandQueueList            commandKind = commandKind(commands.QueueListID)
-	commandQueueInspect         commandKind = commandKind(commands.QueueInspectID)
-	commandQueuePlan            commandKind = commandKind(commands.QueuePlanID)
-	commandQueueRemove          commandKind = commandKind(commands.QueueRemoveID)
-	commandQueueReserve         commandKind = commandKind(commands.QueueReserveID)
-	commandQueueUnreserve       commandKind = commandKind(commands.QueueUnreserveID)
-	commandSchedulerPlan        commandKind = commandKind(commands.SchedulerPlanID)
-	commandSchedulerReserveNext commandKind = commandKind(commands.SchedulerReserveNextID)
-	commandSchedulerPlanExec    commandKind = commandKind(commands.SchedulerPlanExecutionID)
-	commandExecutionList        commandKind = commandKind(commands.ExecutionListID)
-	commandExecutionInspect     commandKind = commandKind(commands.ExecutionInspectID)
-	commandExecutionPlan        commandKind = commandKind(commands.ExecutionPlanFromReservationID)
-	commandExecutionMarkReady   commandKind = commandKind(commands.ExecutionMarkReadyID)
-	commandExecutionMarkPlanned commandKind = commandKind(commands.ExecutionMarkPlannedID)
-	commandExecutionPreflight   commandKind = commandKind(commands.ExecutionPreflightID)
-	commandProviderStatus       commandKind = commandKind(commands.ProviderStatusID)
-	commandProviderSet          commandKind = commandKind(commands.ProviderSetID)
-	commandProviderReset        commandKind = commandKind(commands.ProviderResetID)
-	commandInit                 commandKind = commandKind(commands.InitID)
-	commandContextRefresh       commandKind = commandKind(commands.TaskContextRefreshID)
-	commandTaskStatus           commandKind = commandKind(commands.TaskStatusID)
-	commandDoctor               commandKind = commandKind(commands.DoctorID)
-	commandTaskCleanup          commandKind = commandKind(commands.TaskCleanupID)
-	commandTaskMerge            commandKind = commandKind(commands.TaskMergeID)
-	commandTaskPreflight        commandKind = "task-preflight"
-	commandTaskNew              commandKind = commandKind(commands.TaskNewID)
-	commandTaskActivate         commandKind = commandKind(commands.TaskActivateID)
-	commandTaskSpec             commandKind = commandKind(commands.TaskSpecID)
-	commandTaskStart            commandKind = commandKind(commands.TaskStartID)
-	commandTaskRun              commandKind = commandKind(commands.TaskRunID)
-	commandTaskRuntimeInfo      commandKind = commandKind(commands.TaskRuntimeInfoID)
-	commandTaskDetail           commandKind = commandKind(commands.TaskDetailID)
-	commandTaskRuns             commandKind = commandKind(commands.TaskRunsID)
-	commandRunsReconcile        commandKind = commandKind(commands.TaskRunsReconcileID)
-	commandRunsRetention        commandKind = commandKind(commands.TaskRunsRetentionID)
-	commandRunsCompact          commandKind = commandKind(commands.TaskRunsCompactID)
-	commandRunsInspect          commandKind = "runs-inspect"
-	commandRunsNativeCompact    commandKind = "runs-compact"
-	commandCleanupInspect       commandKind = commandKind(commands.CleanupInspectID)
-	commandCleanupPlan          commandKind = commandKind(commands.CleanupPlanID)
-	commandCleanupExecute       commandKind = commandKind(commands.CleanupExecuteID)
-	commandSupportMatrix        commandKind = "support-matrix"
-	commandCmux                 commandKind = "cmux"
+	commandDashboard             commandKind = commandKind(commands.DashboardID)
+	commandRuntimeState          commandKind = commandKind(commands.RuntimeStateID)
+	commandRuntimeStart          commandKind = commandKind(commands.RuntimeStartID)
+	commandRuntimeStop           commandKind = commandKind(commands.RuntimeStopID)
+	commandRuntimeStatus         commandKind = commandKind(commands.RuntimeStatusID)
+	commandQueueAdd              commandKind = commandKind(commands.QueueAddID)
+	commandQueueList             commandKind = commandKind(commands.QueueListID)
+	commandQueueInspect          commandKind = commandKind(commands.QueueInspectID)
+	commandQueuePlan             commandKind = commandKind(commands.QueuePlanID)
+	commandQueueRemove           commandKind = commandKind(commands.QueueRemoveID)
+	commandQueueReserve          commandKind = commandKind(commands.QueueReserveID)
+	commandQueueUnreserve        commandKind = commandKind(commands.QueueUnreserveID)
+	commandSchedulerPlan         commandKind = commandKind(commands.SchedulerPlanID)
+	commandSchedulerReserveNext  commandKind = commandKind(commands.SchedulerReserveNextID)
+	commandSchedulerPlanExec     commandKind = commandKind(commands.SchedulerPlanExecutionID)
+	commandExecutionList         commandKind = commandKind(commands.ExecutionListID)
+	commandExecutionInspect      commandKind = commandKind(commands.ExecutionInspectID)
+	commandExecutionPlan         commandKind = commandKind(commands.ExecutionPlanFromReservationID)
+	commandExecutionMarkReady    commandKind = commandKind(commands.ExecutionMarkReadyID)
+	commandExecutionMarkPlanned  commandKind = commandKind(commands.ExecutionMarkPlannedID)
+	commandExecutionPreflight    commandKind = commandKind(commands.ExecutionPreflightID)
+	commandExecutionLaunchDryRun commandKind = commandKind(commands.ExecutionLaunchDryRunID)
+	commandProviderStatus        commandKind = commandKind(commands.ProviderStatusID)
+	commandProviderSet           commandKind = commandKind(commands.ProviderSetID)
+	commandProviderReset         commandKind = commandKind(commands.ProviderResetID)
+	commandInit                  commandKind = commandKind(commands.InitID)
+	commandContextRefresh        commandKind = commandKind(commands.TaskContextRefreshID)
+	commandTaskStatus            commandKind = commandKind(commands.TaskStatusID)
+	commandDoctor                commandKind = commandKind(commands.DoctorID)
+	commandTaskCleanup           commandKind = commandKind(commands.TaskCleanupID)
+	commandTaskMerge             commandKind = commandKind(commands.TaskMergeID)
+	commandTaskPreflight         commandKind = "task-preflight"
+	commandTaskNew               commandKind = commandKind(commands.TaskNewID)
+	commandTaskActivate          commandKind = commandKind(commands.TaskActivateID)
+	commandTaskSpec              commandKind = commandKind(commands.TaskSpecID)
+	commandTaskStart             commandKind = commandKind(commands.TaskStartID)
+	commandTaskRun               commandKind = commandKind(commands.TaskRunID)
+	commandTaskRuntimeInfo       commandKind = commandKind(commands.TaskRuntimeInfoID)
+	commandTaskDetail            commandKind = commandKind(commands.TaskDetailID)
+	commandTaskRuns              commandKind = commandKind(commands.TaskRunsID)
+	commandRunsReconcile         commandKind = commandKind(commands.TaskRunsReconcileID)
+	commandRunsRetention         commandKind = commandKind(commands.TaskRunsRetentionID)
+	commandRunsCompact           commandKind = commandKind(commands.TaskRunsCompactID)
+	commandRunsInspect           commandKind = "runs-inspect"
+	commandRunsNativeCompact     commandKind = "runs-compact"
+	commandCleanupInspect        commandKind = commandKind(commands.CleanupInspectID)
+	commandCleanupPlan           commandKind = commandKind(commands.CleanupPlanID)
+	commandCleanupExecute        commandKind = commandKind(commands.CleanupExecuteID)
+	commandSupportMatrix         commandKind = "support-matrix"
+	commandCmux                  commandKind = "cmux"
 )
 
 type cliOptions struct {
@@ -127,6 +129,20 @@ type cliOptions struct {
 	cmuxHandoff       bool
 	cmuxMergeReport   bool
 	cmuxBlockedReport bool
+}
+
+type executionLaunchDryRunResult struct {
+	ExecutionID    string                            `json:"executionId"`
+	Task           string                            `json:"task,omitempty"`
+	Status         string                            `json:"status,omitempty"`
+	LaunchEligible bool                              `json:"launchEligible"`
+	Provider       string                            `json:"provider,omitempty"`
+	Profile        string                            `json:"profile,omitempty"`
+	Worktree       string                            `json:"worktree,omitempty"`
+	Prompt         string                            `json:"prompt,omitempty"`
+	Command        []string                          `json:"command,omitempty"`
+	Checks         []runtimeexecution.PreflightCheck `json:"checks"`
+	Reason         string                            `json:"reason,omitempty"`
 }
 
 type actionCall func() ([]byte, error)
@@ -289,7 +305,7 @@ func parseQueueOptions(args []string) (cliOptions, error) {
 
 func parseExecutionOptions(args []string) (cliOptions, error) {
 	if len(args) < 2 {
-		return cliOptions{}, fmt.Errorf("missing execution command: supported commands: list, inspect, plan-from-reservation, mark-ready, mark-planned, preflight")
+		return cliOptions{}, fmt.Errorf("missing execution command: supported commands: list, inspect, plan-from-reservation, mark-ready, mark-planned, preflight, launch-dry-run")
 	}
 	switch args[1] {
 	case "list":
@@ -337,8 +353,24 @@ func parseExecutionOptions(args []string) (cliOptions, error) {
 			return cliOptions{}, usageError(commands.ExecutionPreflight)
 		}
 		return options, nil
+	case "launch-dry-run":
+		options := cliOptions{kind: commandExecutionLaunchDryRun}
+		for _, arg := range args[2:] {
+			switch {
+			case arg == "--json":
+				options.json = true
+			case strings.HasPrefix(arg, "-") || strings.TrimSpace(options.candidateID) != "":
+				return cliOptions{}, usageError(commands.ExecutionLaunchDryRun)
+			default:
+				options.candidateID = arg
+			}
+		}
+		if strings.TrimSpace(options.candidateID) == "" {
+			return cliOptions{}, usageError(commands.ExecutionLaunchDryRun)
+		}
+		return options, nil
 	default:
-		return cliOptions{}, fmt.Errorf("unsupported execution command %q: supported commands: list, inspect, plan-from-reservation, mark-ready, mark-planned, preflight", args[1])
+		return cliOptions{}, fmt.Errorf("unsupported execution command %q: supported commands: list, inspect, plan-from-reservation, mark-ready, mark-planned, preflight, launch-dry-run", args[1])
 	}
 }
 
@@ -1026,7 +1058,7 @@ func runWithContextOptions(ctx context.Context, stdout io.Writer, client runtime
 		return routeQueueCommand(stdout, options)
 	case commandSchedulerPlan, commandSchedulerReserveNext, commandSchedulerPlanExec:
 		return routeSchedulerCommand(stdout, options)
-	case commandExecutionList, commandExecutionInspect, commandExecutionPlan, commandExecutionMarkReady, commandExecutionMarkPlanned, commandExecutionPreflight:
+	case commandExecutionList, commandExecutionInspect, commandExecutionPlan, commandExecutionMarkReady, commandExecutionMarkPlanned, commandExecutionPreflight, commandExecutionLaunchDryRun:
 		return routeExecutionCommand(stdout, options)
 	case commandProviderStatus, commandProviderSet, commandProviderReset:
 		return routeProviderCommand(stdout, options)
@@ -1178,9 +1210,105 @@ func routeExecutionCommand(stdout io.Writer, options cliOptions) error {
 			return fmt.Errorf("execution preflight failed: %s", result.Reason)
 		}
 		return nil
+	case commandExecutionLaunchDryRun:
+		result, err := buildExecutionLaunchDryRun(store, options.candidateID)
+		if err != nil {
+			return err
+		}
+		if options.json {
+			output, err := json.Marshal(result)
+			if err != nil {
+				return err
+			}
+			if _, err := stdout.Write(append(output, '\n')); err != nil {
+				return err
+			}
+			if !result.LaunchEligible {
+				return fmt.Errorf("execution launch dry run failed: %s", result.Reason)
+			}
+			return nil
+		}
+		renderExecutionLaunchDryRun(stdout, result)
+		if !result.LaunchEligible {
+			return fmt.Errorf("execution launch dry run failed: %s", result.Reason)
+		}
+		return nil
 	default:
 		return fmt.Errorf("unsupported execution command: %s", options.kind)
 	}
+}
+
+func buildExecutionLaunchDryRun(execStore runtimeexecution.Store, executionID string) (executionLaunchDryRunResult, error) {
+	preflightResult, err := execStore.Preflight(executionID)
+	if err != nil {
+		return executionLaunchDryRunResult{}, err
+	}
+	result := executionLaunchDryRunResult{
+		ExecutionID: preflightResult.ExecutionID,
+		Task:        preflightResult.Task,
+		Status:      preflightResult.Status,
+		Checks:      preflightResult.Checks,
+		Reason:      preflightResult.Reason,
+	}
+	if !preflightResult.Passed {
+		return result, nil
+	}
+
+	store := execStore.Store
+	tasks, _, err := state.LoadTasks(store)
+	if err != nil {
+		return result, err
+	}
+	task, ok := findLaunchDryRunTask(tasks, preflightResult.Task)
+	if !ok {
+		result.Reason = "task not found: " + preflightResult.Task
+		result.Checks = append(result.Checks, runtimeexecution.PreflightCheck{Name: "task metadata exists", Passed: false, Reason: result.Reason})
+		return result, nil
+	}
+	result.Checks = append(result.Checks, runtimeexecution.PreflightCheck{Name: "task metadata exists", Passed: true})
+
+	config, configWarnings := providers.ReadRunConfig(store)
+	result.Checks = append(result.Checks, runtimeexecution.PreflightCheck{Name: "provider config readable", Passed: true})
+
+	health, missing, err := state.LoadProviderHealth(store)
+	if err != nil {
+		result.Reason = err.Error()
+		result.Checks = append(result.Checks, runtimeexecution.PreflightCheck{Name: "provider health readable", Passed: false, Reason: result.Reason})
+		return result, nil
+	}
+	if missing {
+		health = state.ProviderHealthState{}
+	}
+	worker, resolverWarnings, resolverBlockers := providers.Resolve(config, task.Provider, task.Profile, "", health)
+	if len(resolverBlockers) > 0 {
+		result.Reason = resolverBlockers[0].Message
+		result.Checks = append(result.Checks, runtimeexecution.PreflightCheck{Name: "provider profile resolves", Passed: false, Reason: result.Reason})
+		return result, nil
+	}
+	result.Checks = append(result.Checks, runtimeexecution.PreflightCheck{Name: "provider profile resolves", Passed: true})
+
+	worktreePath := firstLaunchDryRunNonEmpty(task.WorktreePath, launchDryRunWorktreePath(task.Worktree))
+	promptPath := firstLaunchDryRunNonEmpty(task.PromptPath, launchDryRunPromptPath(task.Prompt))
+	command, commandBlocker := actions.PlanWorkerCommand(worker, worktreePath, promptPath)
+	if commandBlocker != nil {
+		result.Reason = commandBlocker.Message
+		result.Checks = append(result.Checks, runtimeexecution.PreflightCheck{Name: "launch payload builds", Passed: false, Reason: result.Reason})
+		return result, nil
+	}
+	if len(configWarnings) > 0 {
+		result.Checks = append(result.Checks, runtimeexecution.PreflightCheck{Name: "provider config defaults", Passed: true, Reason: configWarnings[0].Message})
+	}
+	if len(resolverWarnings) > 0 {
+		result.Checks = append(result.Checks, runtimeexecution.PreflightCheck{Name: "provider warnings reviewed", Passed: true, Reason: resolverWarnings[0].Message})
+	}
+	result.Checks = append(result.Checks, runtimeexecution.PreflightCheck{Name: "launch payload builds", Passed: true})
+	result.Provider = worker.Provider
+	result.Profile = worker.Profile
+	result.Worktree = worktreePath
+	result.Prompt = promptPath
+	result.Command = append([]string{command.Command}, command.Arguments...)
+	result.LaunchEligible = true
+	return result, nil
 }
 
 func executionStatusCounts(records []runtimeexecution.Record) map[string]int {
@@ -1193,6 +1321,86 @@ func executionStatusCounts(records []runtimeexecution.Record) map[string]int {
 		counts[status]++
 	}
 	return counts
+}
+
+func renderExecutionLaunchDryRun(stdout io.Writer, result executionLaunchDryRunResult) {
+	fmt.Fprintln(stdout, "EXECUTION LAUNCH DRY RUN")
+	fmt.Fprintln(stdout)
+	fmt.Fprintf(stdout, "Execution: %s\n", result.ExecutionID)
+	fmt.Fprintf(stdout, "Task: %s\n", fallbackDash(result.Task))
+	fmt.Fprintf(stdout, "Status: %s\n", fallbackDash(result.Status))
+	fmt.Fprintln(stdout)
+	fmt.Fprintln(stdout, "Preflight:")
+	for _, check := range result.Checks {
+		status := "failed"
+		if check.Passed {
+			status = "ok"
+		}
+		fmt.Fprintf(stdout, "- %s: %s\n", check.Name, status)
+	}
+	fmt.Fprintln(stdout)
+	fmt.Fprintln(stdout, "Launch intent:")
+	fmt.Fprintf(stdout, "- provider: %s\n", fallbackDash(result.Provider))
+	fmt.Fprintf(stdout, "- profile: %s\n", fallbackDash(result.Profile))
+	fmt.Fprintf(stdout, "- worktree: %s\n", fallbackDash(result.Worktree))
+	fmt.Fprintf(stdout, "- prompt: %s\n", fallbackDash(result.Prompt))
+	fmt.Fprintf(stdout, "- command: %s\n", fallbackDash(formatLaunchDryRunCommand(result.Command)))
+	fmt.Fprintln(stdout, "- execution mode: dry-run only")
+	fmt.Fprintln(stdout)
+	if result.LaunchEligible {
+		fmt.Fprintln(stdout, "Result:")
+		fmt.Fprintln(stdout, "launch eligible")
+	} else {
+		fmt.Fprintln(stdout, "Result:")
+		fmt.Fprintln(stdout, "launch blocked")
+		fmt.Fprintf(stdout, "Reason: %s\n", result.Reason)
+	}
+	fmt.Fprintln(stdout)
+	fmt.Fprintln(stdout, "NO PROVIDER WAS STARTED.")
+}
+
+func findLaunchDryRunTask(tasks state.Tasks, slug string) (state.Task, bool) {
+	for _, task := range tasks.Items {
+		if task.Key() == strings.TrimSpace(slug) {
+			return task, true
+		}
+	}
+	return state.Task{}, false
+}
+
+func firstLaunchDryRunNonEmpty(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return strings.TrimSpace(value)
+		}
+	}
+	return ""
+}
+
+func launchDryRunWorktreePath(worktree *state.TaskWorktree) string {
+	if worktree == nil {
+		return ""
+	}
+	return worktree.Path
+}
+
+func launchDryRunPromptPath(prompt *state.TaskPrompt) string {
+	if prompt == nil {
+		return ""
+	}
+	return prompt.Path
+}
+
+func formatLaunchDryRunCommand(parts []string) string {
+	quoted := make([]string, 0, len(parts))
+	for _, part := range parts {
+		if strings.ContainsAny(part, " \t\"") {
+			quoted = append(quoted, `"`+strings.ReplaceAll(part, `"`, `\"`)+`"`)
+		} else {
+			quoted = append(quoted, part)
+		}
+	}
+	return strings.Join(quoted, " ")
 }
 
 func renderExecutionTransition(stdout io.Writer, title string, path string, result runtimeexecution.TransitionResult) {

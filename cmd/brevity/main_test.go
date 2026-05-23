@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -570,6 +571,89 @@ func TestExecutionPreflightJSONFailsForPlannedExecution(t *testing.T) {
 		if !strings.Contains(output, want) {
 			t.Fatalf("json output missing %q:\n%s", want, output)
 		}
+	}
+}
+
+func TestExecutionLaunchDryRunPassesForReadyExecution(t *testing.T) {
+	repoRoot := tempRepoWithLaunchDryRunFixture(t, runtimeexecution.StatusReady, "gemini", "default")
+	t.Chdir(repoRoot)
+	before := snapshotLaunchDryRunState(t, repoRoot)
+
+	var stdout bytes.Buffer
+	client := &fakeRuntimeClient{}
+	if err := runWithOptions(&stdout, client, cliOptions{kind: commandExecutionLaunchDryRun, candidateID: "exec-1"}); err != nil {
+		t.Fatalf("runWithOptions returned error: %v", err)
+	}
+	if len(client.calls) != 0 {
+		t.Fatalf("calls = %#v, want no PowerShell/provider execution calls", client.calls)
+	}
+
+	output := stdout.String()
+	for _, want := range []string{"EXECUTION LAUNCH DRY RUN", "Execution: exec-1", "Task: alpha", "Status: ready", "- provider: gemini", "- profile: default", "- command: gemini", "launch eligible", "NO PROVIDER WAS STARTED."} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("output missing %q:\n%s", want, output)
+		}
+	}
+	assertLaunchDryRunStateUnchanged(t, repoRoot, before)
+}
+
+func TestExecutionLaunchDryRunJSONResolvesProviderAndArgvPayload(t *testing.T) {
+	repoRoot := tempRepoWithLaunchDryRunFixture(t, runtimeexecution.StatusReady, "gemini", "gemini-flash")
+	t.Chdir(repoRoot)
+
+	var stdout bytes.Buffer
+	if err := runWithOptions(&stdout, &fakeRuntimeClient{}, cliOptions{kind: commandExecutionLaunchDryRun, candidateID: "exec-1", json: true}); err != nil {
+		t.Fatalf("runWithOptions returned error: %v", err)
+	}
+
+	var result executionLaunchDryRunResult
+	if err := json.Unmarshal(bytes.TrimSpace(stdout.Bytes()), &result); err != nil {
+		t.Fatalf("json unmarshal failed: %v\n%s", err, stdout.String())
+	}
+	if !result.LaunchEligible || result.Provider != "gemini" || result.Profile != "gemini-flash" {
+		t.Fatalf("result = %#v", result)
+	}
+	if len(result.Command) < 2 || result.Command[0] != "gemini" || result.Command[len(result.Command)-2] != "-p" || !strings.HasSuffix(result.Command[len(result.Command)-1], "prompt.md") {
+		t.Fatalf("command = %#v", result.Command)
+	}
+}
+
+func TestExecutionLaunchDryRunFailsForNonReadyExecution(t *testing.T) {
+	repoRoot := tempRepoWithLaunchDryRunFixture(t, runtimeexecution.StatusPlanned, "gemini", "default")
+	t.Chdir(repoRoot)
+	before := snapshotLaunchDryRunState(t, repoRoot)
+
+	var stdout bytes.Buffer
+	err := runWithOptions(&stdout, &fakeRuntimeClient{}, cliOptions{kind: commandExecutionLaunchDryRun, candidateID: "exec-1"})
+	if err == nil {
+		t.Fatal("runWithOptions returned nil error")
+	}
+	if !strings.Contains(err.Error(), "execution launch dry run failed") || !strings.Contains(stdout.String(), "launch blocked") {
+		t.Fatalf("unexpected err/output:\nerr=%v\n%s", err, stdout.String())
+	}
+	assertLaunchDryRunStateUnchanged(t, repoRoot, before)
+}
+
+func TestExecutionLaunchDryRunFailsFailedPreflight(t *testing.T) {
+	repoRoot := tempRepoWithLaunchDryRunFixture(t, runtimeexecution.StatusReady, "gemini", "default")
+	t.Chdir(repoRoot)
+	queue := readMainTestQueue(t, repoRoot)
+	queue.Items[0].Reservation.ReservationID = "res-other"
+	store, err := state.NewStore(repoRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.WriteJSON(runtimequeue.FileName, queue); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout bytes.Buffer
+	err = runWithOptions(&stdout, &fakeRuntimeClient{}, cliOptions{kind: commandExecutionLaunchDryRun, candidateID: "exec-1"})
+	if err == nil {
+		t.Fatal("runWithOptions returned nil error")
+	}
+	if !strings.Contains(stdout.String(), "- reservation matches: failed") {
+		t.Fatalf("output missing failed preflight:\n%s", stdout.String())
 	}
 }
 
@@ -1842,6 +1926,59 @@ func mainTestExecutionRecord(id string, queueItemID string, task string, reserva
 		Status:        status,
 		CreatedAt:     "2026-05-22T12:00:00Z",
 		UpdatedAt:     "2026-05-22T12:00:00Z",
+	}
+}
+
+func tempRepoWithLaunchDryRunFixture(t *testing.T, status string, provider string, profile string) string {
+	t.Helper()
+	repoRoot := tempRepoWithQueue(t, runtimequeue.Queue{Version: runtimequeue.Version, Items: []runtimequeue.Item{mainTestReservedQueueItem("queue-1", "alpha", "res-alpha")}})
+	worktree := filepath.Join(repoRoot, "worktrees", "active", "alpha")
+	if err := os.MkdirAll(worktree, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	promptPath := filepath.Join(worktree, "prompt.md")
+	writeMainTestFile(t, promptPath, "# Alpha\n")
+	writeMainTestExecutions(t, repoRoot, runtimeexecution.Executions{Version: runtimeexecution.Version, Records: []runtimeexecution.Record{
+		mainTestExecutionRecord("exec-1", "queue-1", "alpha", "res-alpha", status),
+	}})
+	writeMainTestFile(t, filepath.Join(repoRoot, ".brevity", state.TasksFile), fmt.Sprintf(`[{"slug":"alpha","status":"ready-for-worker","worktreePath":%q,"promptPath":%q,"provider":%q,"profile":%q}]`+"\n", worktree, promptPath, provider, profile))
+	writeMainTestFile(t, filepath.Join(repoRoot, ".brevity", state.ConfigFile), `{"defaultProvider":"codex","providers":{"gemini":{"command":"gemini","approvalMode":"yolo","skipTrust":true}}}`+"\n")
+	writeMainTestFile(t, filepath.Join(repoRoot, ".brevity", state.ProviderHealthFile), `{"gemini":{"status":"healthy","note":"","updatedAt":"2026-05-22T12:00:00Z"}}`+"\n")
+	return repoRoot
+}
+
+type launchDryRunStateSnapshot struct {
+	queue      string
+	execution  string
+	tasks      string
+	runsExists bool
+}
+
+func snapshotLaunchDryRunState(t *testing.T, repoRoot string) launchDryRunStateSnapshot {
+	t.Helper()
+	_, runsErr := os.Stat(filepath.Join(repoRoot, ".brevity", "runs.jsonl"))
+	return launchDryRunStateSnapshot{
+		queue:      readMainTestFile(t, filepath.Join(repoRoot, ".brevity", runtimequeue.FileName)),
+		execution:  readMainTestFile(t, filepath.Join(repoRoot, ".brevity", runtimeexecution.FileName)),
+		tasks:      readMainTestFile(t, filepath.Join(repoRoot, ".brevity", state.TasksFile)),
+		runsExists: !os.IsNotExist(runsErr),
+	}
+}
+
+func assertLaunchDryRunStateUnchanged(t *testing.T, repoRoot string, before launchDryRunStateSnapshot) {
+	t.Helper()
+	if after := readMainTestFile(t, filepath.Join(repoRoot, ".brevity", runtimequeue.FileName)); after != before.queue {
+		t.Fatalf("queue mutated\nbefore: %s\nafter: %s", before.queue, after)
+	}
+	if after := readMainTestFile(t, filepath.Join(repoRoot, ".brevity", runtimeexecution.FileName)); after != before.execution {
+		t.Fatalf("executions mutated\nbefore: %s\nafter: %s", before.execution, after)
+	}
+	if after := readMainTestFile(t, filepath.Join(repoRoot, ".brevity", state.TasksFile)); after != before.tasks {
+		t.Fatalf("tasks mutated\nbefore: %s\nafter: %s", before.tasks, after)
+	}
+	_, runsErr := os.Stat(filepath.Join(repoRoot, ".brevity", "runs.jsonl"))
+	if before.runsExists != !os.IsNotExist(runsErr) {
+		t.Fatalf("run history existence changed")
 	}
 }
 
