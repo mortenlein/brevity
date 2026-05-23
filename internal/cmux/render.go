@@ -19,7 +19,6 @@ const sectionSep = "---"
 // Every section degrades gracefully when its contract is unavailable.
 func Render(w io.Writer, snap Snapshot, opts RenderOptions) {
 	section := opts.effectiveSection()
-	limit := opts.effectiveLimit()
 
 	renderHeader(w, snap)
 
@@ -32,7 +31,7 @@ func Render(w io.Writer, snap Snapshot, opts RenderOptions) {
 		} else {
 			renderProviderHealth(w, snap)
 			renderTaskCounts(w, snap)
-			renderTopTasks(w, snap, limit)
+			renderTopTasks(w, snap, opts)
 		}
 		fmt.Fprintln(w, sectionSep)
 		renderQueueScheduler(w, snap)
@@ -55,7 +54,7 @@ func Render(w io.Writer, snap Snapshot, opts RenderOptions) {
 			fmt.Fprintln(w, "\nruntime-state: unavailable")
 		} else {
 			renderTaskCounts(w, snap)
-			renderTopTasks(w, snap, limit)
+			renderTopTasks(w, snap, opts)
 		}
 
 	case SectionQueue:
@@ -117,21 +116,90 @@ func renderTaskCounts(w io.Writer, snap Snapshot) {
 		tc.Tracked, tc.Runnable, tc.Blocked, tc.Stale, tc.Review)
 }
 
-// renderTopTasks renders each task with its slug, normalized state, worktree
-// presence/path, prompt path, and last-run summary.  At most limit tasks are
-// shown; when the list is truncated a "(showing N of M)" header is emitted.
-func renderTopTasks(w io.Writer, snap Snapshot, limit int) {
+// filterTasks applies TaskSlug and StateFilter from opts to tasks.
+// It returns the filtered slice and a human-readable active-filter description
+// (empty string when no filters are set).
+// TaskSlug filter applies first (exact match); StateFilter applies second
+// (case-insensitive match against normalised state, falling back to status).
+func filterTasks(tasks []contracts.TaskSummary, opts RenderOptions) ([]contracts.TaskSummary, string) {
+	slug := strings.TrimSpace(opts.TaskSlug)
+	state := strings.TrimSpace(opts.StateFilter)
+	if slug == "" && state == "" {
+		return tasks, ""
+	}
+
+	filtered := tasks
+	if slug != "" {
+		var matched []contracts.TaskSummary
+		for _, t := range filtered {
+			if t.Slug == slug {
+				matched = append(matched, t)
+			}
+		}
+		filtered = matched
+	}
+	if state != "" {
+		var matched []contracts.TaskSummary
+		for _, t := range filtered {
+			ns := strings.TrimSpace(t.NormalizedState)
+			if ns == "" {
+				ns = strings.TrimSpace(t.Status)
+			}
+			if strings.EqualFold(ns, state) {
+				matched = append(matched, t)
+			}
+		}
+		filtered = matched
+	}
+
+	// Build a compact filter description for use in empty-state messages.
+	var parts []string
+	if slug != "" {
+		parts = append(parts, fmt.Sprintf("task=%q", slug))
+	}
+	if state != "" {
+		parts = append(parts, fmt.Sprintf("state=%q", state))
+	}
+	return filtered, strings.Join(parts, " ")
+}
+
+// renderTopTasks renders each task with its slug, normalised state, worktree
+// presence/path, prompt path, and last-run summary.
+//
+// Filtering (TaskSlug, StateFilter) is applied first; the limit from opts caps
+// the number of rows shown.  When the list is truncated, a "(showing N of M)"
+// header is emitted.  Empty results after filtering produce a focused message
+// rather than a generic "none tracked" line.
+func renderTopTasks(w io.Writer, snap Snapshot, opts RenderOptions) {
 	tasks := snap.RuntimeState.Tasks
 	if len(tasks) == 0 {
 		fmt.Fprintln(w, "\nTask List: none tracked")
 		return
 	}
-	shown := tasks
+
+	filtered, filterDesc := filterTasks(tasks, opts)
+
+	if len(filtered) == 0 {
+		slug := strings.TrimSpace(opts.TaskSlug)
+		state := strings.TrimSpace(opts.StateFilter)
+		switch {
+		case slug != "" && state == "":
+			fmt.Fprintf(w, "\nTask List: task %q not found\n", slug)
+		case slug == "" && state != "":
+			fmt.Fprintf(w, "\nTask List: no tasks with state %q\n", state)
+		default:
+			fmt.Fprintf(w, "\nTask List: no tasks matching %s\n", filterDesc)
+		}
+		return
+	}
+
+	limit := opts.effectiveLimit()
+	shown := filtered
 	if limit > 0 && len(shown) > limit {
 		shown = shown[:limit]
-		fmt.Fprintf(w, "\nTask List  (showing %d of %d)\n", limit, len(tasks))
+		fmt.Fprintf(w, "\nTask List  (showing %d of %d)\n", limit, len(filtered))
 	} else {
-		fmt.Fprintf(w, "\nTask List  (%d)\n", len(tasks))
+		fmt.Fprintf(w, "\nTask List  (%d)\n", len(filtered))
 	}
 	for i, t := range shown {
 		if i > 0 {

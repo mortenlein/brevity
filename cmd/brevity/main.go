@@ -112,6 +112,8 @@ type cliOptions struct {
 	preflightAction preflight.Action
 	cmuxLimit       int
 	cmuxSection     string
+	cmuxTask        string
+	cmuxState       string
 }
 
 type actionCall func() ([]byte, error)
@@ -308,11 +310,13 @@ func parseCmuxOptions(args []string) (cliOptions, error) {
 	flags.SetOutput(io.Discard)
 	limit := flags.Int("limit", cmux.DefaultLimit, "maximum number of tasks to show")
 	section := flags.String("section", cmux.SectionAll, "section to render: all, providers, tasks, queue, actions")
+	task := flags.String("task", "", "filter task list to this exact task slug")
+	state := flags.String("state", "", "filter task list to tasks with this normalised state")
 	if err := flags.Parse(args[1:]); err != nil {
-		return cliOptions{}, fmt.Errorf("usage: brevity cmux [--limit <n>] [--section <name>]")
+		return cliOptions{}, fmt.Errorf("usage: brevity cmux [--limit <n>] [--section <name>] [--task <slug>] [--state <state>]")
 	}
 	if flags.NArg() > 0 {
-		return cliOptions{}, fmt.Errorf("usage: brevity cmux [--limit <n>] [--section <name>]")
+		return cliOptions{}, fmt.Errorf("usage: brevity cmux [--limit <n>] [--section <name>] [--task <slug>] [--state <state>]")
 	}
 	switch *section {
 	case cmux.SectionAll, cmux.SectionProviders, cmux.SectionTasks, cmux.SectionQueue, cmux.SectionActions:
@@ -323,14 +327,22 @@ func parseCmuxOptions(args []string) (cliOptions, error) {
 	if *limit <= 0 {
 		return cliOptions{}, fmt.Errorf("invalid --limit %d: must be greater than zero", *limit)
 	}
-	return cliOptions{kind: commandCmux, cmuxLimit: *limit, cmuxSection: *section}, nil
+	return cliOptions{
+		kind:        commandCmux,
+		cmuxLimit:   *limit,
+		cmuxSection: *section,
+		cmuxTask:    *task,
+		cmuxState:   *state,
+	}, nil
 }
 
 func routeCmuxCommand(stdout io.Writer, options cliOptions) error {
 	snap := cmux.Read(cmux.NativeFetcher{})
 	cmux.Render(stdout, snap, cmux.RenderOptions{
-		Limit:   options.cmuxLimit,
-		Section: options.cmuxSection,
+		Limit:       options.cmuxLimit,
+		Section:     options.cmuxSection,
+		TaskSlug:    options.cmuxTask,
+		StateFilter: options.cmuxState,
 	})
 	return nil
 }

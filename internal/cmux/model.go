@@ -25,8 +25,9 @@ const (
 	SectionActions   = "actions"
 )
 
-// RenderOptions controls which sections are rendered and how many tasks are shown.
-// The zero value selects all sections with the default task limit.
+// RenderOptions controls which sections are rendered, how many tasks are shown,
+// and optional task-level filters.  The zero value selects all sections with
+// the default task limit and no filtering.
 type RenderOptions struct {
 	// Limit is the maximum number of tasks to show in the task list.
 	// 0 or negative uses DefaultLimit.
@@ -36,6 +37,15 @@ type RenderOptions struct {
 	// Allowed values: "all", "providers", "tasks", "queue", "actions".
 	// Empty string and "all" both render every section.
 	Section string
+
+	// TaskSlug restricts the task list to the single task with this slug.
+	// Empty string disables slug filtering.
+	TaskSlug string
+
+	// StateFilter restricts the task list to tasks whose normalised state
+	// matches this value (case-insensitive exact match).
+	// Empty string disables state filtering.
+	StateFilter string
 }
 
 // effectiveLimit returns the active task limit, always >= 1.

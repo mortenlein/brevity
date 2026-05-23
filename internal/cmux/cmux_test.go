@@ -1067,6 +1067,293 @@ func TestRender_SectionTasks_WithLimit(t *testing.T) {
 	}
 }
 
+// --- RenderOptions: task filtering tests -----------------------------------
+
+// multiStateJSON returns a runtime-state fixture with four tasks covering
+// different normalised states, used to exercise task-level filters.
+// suggestedNextActions deliberately does not mention any task slugs so that
+// "must not contain slug" assertions on the full output remain valid.
+func multiStateJSON() []byte {
+	return []byte(`{
+		"schema": "brevity.runtime-state.v1",
+		"repoRoot": "/dev/test",
+		"generatedAt": "2026-01-01T00:00:00Z",
+		"providers": {
+			"summary": {"total": 1, "degraded": 0, "unavailable": 0},
+			"health": {"codex": {"status": "healthy", "updatedAt": "", "note": ""}}
+		},
+		"taskCounts": {"tracked": 4, "runnable": 1, "blocked": 1, "stale": 0, "providerGated": 0, "review": 1},
+		"tasks": [
+			{"slug": "task-ready",    "status": "ready-for-worker", "normalizedState": "ready-for-worker", "workerStatus": "",          "branch": "task/task-ready",    "worktreePath": ""},
+			{"slug": "task-review",   "status": "reviewing",        "normalizedState": "reviewing",        "workerStatus": "succeeded", "branch": "task/task-review",   "worktreePath": ""},
+			{"slug": "task-blocked",  "status": "blocked",          "normalizedState": "blocked",          "workerStatus": "",          "branch": "task/task-blocked",  "worktreePath": ""},
+			{"slug": "task-merged",   "status": "merged",           "normalizedState": "merged",           "workerStatus": "succeeded", "branch": "task/task-merged",   "worktreePath": ""}
+		],
+		"suggestedNextActions": ["Review your task status."],
+		"orphanedTaskWorktrees": [],
+		"activeWorktrees": [],
+		"activeWorktreeCount": 0,
+		"groups": {}
+	}`)
+}
+
+func TestFilter_TaskSlug_Found(t *testing.T) {
+	snap := cmux.Read(stubFetcher{
+		stateJSON:     multiStateJSON(),
+		schedulerJSON: minimalSchedulerJSON(),
+	})
+	out := renderSnapshotOpts(snap, cmux.RenderOptions{TaskSlug: "task-review"})
+	if !strings.Contains(out, "task-review") {
+		t.Error("slug filter missing task-review")
+	}
+	if strings.Contains(out, "task-ready") {
+		t.Error("slug filter must not contain task-ready")
+	}
+	if strings.Contains(out, "task-blocked") {
+		t.Error("slug filter must not contain task-blocked")
+	}
+	if strings.Contains(out, "task-merged") {
+		t.Error("slug filter must not contain task-merged")
+	}
+}
+
+func TestFilter_TaskSlug_NotFound(t *testing.T) {
+	snap := cmux.Read(stubFetcher{
+		stateJSON:     multiStateJSON(),
+		schedulerJSON: minimalSchedulerJSON(),
+	})
+	out := renderSnapshotOpts(snap, cmux.RenderOptions{TaskSlug: "no-such-task"})
+	if !strings.Contains(out, `"no-such-task" not found`) {
+		t.Errorf("missing not-found message; output:\n%s", out)
+	}
+	// Task List section must still be present.
+	if !strings.Contains(out, "Task List") {
+		t.Error("Task List heading must still appear for not-found slug")
+	}
+}
+
+func TestFilter_TaskSlug_EmptyTaskStore(t *testing.T) {
+	// When the task store is empty (no tasks), slug filter still shows "none tracked".
+	emptyState := []byte(`{
+		"schema": "brevity.runtime-state.v1",
+		"repoRoot": "/dev/test",
+		"generatedAt": "2026-01-01T00:00:00Z",
+		"providers": {"summary": {"total": 0, "degraded": 0, "unavailable": 0}, "health": {}},
+		"taskCounts": {"tracked": 0, "runnable": 0, "blocked": 0, "stale": 0, "providerGated": 0, "review": 0},
+		"tasks": [],
+		"suggestedNextActions": [],
+		"orphanedTaskWorktrees": [],
+		"activeWorktrees": [],
+		"activeWorktreeCount": 0,
+		"groups": {}
+	}`)
+	snap := cmux.Read(stubFetcher{
+		stateJSON:     emptyState,
+		schedulerJSON: minimalSchedulerJSON(),
+	})
+	out := renderSnapshotOpts(snap, cmux.RenderOptions{TaskSlug: "anything"})
+	if !strings.Contains(out, "Task List: none tracked") {
+		t.Errorf("empty store with slug filter should show 'none tracked'; output:\n%s", out)
+	}
+}
+
+func TestFilter_StateFilter_MatchesSome(t *testing.T) {
+	snap := cmux.Read(stubFetcher{
+		stateJSON:     multiStateJSON(),
+		schedulerJSON: minimalSchedulerJSON(),
+	})
+	out := renderSnapshotOpts(snap, cmux.RenderOptions{StateFilter: "reviewing"})
+	if !strings.Contains(out, "task-review") {
+		t.Error("state=reviewing missing task-review")
+	}
+	if strings.Contains(out, "task-ready") {
+		t.Error("state=reviewing must not contain task-ready")
+	}
+	if strings.Contains(out, "task-blocked") {
+		t.Error("state=reviewing must not contain task-blocked")
+	}
+}
+
+func TestFilter_StateFilter_CaseInsensitive(t *testing.T) {
+	snap := cmux.Read(stubFetcher{
+		stateJSON:     multiStateJSON(),
+		schedulerJSON: minimalSchedulerJSON(),
+	})
+	out := renderSnapshotOpts(snap, cmux.RenderOptions{StateFilter: "REVIEWING"})
+	if !strings.Contains(out, "task-review") {
+		t.Errorf("case-insensitive state match failed; output:\n%s", out)
+	}
+}
+
+func TestFilter_StateFilter_NoMatch(t *testing.T) {
+	snap := cmux.Read(stubFetcher{
+		stateJSON:     multiStateJSON(),
+		schedulerJSON: minimalSchedulerJSON(),
+	})
+	out := renderSnapshotOpts(snap, cmux.RenderOptions{StateFilter: "stale"})
+	if !strings.Contains(out, `"stale"`) {
+		t.Errorf("no-match state filter missing helpful message; output:\n%s", out)
+	}
+	if !strings.Contains(out, "Task List") {
+		t.Error("Task List heading must still appear for no-match state filter")
+	}
+	if strings.Contains(out, "task-ready") {
+		t.Error("no-match state filter must not show any tasks")
+	}
+}
+
+func TestFilter_TaskAndState_BothMatch(t *testing.T) {
+	snap := cmux.Read(stubFetcher{
+		stateJSON:     multiStateJSON(),
+		schedulerJSON: minimalSchedulerJSON(),
+	})
+	out := renderSnapshotOpts(snap, cmux.RenderOptions{
+		TaskSlug:    "task-review",
+		StateFilter: "reviewing",
+	})
+	if !strings.Contains(out, "task-review") {
+		t.Error("combined filter missing task-review when both match")
+	}
+	if strings.Contains(out, "task-ready") {
+		t.Error("combined filter must not contain task-ready")
+	}
+}
+
+func TestFilter_TaskAndState_SlugFoundButStateMismatch(t *testing.T) {
+	// task-review has state "reviewing" — asking for state "blocked" should yield no match.
+	snap := cmux.Read(stubFetcher{
+		stateJSON:     multiStateJSON(),
+		schedulerJSON: minimalSchedulerJSON(),
+	})
+	out := renderSnapshotOpts(snap, cmux.RenderOptions{
+		TaskSlug:    "task-review",
+		StateFilter: "blocked",
+	})
+	// "task-review" will appear inside the "no tasks matching task=..." message, so
+	// we cannot assert its absence from the full output.  Instead confirm that no
+	// task-row detail lines (worktree/prompt/last-run) were rendered.
+	if strings.Contains(out, "worktree:") {
+		t.Error("slug+state mismatch must not render any task detail rows (worktree line found)")
+	}
+	if strings.Contains(out, "last-run:") {
+		t.Error("slug+state mismatch must not render any task detail rows (last-run line found)")
+	}
+	if !strings.Contains(out, "Task List") {
+		t.Error("Task List heading must still appear")
+	}
+	if !strings.Contains(out, "no tasks matching") {
+		t.Errorf("combined mismatch missing 'no tasks matching' message; output:\n%s", out)
+	}
+}
+
+func TestFilter_DoesNotAffectProviderSection(t *testing.T) {
+	snap := cmux.Read(stubFetcher{
+		stateJSON:     multiStateJSON(),
+		schedulerJSON: minimalSchedulerJSON(),
+	})
+	// Even with a non-matching slug, Providers should still appear in section=all.
+	out := renderSnapshotOpts(snap, cmux.RenderOptions{TaskSlug: "no-such-task"})
+	if !strings.Contains(out, "Providers") {
+		t.Error("task slug filter must not suppress Providers section")
+	}
+	if !strings.Contains(out, "codex") {
+		t.Error("task slug filter must not suppress provider rows")
+	}
+}
+
+func TestFilter_DoesNotAffectQueueSection(t *testing.T) {
+	snap := cmux.Read(stubFetcher{
+		stateJSON:     multiStateJSON(),
+		schedulerJSON: minimalSchedulerJSON(),
+	})
+	out := renderSnapshotOpts(snap, cmux.RenderOptions{StateFilter: "stale"})
+	if !strings.Contains(out, "Queue / Scheduler") {
+		t.Error("state filter must not suppress Queue / Scheduler section")
+	}
+}
+
+func TestFilter_DoesNotAffectActionsSection(t *testing.T) {
+	snap := cmux.Read(stubFetcher{
+		stateJSON:     multiStateJSON(),
+		schedulerJSON: minimalSchedulerJSON(),
+	})
+	out := renderSnapshotOpts(snap, cmux.RenderOptions{StateFilter: "stale"})
+	if !strings.Contains(out, "Suggested Next Actions") {
+		t.Error("state filter must not suppress Suggested Next Actions section")
+	}
+}
+
+func TestFilter_LimitAppliesAfterFilter(t *testing.T) {
+	// Build a state with 4 "ready-for-worker" tasks and 1 "reviewing" task.
+	// Filter state=ready-for-worker with limit=2 → show 2 of the 4 matching tasks.
+	//
+	// Note: slug "v1" is avoided because "v1" is a substring of "review=1" that
+	// appears in the Task Counts line, which would cause false-positive Contains
+	// matches.  "revw-task" is used instead.
+	state := []byte(`{
+		"schema": "brevity.runtime-state.v1",
+		"repoRoot": "/dev/test",
+		"generatedAt": "2026-01-01T00:00:00Z",
+		"providers": {"summary": {"total": 0, "degraded": 0, "unavailable": 0}, "health": {}},
+		"taskCounts": {"tracked": 5, "runnable": 4, "blocked": 0, "stale": 0, "providerGated": 0, "review": 1},
+		"tasks": [
+			{"slug": "rfw-alpha", "status": "ready-for-worker", "normalizedState": "ready-for-worker", "workerStatus": "", "branch": "task/rfw-alpha", "worktreePath": ""},
+			{"slug": "rfw-beta",  "status": "ready-for-worker", "normalizedState": "ready-for-worker", "workerStatus": "", "branch": "task/rfw-beta",  "worktreePath": ""},
+			{"slug": "rfw-gamma", "status": "ready-for-worker", "normalizedState": "ready-for-worker", "workerStatus": "", "branch": "task/rfw-gamma", "worktreePath": ""},
+			{"slug": "rfw-delta", "status": "ready-for-worker", "normalizedState": "ready-for-worker", "workerStatus": "", "branch": "task/rfw-delta", "worktreePath": ""},
+			{"slug": "revw-task", "status": "reviewing",        "normalizedState": "reviewing",        "workerStatus": "", "branch": "task/revw-task", "worktreePath": ""}
+		],
+		"suggestedNextActions": [],
+		"orphanedTaskWorktrees": [],
+		"activeWorktrees": [],
+		"activeWorktreeCount": 0,
+		"groups": {}
+	}`)
+	snap := cmux.Read(stubFetcher{
+		stateJSON:     state,
+		schedulerJSON: minimalSchedulerJSON(),
+	})
+	out := renderSnapshotOpts(snap, cmux.RenderOptions{
+		StateFilter: "ready-for-worker",
+		Limit:       2,
+	})
+	// 4 tasks match the filter; limit=2 shows first 2.
+	if !strings.Contains(out, "showing 2 of 4") {
+		t.Errorf("limit after filter expected 'showing 2 of 4'; output:\n%s", out)
+	}
+	if strings.Contains(out, "rfw-gamma") {
+		t.Error("limit after filter must not show rfw-gamma (3rd match)")
+	}
+	// The reviewing task must never appear in the task list.
+	if strings.Contains(out, "revw-task") {
+		t.Error("state filter must exclude revw-task (reviewing)")
+	}
+}
+
+func TestFilter_SectionTasks_WithSlugFilter(t *testing.T) {
+	snap := cmux.Read(stubFetcher{
+		stateJSON:     multiStateJSON(),
+		schedulerJSON: minimalSchedulerJSON(),
+	})
+	out := renderSnapshotOpts(snap, cmux.RenderOptions{
+		Section:  cmux.SectionTasks,
+		TaskSlug: "task-blocked",
+	})
+	if !strings.Contains(out, "task-blocked") {
+		t.Error("section=tasks slug filter missing task-blocked")
+	}
+	if strings.Contains(out, "task-ready") {
+		t.Error("section=tasks slug filter must not contain task-ready")
+	}
+	// Provider and queue sections must be absent.
+	if strings.Contains(out, "Providers") {
+		t.Error("section=tasks must not contain Providers")
+	}
+	if strings.Contains(out, "Queue / Scheduler") {
+		t.Error("section=tasks must not contain Queue / Scheduler")
+	}
+}
+
 // extractSection returns the text between the first occurrence of startMarker
 // and the next occurrence of endMarker (exclusive).  Used for targeted
 // section assertions.
