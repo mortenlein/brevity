@@ -50,6 +50,11 @@ Scheduler planning reports reservation eligibility for the selected item. A
 selected item is eligible when it is queued, runnable, unreserved, and has a
 valid task slug.
 
+Planning also reports read-only reservation visibility from the queue plan:
+the reserved item count, the first reserved item when present, and a clear
+`all queued work is already reserved` reason when every selectable queued item
+has already been claimed.
+
 Planning does not reserve the item. Reservations remain explicit orchestration
 ownership intent and do not imply execution.
 

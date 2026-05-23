@@ -1061,6 +1061,10 @@ func renderSchedulerPlan(stdout io.Writer, plan runtimescheduler.Plan) {
 		fmt.Fprintf(stdout, "%s\t%s\t%s\t%s\t%s\n", plan.Selected.ID, plan.Selected.Task, plan.Selected.Provider, plan.Selected.Profile, plan.Selected.Status)
 		fmt.Fprintf(stdout, "Reason: %s\n", plan.Selected.Reason)
 	}
+	fmt.Fprintf(stdout, "Reserved items: %d\n", plan.ReservedItemCount)
+	if plan.FirstReserved != nil {
+		fmt.Fprintf(stdout, "First reserved: %s\t%s\t%s\n", plan.FirstReserved.ID, plan.FirstReserved.Task, plan.FirstReserved.Reason)
+	}
 	fmt.Fprintf(stdout, "Reservation: %s\n", plan.ReservationEligibility)
 	fmt.Fprintln(stdout)
 	fmt.Fprintln(stdout, "Safety checks:")

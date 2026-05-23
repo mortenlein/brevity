@@ -1,6 +1,7 @@
 package scheduler
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -67,6 +68,81 @@ func TestPlanReservedFirstItemSelectsNextRunnableItem(t *testing.T) {
 	}
 	if len(plan.Skipped) != 1 || !strings.Contains(plan.Skipped[0].Reason, "reserved") {
 		t.Fatalf("skipped = %#v, want reserved first item", plan.Skipped)
+	}
+	if plan.ReservedItemCount != 1 {
+		t.Fatalf("reserved item count = %d, want 1", plan.ReservedItemCount)
+	}
+	if plan.FirstReserved == nil || plan.FirstReserved.ID != "first" {
+		t.Fatalf("first reserved = %#v, want first", plan.FirstReserved)
+	}
+}
+
+func TestPlanAllValidItemsReservedSelectsNothing(t *testing.T) {
+	store := testQueueStore(t)
+	first := testItem("first", "alpha", runtimequeue.StatusQueued, "2026-05-22T10:00:00Z")
+	first.Reservation = &runtimequeue.Reservation{
+		Owner:         "runtime-supervisor",
+		ReservedAt:    "2026-05-22T12:00:00Z",
+		ReservationID: "res-test-first",
+	}
+	second := testItem("second", "beta", runtimequeue.StatusQueued, "2026-05-22T11:00:00Z")
+	second.Reservation = &runtimequeue.Reservation{
+		Owner:         "runtime-supervisor",
+		ReservedAt:    "2026-05-22T12:00:00Z",
+		ReservationID: "res-test-second",
+	}
+	writeQueue(t, store, runtimequeue.Queue{Version: runtimequeue.Version, Items: []runtimequeue.Item{first, second}})
+
+	plan := Planner{Queue: store}.Plan()
+
+	if plan.Selected != nil {
+		t.Fatalf("selected = %#v, want nil", plan.Selected)
+	}
+	if plan.NoSelectionReason != "all queued work is already reserved" {
+		t.Fatalf("no selection reason = %q", plan.NoSelectionReason)
+	}
+	if !plan.AllQueuedWorkReserved {
+		t.Fatalf("all queued work reserved = false, want true")
+	}
+	if plan.ReservedItemCount != 2 {
+		t.Fatalf("reserved item count = %d, want 2", plan.ReservedItemCount)
+	}
+	if plan.ReservationEligible {
+		t.Fatalf("reservation eligible = true, want false")
+	}
+}
+
+func TestPlanJSONIncludesReservationState(t *testing.T) {
+	store := testQueueStore(t)
+	reserved := testItem("first", "alpha", runtimequeue.StatusQueued, "2026-05-22T10:00:00Z")
+	reserved.Reservation = &runtimequeue.Reservation{
+		Owner:         "runtime-supervisor",
+		ReservedAt:    "2026-05-22T12:00:00Z",
+		ReservationID: "res-test-abc123",
+	}
+	writeQueue(t, store, runtimequeue.Queue{Version: runtimequeue.Version, Items: []runtimequeue.Item{
+		reserved,
+		testItem("second", "beta", runtimequeue.StatusQueued, "2026-05-22T11:00:00Z"),
+	}})
+
+	data, err := json.Marshal(Planner{Queue: store}.Plan())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(data, &payload); err != nil {
+		t.Fatal(err)
+	}
+
+	if payload["reservationEligible"] != true {
+		t.Fatalf("reservationEligible = %#v, want true", payload["reservationEligible"])
+	}
+	if payload["reservedItemCount"] != float64(1) {
+		t.Fatalf("reservedItemCount = %#v, want 1", payload["reservedItemCount"])
+	}
+	firstReserved, ok := payload["firstReserved"].(map[string]any)
+	if !ok || firstReserved["id"] != "first" || !strings.Contains(firstReserved["reason"].(string), "reserved") {
+		t.Fatalf("firstReserved = %#v", payload["firstReserved"])
 	}
 }
 

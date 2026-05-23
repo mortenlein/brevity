@@ -21,6 +21,9 @@ type Plan struct {
 	Selected               *Selection              `json:"selected,omitempty"`
 	Skipped                []runtimequeue.PlanItem `json:"skipped"`
 	NoSelectionReason      string                  `json:"noSelectionReason,omitempty"`
+	ReservedItemCount      int                     `json:"reservedItemCount"`
+	FirstReserved          *runtimequeue.PlanItem  `json:"firstReserved,omitempty"`
+	AllQueuedWorkReserved  bool                    `json:"allQueuedWorkReserved"`
 	ReservationEligible    bool                    `json:"reservationEligible"`
 	ReservationEligibility string                  `json:"reservationEligibility"`
 	SafetyChecks           []SafetyCheck           `json:"safetyChecks"`
@@ -52,6 +55,8 @@ func (planner Planner) Plan() Plan {
 		QueueVersion:          queuePlan.Version,
 		SupportedQueueVersion: queuePlan.SupportedVersion,
 		Skipped:               queuePlan.Skipped,
+		ReservedItemCount:     queuePlan.Summary.Reserved,
+		FirstReserved:         firstReservedItem(queuePlan.Skipped),
 		ReadOnly:              true,
 		Error:                 queuePlan.Error,
 	}
@@ -65,6 +70,10 @@ func (planner Planner) Plan() Plan {
 
 	if len(queuePlan.Runnable) == 0 {
 		plan.NoSelectionReason = "no eligible runnable queue item"
+		if queuePlan.Summary.Reserved > 0 && queuePlan.Summary.Skipped == queuePlan.Summary.Reserved {
+			plan.NoSelectionReason = "all queued work is already reserved"
+			plan.AllQueuedWorkReserved = true
+		}
 		plan.ReservationEligibility = "not eligible: no selected queue item"
 		plan.SafetyChecks = safetyChecks(false, plan.NoSelectionReason)
 		return plan
@@ -83,6 +92,16 @@ func (planner Planner) Plan() Plan {
 	plan.ReservationEligibility = "eligible: selected item is queued, runnable, unreserved, and has a valid task slug"
 	plan.SafetyChecks = safetyChecks(true, "selected item remains orchestration intent only")
 	return plan
+}
+
+func firstReservedItem(items []runtimequeue.PlanItem) *runtimequeue.PlanItem {
+	for _, item := range items {
+		if strings.HasPrefix(item.Reason, "reserved by ") {
+			reserved := item
+			return &reserved
+		}
+	}
+	return nil
 }
 
 func fallbackReason(value, fallback string) string {
