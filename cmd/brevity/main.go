@@ -110,6 +110,8 @@ type cliOptions struct {
 	repair          bool
 	candidateID     string
 	preflightAction preflight.Action
+	cmuxLimit       int
+	cmuxSection     string
 }
 
 type actionCall func() ([]byte, error)
@@ -302,15 +304,34 @@ func parseInitOptions(args []string) (cliOptions, error) {
 }
 
 func parseCmuxOptions(args []string) (cliOptions, error) {
-	if len(args) != 1 {
-		return cliOptions{}, fmt.Errorf("usage: brevity cmux")
+	flags := flag.NewFlagSet("brevity cmux", flag.ContinueOnError)
+	flags.SetOutput(io.Discard)
+	limit := flags.Int("limit", cmux.DefaultLimit, "maximum number of tasks to show")
+	section := flags.String("section", cmux.SectionAll, "section to render: all, providers, tasks, queue, actions")
+	if err := flags.Parse(args[1:]); err != nil {
+		return cliOptions{}, fmt.Errorf("usage: brevity cmux [--limit <n>] [--section <name>]")
 	}
-	return cliOptions{kind: commandCmux}, nil
+	if flags.NArg() > 0 {
+		return cliOptions{}, fmt.Errorf("usage: brevity cmux [--limit <n>] [--section <name>]")
+	}
+	switch *section {
+	case cmux.SectionAll, cmux.SectionProviders, cmux.SectionTasks, cmux.SectionQueue, cmux.SectionActions:
+		// valid
+	default:
+		return cliOptions{}, fmt.Errorf("invalid --section %q: allowed values: all, providers, tasks, queue, actions", *section)
+	}
+	if *limit <= 0 {
+		return cliOptions{}, fmt.Errorf("invalid --limit %d: must be greater than zero", *limit)
+	}
+	return cliOptions{kind: commandCmux, cmuxLimit: *limit, cmuxSection: *section}, nil
 }
 
-func routeCmuxCommand(stdout io.Writer) error {
+func routeCmuxCommand(stdout io.Writer, options cliOptions) error {
 	snap := cmux.Read(cmux.NativeFetcher{})
-	cmux.Render(stdout, snap)
+	cmux.Render(stdout, snap, cmux.RenderOptions{
+		Limit:   options.cmuxLimit,
+		Section: options.cmuxSection,
+	})
 	return nil
 }
 
@@ -906,7 +927,7 @@ func runWithContextOptions(ctx context.Context, stdout io.Writer, client runtime
 	case commandSupportMatrix:
 		return routeSupportMatrixCommand(stdout, options)
 	case commandCmux:
-		return routeCmuxCommand(stdout)
+		return routeCmuxCommand(stdout, options)
 	default:
 		if options.bubble {
 			if options.refresh <= 0 {

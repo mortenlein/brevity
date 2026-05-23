@@ -11,29 +11,59 @@ import (
 
 const sectionSep = "---"
 
-// Render writes a detailed plain-text CMUX dashboard to w from a Snapshot.
+// Render writes a plain-text CMUX dashboard to w from a Snapshot.
 //
-// Output is deterministic for a given Snapshot. No ANSI sequences,
-// no TUI framework, no watch mode, no keyboard handling.
+// opts controls which sections are rendered and how many tasks are shown.
+// Output is deterministic for a given Snapshot and RenderOptions.
+// No ANSI sequences, no TUI framework, no watch mode, no keyboard handling.
 // Every section degrades gracefully when its contract is unavailable.
-func Render(w io.Writer, snap Snapshot) {
+func Render(w io.Writer, snap Snapshot, opts RenderOptions) {
+	section := opts.effectiveSection()
+	limit := opts.effectiveLimit()
+
 	renderHeader(w, snap)
 
-	if snap.RuntimeStateErr != nil {
-		fmt.Fprintf(w, "\nruntime-state: error: %v\n", snap.RuntimeStateErr)
-	} else if !snap.HasRuntimeState {
-		fmt.Fprintln(w, "\nruntime-state: unavailable")
-	} else {
-		renderProviderHealth(w, snap)
-		renderTaskCounts(w, snap)
-		renderTopTasks(w, snap)
+	switch section {
+	case SectionAll:
+		if snap.RuntimeStateErr != nil {
+			fmt.Fprintf(w, "\nruntime-state: error: %v\n", snap.RuntimeStateErr)
+		} else if !snap.HasRuntimeState {
+			fmt.Fprintln(w, "\nruntime-state: unavailable")
+		} else {
+			renderProviderHealth(w, snap)
+			renderTaskCounts(w, snap)
+			renderTopTasks(w, snap, limit)
+		}
+		fmt.Fprintln(w, sectionSep)
+		renderQueueScheduler(w, snap)
+		fmt.Fprintln(w, sectionSep)
+		renderSuggestedActions(w, snap)
+
+	case SectionProviders:
+		if snap.RuntimeStateErr != nil {
+			fmt.Fprintf(w, "\nruntime-state: error: %v\n", snap.RuntimeStateErr)
+		} else if !snap.HasRuntimeState {
+			fmt.Fprintln(w, "\nruntime-state: unavailable")
+		} else {
+			renderProviderHealth(w, snap)
+		}
+
+	case SectionTasks:
+		if snap.RuntimeStateErr != nil {
+			fmt.Fprintf(w, "\nruntime-state: error: %v\n", snap.RuntimeStateErr)
+		} else if !snap.HasRuntimeState {
+			fmt.Fprintln(w, "\nruntime-state: unavailable")
+		} else {
+			renderTaskCounts(w, snap)
+			renderTopTasks(w, snap, limit)
+		}
+
+	case SectionQueue:
+		renderQueueScheduler(w, snap)
+
+	case SectionActions:
+		renderSuggestedActions(w, snap)
 	}
-
-	fmt.Fprintln(w, sectionSep)
-	renderQueueScheduler(w, snap)
-
-	fmt.Fprintln(w, sectionSep)
-	renderSuggestedActions(w, snap)
 }
 
 // renderHeader writes the dashboard header including read-only/source markers
@@ -88,15 +118,22 @@ func renderTaskCounts(w io.Writer, snap Snapshot) {
 }
 
 // renderTopTasks renders each task with its slug, normalized state, worktree
-// presence/path, prompt path, and last-run summary.
-func renderTopTasks(w io.Writer, snap Snapshot) {
+// presence/path, prompt path, and last-run summary.  At most limit tasks are
+// shown; when the list is truncated a "(showing N of M)" header is emitted.
+func renderTopTasks(w io.Writer, snap Snapshot, limit int) {
 	tasks := snap.RuntimeState.Tasks
 	if len(tasks) == 0 {
 		fmt.Fprintln(w, "\nTask List: none tracked")
 		return
 	}
-	fmt.Fprintf(w, "\nTask List  (%d)\n", len(tasks))
-	for i, t := range tasks {
+	shown := tasks
+	if limit > 0 && len(shown) > limit {
+		shown = shown[:limit]
+		fmt.Fprintf(w, "\nTask List  (showing %d of %d)\n", limit, len(tasks))
+	} else {
+		fmt.Fprintf(w, "\nTask List  (%d)\n", len(tasks))
+	}
+	for i, t := range shown {
 		if i > 0 {
 			fmt.Fprintln(w)
 		}

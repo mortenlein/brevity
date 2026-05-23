@@ -3,6 +3,7 @@ package cmux_test
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -65,7 +66,13 @@ func minimalSchedulerJSON() []byte {
 
 func renderSnapshot(snap cmux.Snapshot) string {
 	var buf bytes.Buffer
-	cmux.Render(&buf, snap)
+	cmux.Render(&buf, snap, cmux.RenderOptions{})
+	return buf.String()
+}
+
+func renderSnapshotOpts(snap cmux.Snapshot, opts cmux.RenderOptions) string {
+	var buf bytes.Buffer
+	cmux.Render(&buf, snap, opts)
 	return buf.String()
 }
 
@@ -834,6 +841,229 @@ func TestRender_RichFixtureNoPanic(t *testing.T) {
 	out := renderSnapshot(snap)
 	if out == "" {
 		t.Error("renderSnapshot returned empty output")
+	}
+}
+
+// --- RenderOptions: section filtering tests --------------------------------
+
+func TestRender_SectionAll_ContainsAllSections(t *testing.T) {
+	snap := cmux.Read(stubFetcher{
+		stateJSON:     minimalStateJSON(t),
+		schedulerJSON: minimalSchedulerJSON(),
+	})
+	out := renderSnapshotOpts(snap, cmux.RenderOptions{Section: cmux.SectionAll})
+	for _, want := range []string{"CMUX OPERATOR", "Providers", "Task Counts", "Queue / Scheduler", "Suggested Next Actions"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("section=all missing %q", want)
+		}
+	}
+}
+
+func TestRender_SectionProviders_OnlyProviders(t *testing.T) {
+	snap := cmux.Read(stubFetcher{
+		stateJSON:     minimalStateJSON(t),
+		schedulerJSON: minimalSchedulerJSON(),
+	})
+	out := renderSnapshotOpts(snap, cmux.RenderOptions{Section: cmux.SectionProviders})
+	if !strings.Contains(out, "Providers") {
+		t.Error("section=providers missing Providers heading")
+	}
+	if strings.Contains(out, "Task Counts") {
+		t.Error("section=providers must not contain Task Counts")
+	}
+	if strings.Contains(out, "Queue / Scheduler") {
+		t.Error("section=providers must not contain Queue / Scheduler")
+	}
+	if strings.Contains(out, "Suggested Next Actions") {
+		t.Error("section=providers must not contain Suggested Next Actions")
+	}
+}
+
+func TestRender_SectionTasks_OnlyTasksSection(t *testing.T) {
+	snap := cmux.Read(stubFetcher{
+		stateJSON:     minimalStateJSON(t),
+		schedulerJSON: minimalSchedulerJSON(),
+	})
+	out := renderSnapshotOpts(snap, cmux.RenderOptions{Section: cmux.SectionTasks})
+	if !strings.Contains(out, "Task Counts") {
+		t.Error("section=tasks missing Task Counts")
+	}
+	if !strings.Contains(out, "Task List") {
+		t.Error("section=tasks missing Task List")
+	}
+	if strings.Contains(out, "Providers") {
+		t.Error("section=tasks must not contain Providers")
+	}
+	if strings.Contains(out, "Queue / Scheduler") {
+		t.Error("section=tasks must not contain Queue / Scheduler")
+	}
+	if strings.Contains(out, "Suggested Next Actions") {
+		t.Error("section=tasks must not contain Suggested Next Actions")
+	}
+}
+
+func TestRender_SectionQueue_OnlyQueueScheduler(t *testing.T) {
+	snap := cmux.Read(stubFetcher{
+		stateJSON:     minimalStateJSON(t),
+		schedulerJSON: minimalSchedulerJSON(),
+	})
+	out := renderSnapshotOpts(snap, cmux.RenderOptions{Section: cmux.SectionQueue})
+	if !strings.Contains(out, "Queue / Scheduler") {
+		t.Error("section=queue missing Queue / Scheduler")
+	}
+	if strings.Contains(out, "Task Counts") {
+		t.Error("section=queue must not contain Task Counts")
+	}
+	if strings.Contains(out, "Providers") {
+		t.Error("section=queue must not contain Providers")
+	}
+	if strings.Contains(out, "Suggested Next Actions") {
+		t.Error("section=queue must not contain Suggested Next Actions")
+	}
+}
+
+func TestRender_SectionActions_OnlySuggestedActions(t *testing.T) {
+	snap := cmux.Read(stubFetcher{
+		stateJSON:     minimalStateJSON(t),
+		schedulerJSON: minimalSchedulerJSON(),
+	})
+	out := renderSnapshotOpts(snap, cmux.RenderOptions{Section: cmux.SectionActions})
+	if !strings.Contains(out, "Suggested Next Actions") {
+		t.Error("section=actions missing Suggested Next Actions")
+	}
+	if strings.Contains(out, "Providers") {
+		t.Error("section=actions must not contain Providers")
+	}
+	if strings.Contains(out, "Task Counts") {
+		t.Error("section=actions must not contain Task Counts")
+	}
+	if strings.Contains(out, "Queue / Scheduler") {
+		t.Error("section=actions must not contain Queue / Scheduler")
+	}
+}
+
+func TestRender_SectionEmptyString_RendersAll(t *testing.T) {
+	// Empty Section is equivalent to "all".
+	snap := cmux.Read(stubFetcher{
+		stateJSON:     minimalStateJSON(t),
+		schedulerJSON: minimalSchedulerJSON(),
+	})
+	out := renderSnapshotOpts(snap, cmux.RenderOptions{})
+	for _, want := range []string{"Providers", "Task Counts", "Queue / Scheduler", "Suggested Next Actions"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("empty section missing %q", want)
+		}
+	}
+}
+
+// --- RenderOptions: limit tests --------------------------------------------
+
+// manyTaskStateJSON returns a runtime-state fixture with n tasks named task-1 … task-N.
+func manyTaskStateJSON(n int) []byte {
+	taskItems := make([]string, n)
+	for i := 0; i < n; i++ {
+		taskItems[i] = fmt.Sprintf(`{"slug":"task-%d","status":"ready-for-worker","normalizedState":"ready-for-worker","workerStatus":"","branch":"task/task-%d","worktreePath":""}`, i+1, i+1)
+	}
+	return []byte(`{
+		"schema": "brevity.runtime-state.v1",
+		"repoRoot": "/dev/test",
+		"generatedAt": "2026-01-01T00:00:00Z",
+		"providers": {"summary": {"total": 0, "degraded": 0, "unavailable": 0}, "health": {}},
+		"taskCounts": {"tracked": ` + fmt.Sprintf("%d", n) + `, "runnable": 0, "blocked": 0, "stale": 0, "providerGated": 0, "review": 0},
+		"tasks": [` + strings.Join(taskItems, ",") + `],
+		"suggestedNextActions": [],
+		"orphanedTaskWorktrees": [],
+		"activeWorktrees": [],
+		"activeWorktreeCount": 0,
+		"groups": {}
+	}`)
+}
+
+func TestRender_LimitReducesTaskList(t *testing.T) {
+	snap := cmux.Read(stubFetcher{
+		stateJSON:     manyTaskStateJSON(5),
+		schedulerJSON: minimalSchedulerJSON(),
+	})
+	out := renderSnapshotOpts(snap, cmux.RenderOptions{Limit: 2})
+	if !strings.Contains(out, "task-1") {
+		t.Error("limit=2 missing task-1")
+	}
+	if !strings.Contains(out, "task-2") {
+		t.Error("limit=2 missing task-2")
+	}
+	if strings.Contains(out, "task-3") {
+		t.Error("limit=2 should not contain task-3")
+	}
+	if !strings.Contains(out, "showing 2 of 5") {
+		t.Errorf("limit=2 missing truncation header; output:\n%s", out)
+	}
+}
+
+func TestRender_LimitDefaultTenShowsAll_WhenFewer(t *testing.T) {
+	// minimalStateJSON has 2 tasks; default limit=10 should show both without truncation.
+	snap := cmux.Read(stubFetcher{
+		stateJSON:     minimalStateJSON(t),
+		schedulerJSON: minimalSchedulerJSON(),
+	})
+	out := renderSnapshot(snap)
+	if strings.Contains(out, "showing") {
+		t.Error("2 tasks with default limit should not show truncation header")
+	}
+}
+
+func TestRender_LimitDefaultTenTruncatesAt11(t *testing.T) {
+	snap := cmux.Read(stubFetcher{
+		stateJSON:     manyTaskStateJSON(11),
+		schedulerJSON: minimalSchedulerJSON(),
+	})
+	out := renderSnapshotOpts(snap, cmux.RenderOptions{}) // default limit = 10
+	if !strings.Contains(out, "showing 10 of 11") {
+		t.Errorf("11 tasks with default limit missing truncation header; output:\n%s", out)
+	}
+	if strings.Contains(out, "task-11") {
+		t.Error("11th task should be hidden at default limit=10")
+	}
+}
+
+func TestRender_LimitZeroUsesDefault(t *testing.T) {
+	// Limit=0 should behave identically to Limit=10.
+	snap := cmux.Read(stubFetcher{
+		stateJSON:     manyTaskStateJSON(11),
+		schedulerJSON: minimalSchedulerJSON(),
+	})
+	out := renderSnapshotOpts(snap, cmux.RenderOptions{Limit: 0})
+	if !strings.Contains(out, "showing 10 of 11") {
+		t.Errorf("Limit=0 should fall back to DefaultLimit=10; output:\n%s", out)
+	}
+}
+
+func TestRender_LimitExact_NoTruncationHeader(t *testing.T) {
+	// Limit exactly equals the number of tasks — no truncation header.
+	snap := cmux.Read(stubFetcher{
+		stateJSON:     manyTaskStateJSON(3),
+		schedulerJSON: minimalSchedulerJSON(),
+	})
+	out := renderSnapshotOpts(snap, cmux.RenderOptions{Limit: 3})
+	if strings.Contains(out, "showing") {
+		t.Errorf("limit=3 with 3 tasks should not show truncation header; output:\n%s", out)
+	}
+}
+
+func TestRender_SectionTasks_WithLimit(t *testing.T) {
+	// Section=tasks combined with Limit=1 should limit the task list.
+	snap := cmux.Read(stubFetcher{
+		stateJSON:     manyTaskStateJSON(5),
+		schedulerJSON: minimalSchedulerJSON(),
+	})
+	out := renderSnapshotOpts(snap, cmux.RenderOptions{Section: cmux.SectionTasks, Limit: 1})
+	if !strings.Contains(out, "task-1") {
+		t.Error("section=tasks limit=1 missing task-1")
+	}
+	if strings.Contains(out, "task-2") {
+		t.Error("section=tasks limit=1 should not contain task-2")
+	}
+	if !strings.Contains(out, "showing 1 of 5") {
+		t.Errorf("section=tasks limit=1 missing truncation header; output:\n%s", out)
 	}
 }
 
