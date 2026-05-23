@@ -41,46 +41,47 @@ func main() {
 type commandKind string
 
 const (
-	commandDashboard         commandKind = commandKind(commands.DashboardID)
-	commandRuntimeState      commandKind = commandKind(commands.RuntimeStateID)
-	commandRuntimeStart      commandKind = commandKind(commands.RuntimeStartID)
-	commandRuntimeStop       commandKind = commandKind(commands.RuntimeStopID)
-	commandRuntimeStatus     commandKind = commandKind(commands.RuntimeStatusID)
-	commandQueueAdd          commandKind = commandKind(commands.QueueAddID)
-	commandQueueList         commandKind = commandKind(commands.QueueListID)
-	commandQueueInspect      commandKind = commandKind(commands.QueueInspectID)
-	commandQueuePlan         commandKind = commandKind(commands.QueuePlanID)
-	commandQueueRemove       commandKind = commandKind(commands.QueueRemoveID)
-	commandQueueReserve      commandKind = commandKind(commands.QueueReserveID)
-	commandQueueUnreserve    commandKind = commandKind(commands.QueueUnreserveID)
-	commandSchedulerPlan     commandKind = commandKind(commands.SchedulerPlanID)
-	commandProviderStatus    commandKind = commandKind(commands.ProviderStatusID)
-	commandProviderSet       commandKind = commandKind(commands.ProviderSetID)
-	commandProviderReset     commandKind = commandKind(commands.ProviderResetID)
-	commandInit              commandKind = commandKind(commands.InitID)
-	commandContextRefresh    commandKind = commandKind(commands.TaskContextRefreshID)
-	commandTaskStatus        commandKind = commandKind(commands.TaskStatusID)
-	commandDoctor            commandKind = commandKind(commands.DoctorID)
-	commandTaskCleanup       commandKind = commandKind(commands.TaskCleanupID)
-	commandTaskMerge         commandKind = commandKind(commands.TaskMergeID)
-	commandTaskPreflight     commandKind = "task-preflight"
-	commandTaskNew           commandKind = commandKind(commands.TaskNewID)
-	commandTaskActivate      commandKind = commandKind(commands.TaskActivateID)
-	commandTaskSpec          commandKind = commandKind(commands.TaskSpecID)
-	commandTaskStart         commandKind = commandKind(commands.TaskStartID)
-	commandTaskRun           commandKind = commandKind(commands.TaskRunID)
-	commandTaskRuntimeInfo   commandKind = commandKind(commands.TaskRuntimeInfoID)
-	commandTaskDetail        commandKind = commandKind(commands.TaskDetailID)
-	commandTaskRuns          commandKind = commandKind(commands.TaskRunsID)
-	commandRunsReconcile     commandKind = commandKind(commands.TaskRunsReconcileID)
-	commandRunsRetention     commandKind = commandKind(commands.TaskRunsRetentionID)
-	commandRunsCompact       commandKind = commandKind(commands.TaskRunsCompactID)
-	commandRunsInspect       commandKind = "runs-inspect"
-	commandRunsNativeCompact commandKind = "runs-compact"
-	commandCleanupInspect    commandKind = commandKind(commands.CleanupInspectID)
-	commandCleanupPlan       commandKind = commandKind(commands.CleanupPlanID)
-	commandCleanupExecute    commandKind = commandKind(commands.CleanupExecuteID)
-	commandSupportMatrix     commandKind = "support-matrix"
+	commandDashboard            commandKind = commandKind(commands.DashboardID)
+	commandRuntimeState         commandKind = commandKind(commands.RuntimeStateID)
+	commandRuntimeStart         commandKind = commandKind(commands.RuntimeStartID)
+	commandRuntimeStop          commandKind = commandKind(commands.RuntimeStopID)
+	commandRuntimeStatus        commandKind = commandKind(commands.RuntimeStatusID)
+	commandQueueAdd             commandKind = commandKind(commands.QueueAddID)
+	commandQueueList            commandKind = commandKind(commands.QueueListID)
+	commandQueueInspect         commandKind = commandKind(commands.QueueInspectID)
+	commandQueuePlan            commandKind = commandKind(commands.QueuePlanID)
+	commandQueueRemove          commandKind = commandKind(commands.QueueRemoveID)
+	commandQueueReserve         commandKind = commandKind(commands.QueueReserveID)
+	commandQueueUnreserve       commandKind = commandKind(commands.QueueUnreserveID)
+	commandSchedulerPlan        commandKind = commandKind(commands.SchedulerPlanID)
+	commandSchedulerReserveNext commandKind = commandKind(commands.SchedulerReserveNextID)
+	commandProviderStatus       commandKind = commandKind(commands.ProviderStatusID)
+	commandProviderSet          commandKind = commandKind(commands.ProviderSetID)
+	commandProviderReset        commandKind = commandKind(commands.ProviderResetID)
+	commandInit                 commandKind = commandKind(commands.InitID)
+	commandContextRefresh       commandKind = commandKind(commands.TaskContextRefreshID)
+	commandTaskStatus           commandKind = commandKind(commands.TaskStatusID)
+	commandDoctor               commandKind = commandKind(commands.DoctorID)
+	commandTaskCleanup          commandKind = commandKind(commands.TaskCleanupID)
+	commandTaskMerge            commandKind = commandKind(commands.TaskMergeID)
+	commandTaskPreflight        commandKind = "task-preflight"
+	commandTaskNew              commandKind = commandKind(commands.TaskNewID)
+	commandTaskActivate         commandKind = commandKind(commands.TaskActivateID)
+	commandTaskSpec             commandKind = commandKind(commands.TaskSpecID)
+	commandTaskStart            commandKind = commandKind(commands.TaskStartID)
+	commandTaskRun              commandKind = commandKind(commands.TaskRunID)
+	commandTaskRuntimeInfo      commandKind = commandKind(commands.TaskRuntimeInfoID)
+	commandTaskDetail           commandKind = commandKind(commands.TaskDetailID)
+	commandTaskRuns             commandKind = commandKind(commands.TaskRunsID)
+	commandRunsReconcile        commandKind = commandKind(commands.TaskRunsReconcileID)
+	commandRunsRetention        commandKind = commandKind(commands.TaskRunsRetentionID)
+	commandRunsCompact          commandKind = commandKind(commands.TaskRunsCompactID)
+	commandRunsInspect          commandKind = "runs-inspect"
+	commandRunsNativeCompact    commandKind = "runs-compact"
+	commandCleanupInspect       commandKind = commandKind(commands.CleanupInspectID)
+	commandCleanupPlan          commandKind = commandKind(commands.CleanupPlanID)
+	commandCleanupExecute       commandKind = commandKind(commands.CleanupExecuteID)
+	commandSupportMatrix        commandKind = "support-matrix"
 )
 
 type cliOptions struct {
@@ -258,7 +259,7 @@ func parseQueueOptions(args []string) (cliOptions, error) {
 
 func parseSchedulerOptions(args []string) (cliOptions, error) {
 	if len(args) < 2 {
-		return cliOptions{}, fmt.Errorf("missing scheduler command: supported commands: plan")
+		return cliOptions{}, fmt.Errorf("missing scheduler command: supported commands: plan, reserve-next")
 	}
 	switch args[1] {
 	case "plan":
@@ -270,8 +271,13 @@ func parseSchedulerOptions(args []string) (cliOptions, error) {
 			options.json = true
 		}
 		return options, nil
+	case "reserve-next":
+		if len(args) != 2 {
+			return cliOptions{}, usageError(commands.SchedulerReserveNext)
+		}
+		return cliOptions{kind: commandSchedulerReserveNext}, nil
 	default:
-		return cliOptions{}, fmt.Errorf("unsupported scheduler command %q: supported commands: plan", args[1])
+		return cliOptions{}, fmt.Errorf("unsupported scheduler command %q: supported commands: plan, reserve-next", args[1])
 	}
 }
 
@@ -857,7 +863,7 @@ func runWithContextOptions(ctx context.Context, stdout io.Writer, client runtime
 		return routeRuntimeSupervisorCommand(ctx, stdout, options)
 	case commandQueueAdd, commandQueueList, commandQueueInspect, commandQueuePlan, commandQueueRemove, commandQueueReserve, commandQueueUnreserve:
 		return routeQueueCommand(stdout, options)
-	case commandSchedulerPlan:
+	case commandSchedulerPlan, commandSchedulerReserveNext:
 		return routeSchedulerCommand(stdout, options)
 	case commandProviderStatus, commandProviderSet, commandProviderReset:
 		return routeProviderCommand(stdout, options)
@@ -908,6 +914,9 @@ func routeSchedulerCommand(stdout io.Writer, options cliOptions) error {
 		return err
 	}
 	plan := runtimescheduler.Planner{Queue: store}.Plan()
+	if options.kind == commandSchedulerReserveNext {
+		return reserveNextSchedulerItem(stdout, store, plan)
+	}
 	if options.json {
 		output, err := json.Marshal(plan)
 		if err != nil {
@@ -917,6 +926,27 @@ func routeSchedulerCommand(stdout io.Writer, options cliOptions) error {
 		return err
 	}
 	renderSchedulerPlan(stdout, plan)
+	return nil
+}
+
+func reserveNextSchedulerItem(stdout io.Writer, store runtimequeue.Store, plan runtimescheduler.Plan) error {
+	if plan.Selected == nil {
+		return fmt.Errorf("no selectable scheduler item: %s", fallbackDash(plan.NoSelectionReason))
+	}
+	item, err := store.Reserve(plan.Selected.ID)
+	if err != nil {
+		return err
+	}
+	fmt.Fprintln(stdout, "Reserved scheduler queue item")
+	fmt.Fprintf(stdout, "Path: %s\n", store.QueuePath())
+	fmt.Fprintln(stdout)
+	fmt.Fprintf(stdout, "id: %s\n", item.ID)
+	fmt.Fprintf(stdout, "task: %s\n", item.Task)
+	if item.Reservation != nil {
+		fmt.Fprintf(stdout, "reservationId: %s\n", item.Reservation.ReservationID)
+	}
+	fmt.Fprintln(stdout)
+	fmt.Fprintln(stdout, "Reservation only: no provider, worker, supervisor, task state, run history, or queue drain was started.")
 	return nil
 }
 

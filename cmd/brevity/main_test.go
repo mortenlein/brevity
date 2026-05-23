@@ -13,6 +13,7 @@ import (
 
 	"github.com/mortenlein/brevity/internal/commands"
 	"github.com/mortenlein/brevity/internal/dashboard"
+	runtimequeue "github.com/mortenlein/brevity/internal/runtime/queue"
 	"github.com/mortenlein/brevity/internal/state"
 )
 
@@ -180,6 +181,110 @@ func TestTaskPreflightHumanBlockedOutput(t *testing.T) {
 	output := stdout.String()
 	if !strings.Contains(output, "status: blocked") || !strings.Contains(output, "task does not exist") {
 		t.Fatalf("unexpected output:\n%s", output)
+	}
+}
+
+func TestSchedulerReserveNextReservesFirstSelectableItem(t *testing.T) {
+	repoRoot := tempRepoWithQueue(t, runtimequeue.Queue{Version: runtimequeue.Version, Items: []runtimequeue.Item{
+		mainTestQueueItem("first", "alpha", runtimequeue.StatusQueued),
+		mainTestQueueItem("second", "beta", runtimequeue.StatusQueued),
+	}})
+	t.Chdir(repoRoot)
+
+	client := &fakeRuntimeClient{}
+	var stdout bytes.Buffer
+	if err := runWithOptions(&stdout, client, cliOptions{kind: commandSchedulerReserveNext}); err != nil {
+		t.Fatalf("runWithOptions returned error: %v", err)
+	}
+	if len(client.calls) != 0 {
+		t.Fatalf("calls = %#v, want no PowerShell client calls", client.calls)
+	}
+	output := stdout.String()
+	for _, want := range []string{"Reserved scheduler queue item", "id: first", "task: alpha", "reservationId:", "no provider, worker, supervisor, task state, run history, or queue drain"} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("output missing %q:\n%s", want, output)
+		}
+	}
+	queue := readMainTestQueue(t, repoRoot)
+	if queue.Items[0].Reservation == nil || queue.Items[1].Reservation != nil {
+		t.Fatalf("reservations = %#v %#v, want first only", queue.Items[0].Reservation, queue.Items[1].Reservation)
+	}
+}
+
+func TestSchedulerReserveNextSkipsReservedAndInvalidItems(t *testing.T) {
+	reserved := mainTestQueueItem("reserved", "alpha", runtimequeue.StatusQueued)
+	reserved.Reservation = &runtimequeue.Reservation{
+		Owner:         "runtime-supervisor",
+		ReservedAt:    "2026-05-22T12:00:00Z",
+		ReservationID: "res-existing",
+	}
+	repoRoot := tempRepoWithQueue(t, runtimequeue.Queue{Version: runtimequeue.Version, Items: []runtimequeue.Item{
+		reserved,
+		mainTestQueueItem("invalid", "cancelled-task", runtimequeue.StatusCancelled),
+		mainTestQueueItem("selected", "beta", runtimequeue.StatusQueued),
+	}})
+	t.Chdir(repoRoot)
+
+	var stdout bytes.Buffer
+	if err := runWithOptions(&stdout, &fakeRuntimeClient{}, cliOptions{kind: commandSchedulerReserveNext}); err != nil {
+		t.Fatalf("runWithOptions returned error: %v", err)
+	}
+	if !strings.Contains(stdout.String(), "id: selected") || !strings.Contains(stdout.String(), "task: beta") {
+		t.Fatalf("unexpected output:\n%s", stdout.String())
+	}
+	queue := readMainTestQueue(t, repoRoot)
+	if queue.Items[2].Reservation == nil {
+		t.Fatalf("selected item was not reserved: %#v", queue.Items[2])
+	}
+	if queue.Items[1].Reservation != nil {
+		t.Fatalf("scheduler-invalid item was reserved: %#v", queue.Items[1].Reservation)
+	}
+}
+
+func TestSchedulerReserveNextFailsSafelyWhenNoSelectableItemExists(t *testing.T) {
+	repoRoot := tempRepoWithQueue(t, runtimequeue.Queue{Version: runtimequeue.Version, Items: []runtimequeue.Item{
+		mainTestQueueItem("cancelled", "alpha", runtimequeue.StatusCancelled),
+	}})
+	t.Chdir(repoRoot)
+	before := readMainTestFile(t, filepath.Join(repoRoot, ".brevity", runtimequeue.FileName))
+
+	var stdout bytes.Buffer
+	err := runWithOptions(&stdout, &fakeRuntimeClient{}, cliOptions{kind: commandSchedulerReserveNext})
+	if err == nil {
+		t.Fatal("runWithOptions returned nil error")
+	}
+	if !strings.Contains(err.Error(), "no selectable scheduler item") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	after := readMainTestFile(t, filepath.Join(repoRoot, ".brevity", runtimequeue.FileName))
+	if after != before {
+		t.Fatalf("queue mutated on no selection\nbefore: %s\nafter: %s", before, after)
+	}
+}
+
+func TestSchedulerReserveNextDoesNotExecuteOrMutateTaskState(t *testing.T) {
+	repoRoot := tempRepoWithQueue(t, runtimequeue.Queue{Version: runtimequeue.Version, Items: []runtimequeue.Item{
+		mainTestQueueItem("first", "alpha", runtimequeue.StatusQueued),
+	}})
+	tasksPath := filepath.Join(repoRoot, ".brevity", state.TasksFile)
+	writeMainTestFile(t, tasksPath, `[{"slug":"alpha","status":"ready-for-worker","normalizedState":"ready-for-worker"}]`+"\n")
+	t.Chdir(repoRoot)
+	beforeTasks := readMainTestFile(t, tasksPath)
+
+	client := &fakeRuntimeClient{}
+	var stdout bytes.Buffer
+	if err := runWithOptions(&stdout, client, cliOptions{kind: commandSchedulerReserveNext}); err != nil {
+		t.Fatalf("runWithOptions returned error: %v", err)
+	}
+	afterTasks := readMainTestFile(t, tasksPath)
+	if afterTasks != beforeTasks {
+		t.Fatalf("tasks mutated\nbefore: %s\nafter: %s", beforeTasks, afterTasks)
+	}
+	if strings.Contains(readMainTestFile(t, filepath.Join(repoRoot, ".brevity", runtimequeue.FileName)), "running") {
+		t.Fatal("queue contains running status after reserve-next")
+	}
+	if len(client.calls) != 0 {
+		t.Fatalf("calls = %#v, want no PowerShell client calls", client.calls)
 	}
 }
 
@@ -1300,6 +1405,57 @@ func writeMainTestFile(t *testing.T, path string, contents string) {
 	t.Helper()
 	if err := os.WriteFile(path, []byte(contents), 0o644); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func readMainTestFile(t *testing.T, path string) string {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(data)
+}
+
+func tempRepoWithQueue(t *testing.T, queue runtimequeue.Queue) string {
+	t.Helper()
+	repoRoot := t.TempDir()
+	brevityRoot := filepath.Join(repoRoot, ".brevity")
+	if err := os.MkdirAll(brevityRoot, 0o755); err != nil {
+		t.Fatalf("MkdirAll returned error: %v", err)
+	}
+	store, err := state.NewStore(repoRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.WriteJSON(runtimequeue.FileName, queue); err != nil {
+		t.Fatal(err)
+	}
+	return repoRoot
+}
+
+func readMainTestQueue(t *testing.T, repoRoot string) runtimequeue.Queue {
+	t.Helper()
+	store, err := runtimequeue.NewStore(repoRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	queue, _, err := store.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return queue
+}
+
+func mainTestQueueItem(id string, task string, status string) runtimequeue.Item {
+	return runtimequeue.Item{
+		ID:        id,
+		Task:      task,
+		Provider:  "codex",
+		Profile:   "default",
+		Status:    status,
+		CreatedAt: "2026-05-22T10:00:00Z",
+		UpdatedAt: "2026-05-22T10:00:00Z",
 	}
 }
 

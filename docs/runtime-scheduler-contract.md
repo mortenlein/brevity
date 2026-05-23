@@ -4,13 +4,15 @@
 It decides which single queue item the runtime would claim next, explains why,
 and reports whether that item is eligible for reservation.
 
-This is planning only. It is not provider execution.
+`brevity scheduler reserve-next` reserves exactly one selected item from that
+same plan. It is reservation only. Neither command is provider execution.
 
 ## Command
 
 ```powershell
 go run ./cmd/brevity scheduler plan
 go run ./cmd/brevity scheduler plan --json
+go run ./cmd/brevity scheduler reserve-next
 ```
 
 The JSON contract uses schema `brevity.runtime-scheduler-plan.v1`.
@@ -50,6 +52,11 @@ valid task slug.
 
 Planning does not reserve the item. Reservations remain explicit orchestration
 ownership intent and do not imply execution.
+
+`brevity scheduler reserve-next` computes the scheduler plan, reserves the
+selected item through the existing queue reservation path, and prints the queue
+item id, task slug, and reservation id. If no item is selected, it fails without
+mutating queue or task state.
 
 ## Non-Goals
 
@@ -95,3 +102,8 @@ Scheduler planning itself remains read-only.
 
 If an explicit reservation command is added later, reservation must still not
 imply provider execution or task start.
+
+`brevity scheduler reserve-next` may mutate only queue reservation metadata. It
+must never launch providers, launch workers, start the supervisor, drain the
+queue, mutate task execution state, create run history, or imply a task has
+started.
