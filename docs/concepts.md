@@ -332,6 +332,12 @@ summary with runnable/skipped/reserved counts, the next runnable task, and the
 first skip reason. It does not add queue controls, repair the file, schedule
 work, or start execution.
 
+The native dashboard also surfaces planned execution records as compact
+read-only visibility: execution file health, total records, status counts, the
+newest planned execution task when available, and inspection warnings. It does
+not execute providers, start workers, drain the queue, mutate task state, or
+create run history.
+
 The contract, allowed statuses, locking expectations, and safety invariants are
 documented in
 [`docs/runtime-queue-contract.md`](runtime-queue-contract.md).

@@ -3256,6 +3256,93 @@ func TestQueueVisibilityWidthSafety(t *testing.T) {
 	assertLinesWithinWidth(t, output, model.width)
 }
 
+func TestExecutionVisibilityRendersMissingEmptyPlannedAndCorruptedStates(t *testing.T) {
+	tests := []struct {
+		name      string
+		execution *contracts.RuntimeExecution
+		want      string
+	}{
+		{
+			name: "missing executions file",
+			execution: &contracts.RuntimeExecution{
+				State:           "missing",
+				Version:         1,
+				TotalExecutions: 0,
+				CountsByStatus:  map[string]int{},
+			},
+			want: "exec      missing file | 0 planned | 0 statuses | newest - ok",
+		},
+		{
+			name: "empty executions file",
+			execution: &contracts.RuntimeExecution{
+				State:           "valid",
+				Version:         1,
+				TotalExecutions: 0,
+				CountsByStatus:  map[string]int{},
+			},
+			want: "exec      valid file | 0 planned | 0 statuses | newest - ok",
+		},
+		{
+			name: "planned executions",
+			execution: &contracts.RuntimeExecution{
+				State:             "valid",
+				Version:           1,
+				TotalExecutions:   2,
+				CountsByStatus:    map[string]int{"planned": 2},
+				NewestPlannedTask: "task-alpha",
+			},
+			want: "exec      valid file | 2 planned | planned:2 | newest task-alpha ok",
+		},
+		{
+			name: "corrupted executions warning",
+			execution: &contracts.RuntimeExecution{
+				State:           "corrupted",
+				Version:         1,
+				TotalExecutions: 0,
+				CountsByStatus:  map[string]int{},
+				Error:           "parse runtime-executions.json: invalid character",
+			},
+			want: "exec      corrupted file | 0 planned | 0 statuses | newest - | corrupted !",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			model := NewModelWithSource(&fakeClient{}, time.Second, "native")
+			model.state = emptyBubbleState()
+			model.state.Executions = tt.execution
+			model.hasState = true
+
+			output := plainView(model.renderSummary())
+			if !strings.Contains(output, tt.want) {
+				t.Fatalf("execution summary missing %q:\n%s", tt.want, output)
+			}
+		})
+	}
+}
+
+func TestExecutionVisibilityWidthSafety(t *testing.T) {
+	model := NewModelWithSource(&fakeClient{}, time.Second, "native")
+	model.state = emptyBubbleState()
+	model.state.Executions = &contracts.RuntimeExecution{
+		State:             "invalid",
+		Version:           99,
+		SupportedVersion:  1,
+		TotalExecutions:   12345,
+		CountsByStatus:    map[string]int{"planned-with-a-very-long-future-status": 12345},
+		NewestPlannedTask: strings.Repeat("long-task-", 12),
+		Error:             strings.Repeat("future version ", 20),
+	}
+	model.hasState = true
+	model.width = 42
+
+	output := plainView(model.View())
+	if !strings.Contains(output, "exec") {
+		t.Fatalf("narrow execution view missing execution summary:\n%s", output)
+	}
+	assertLinesWithinWidth(t, output, model.width)
+}
+
 func bubbleState() contracts.RuntimeState {
 	return contracts.RuntimeState{
 		Schema:   contracts.RuntimeStateSchema,

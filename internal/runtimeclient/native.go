@@ -16,6 +16,7 @@ import (
 	nativecleanup "github.com/mortenlein/brevity/internal/cleanup"
 	"github.com/mortenlein/brevity/internal/contracts"
 	"github.com/mortenlein/brevity/internal/diagnostics"
+	runtimeexecution "github.com/mortenlein/brevity/internal/runtime/execution"
 	runtimequeue "github.com/mortenlein/brevity/internal/runtime/queue"
 	"github.com/mortenlein/brevity/internal/state"
 )
@@ -92,6 +93,13 @@ func (client NativeClient) RuntimeState() (contracts.RuntimeState, error) {
 		runtimeState.SuggestedNextActions = append(runtimeState.SuggestedNextActions, "Inspect .brevity\\runtime-queue.json before relying on queued work visibility.")
 	}
 
+	executionStore := runtimeexecution.Store{Store: store}
+	executionInspection := executionStore.Inspect()
+	runtimeState.Executions = executionInspectionToContract(executionInspection)
+	if executionInspection.State == "corrupted" || executionInspection.State == "invalid" {
+		runtimeState.SuggestedNextActions = append(runtimeState.SuggestedNextActions, "Inspect .brevity\\runtime-executions.json before relying on planned execution visibility.")
+	}
+
 	taskStore, missingTasks, err := state.LoadTasks(store)
 	if err != nil {
 		return contracts.RuntimeState{}, err
@@ -131,6 +139,26 @@ func (client NativeClient) RuntimeState() (contracts.RuntimeState, error) {
 	}
 
 	return runtimeState, nil
+}
+
+func executionInspectionToContract(inspection runtimeexecution.Inspection) *contracts.RuntimeExecution {
+	counts := map[string]int{}
+	for status, count := range inspection.CountsByStatus {
+		counts[status] = count
+	}
+	return &contracts.RuntimeExecution{
+		Path:                     inspection.Path,
+		State:                    inspection.State,
+		Version:                  inspection.Version,
+		SupportedVersion:         inspection.SupportedVersion,
+		TotalExecutions:          inspection.TotalExecutions,
+		CountsByStatus:           counts,
+		NewestPlannedTask:        inspection.NewestPlannedTask,
+		DuplicateIDs:             append([]string{}, inspection.DuplicateIDs...),
+		InvalidRecords:           append([]string{}, inspection.InvalidRecords...),
+		UnsupportedFutureVersion: inspection.UnsupportedFutureVersion,
+		Error:                    inspection.Error,
+	}
 }
 
 func queueInspectionToContract(inspection runtimequeue.Inspection, plan runtimequeue.Plan) *contracts.RuntimeQueue {

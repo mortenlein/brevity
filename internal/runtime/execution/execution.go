@@ -59,6 +59,7 @@ type Inspection struct {
 	SupportedVersion         int            `json:"supportedVersion"`
 	TotalExecutions          int            `json:"totalExecutions"`
 	CountsByStatus           map[string]int `json:"countsByStatus"`
+	NewestPlannedTask        string         `json:"newestPlannedTask,omitempty"`
 	DuplicateIDs             []string       `json:"duplicateIds,omitempty"`
 	InvalidRecords           []string       `json:"invalidRecords,omitempty"`
 	UnsupportedFutureVersion bool           `json:"unsupportedFutureVersion"`
@@ -146,12 +147,19 @@ func (store Store) Inspect() Inspection {
 
 	seen := map[string]struct{}{}
 	duplicates := map[string]struct{}{}
+	var newestPlannedAt time.Time
 	for index, record := range executions.Records {
 		status := strings.ToLower(strings.TrimSpace(record.Status))
 		if status == "" {
 			status = "(missing)"
 		}
 		result.CountsByStatus[status]++
+		if status == StatusPlanned {
+			if createdAt, err := parseTime(record.CreatedAt); err == nil && (newestPlannedAt.IsZero() || createdAt.After(newestPlannedAt)) {
+				newestPlannedAt = createdAt
+				result.NewestPlannedTask = record.Task
+			}
+		}
 		if strings.TrimSpace(record.ID) == "" {
 			result.InvalidRecords = append(result.InvalidRecords, fmt.Sprintf("execution[%d] id is required", index))
 		} else if _, exists := seen[record.ID]; exists {

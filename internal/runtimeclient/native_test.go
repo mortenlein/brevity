@@ -260,6 +260,81 @@ func TestNativeRuntimeStateMissingFiles(t *testing.T) {
 	if state.Queue.Plan == nil || state.Queue.Plan.Runnable != 0 || state.Queue.Plan.Skipped != 0 || !state.Queue.Plan.ReadOnly {
 		t.Fatalf("queue plan = %#v, want empty read-only plan visibility", state.Queue.Plan)
 	}
+	if state.Executions == nil || state.Executions.State != "missing" || state.Executions.TotalExecutions != 0 {
+		t.Fatalf("executions = %#v, want missing empty execution visibility", state.Executions)
+	}
+}
+
+func TestNativeRuntimeStateIncludesEmptyExecutionsVisibility(t *testing.T) {
+	repoRoot := nativeTestRepo(t)
+	writeNativeTestFile(t, repoRoot, ".brevity/provider-health.json", `{}`)
+	writeNativeTestFile(t, repoRoot, ".brevity/tasks.json", `[]`)
+	writeNativeTestFile(t, repoRoot, ".brevity/runtime-executions.json", `{"version":1,"executions":[]}`)
+
+	state := nativeState(t, repoRoot)
+	if state.Executions == nil || state.Executions.State != "valid" || state.Executions.TotalExecutions != 0 {
+		t.Fatalf("executions = %#v, want valid empty execution visibility", state.Executions)
+	}
+	if len(state.Executions.CountsByStatus) != 0 || state.Executions.NewestPlannedTask != "" {
+		t.Fatalf("executions = %#v, want empty counts and newest task", state.Executions)
+	}
+}
+
+func TestNativeRuntimeStateIncludesPlannedExecutionSummaryWithoutMutation(t *testing.T) {
+	repoRoot := nativeTestRepo(t)
+	writeNativeTestFile(t, repoRoot, ".brevity/provider-health.json", `{}`)
+	writeNativeTestFile(t, repoRoot, ".brevity/tasks.json", `[]`)
+	writeNativeTestFile(t, repoRoot, ".brevity/runtime-executions.json", `{
+		"version":1,
+		"executions":[
+			{"id":"exec-old","queueItemId":"queue-old","task":"old-task","reservationId":"res-old","status":"planned","createdAt":"2026-05-19T08:00:00Z","updatedAt":"2026-05-19T08:00:00Z"},
+			{"id":"exec-new","queueItemId":"queue-new","task":"new-task","reservationId":"res-new","status":"planned","createdAt":"2026-05-19T09:00:00Z","updatedAt":"2026-05-19T09:00:00Z"}
+		]
+	}`)
+	executionsPath := filepath.Join(repoRoot, ".brevity", "runtime-executions.json")
+	before, err := os.ReadFile(executionsPath)
+	if err != nil {
+		t.Fatalf("read executions before: %v", err)
+	}
+
+	state := nativeState(t, repoRoot)
+	after, err := os.ReadFile(executionsPath)
+	if err != nil {
+		t.Fatalf("read executions after: %v", err)
+	}
+	if string(after) != string(before) {
+		t.Fatalf("runtime state mutated executions file\nbefore:%s\nafter:%s", before, after)
+	}
+	if state.Executions == nil || state.Executions.State != "valid" || state.Executions.TotalExecutions != 2 {
+		t.Fatalf("executions = %#v, want valid two-record summary", state.Executions)
+	}
+	if state.Executions.CountsByStatus["planned"] != 2 || state.Executions.NewestPlannedTask != "new-task" {
+		t.Fatalf("executions = %#v, want planned count and newest task", state.Executions)
+	}
+}
+
+func TestNativeRuntimeStateIncludesCorruptedExecutionsWarning(t *testing.T) {
+	repoRoot := nativeTestRepo(t)
+	writeNativeTestFile(t, repoRoot, ".brevity/provider-health.json", `{}`)
+	writeNativeTestFile(t, repoRoot, ".brevity/tasks.json", `[]`)
+	writeNativeTestFile(t, repoRoot, ".brevity/runtime-executions.json", `{not-json}`)
+
+	state := nativeState(t, repoRoot)
+	if state.Executions == nil || state.Executions.State != "corrupted" {
+		t.Fatalf("executions = %#v, want corrupted summary", state.Executions)
+	}
+	if state.Executions.Error == "" {
+		t.Fatalf("executions error is empty: %#v", state.Executions)
+	}
+	found := false
+	for _, action := range state.SuggestedNextActions {
+		if action == "Inspect .brevity\\runtime-executions.json before relying on planned execution visibility." {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("suggested actions missing executions warning: %#v", state.SuggestedNextActions)
+	}
 }
 
 func TestNativeRuntimeStateIncludesQueueSummaryWithoutMutation(t *testing.T) {

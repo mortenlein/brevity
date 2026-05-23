@@ -9,20 +9,21 @@ import (
 const RuntimeStateSchema = "brevity.runtime-state.v1"
 
 type RuntimeState struct {
-	Schema                string           `json:"schema"`
-	RepoRoot              string           `json:"repoRoot"`
-	GeneratedAt           string           `json:"generatedAt"`
-	Providers             Providers        `json:"providers"`
-	Queue                 *RuntimeQueue    `json:"queue,omitempty"`
-	TaskCounts            TaskCounts       `json:"taskCounts"`
-	Tasks                 []TaskSummary    `json:"tasks"`
-	Cleanup               *Cleanup         `json:"cleanup,omitempty"`
-	OrphanedTaskWorktrees []WorktreeRecord `json:"orphanedTaskWorktrees"`
-	ActiveWorktreeCount   int              `json:"activeWorktreeCount"`
-	ActiveWorktrees       []WorktreeRecord `json:"activeWorktrees"`
-	SuggestedNextActions  []string         `json:"suggestedNextActions"`
-	Groups                map[string]any   `json:"groups"`
-	Extras                map[string]any   `json:"-"`
+	Schema                string            `json:"schema"`
+	RepoRoot              string            `json:"repoRoot"`
+	GeneratedAt           string            `json:"generatedAt"`
+	Providers             Providers         `json:"providers"`
+	Queue                 *RuntimeQueue     `json:"queue,omitempty"`
+	Executions            *RuntimeExecution `json:"executions,omitempty"`
+	TaskCounts            TaskCounts        `json:"taskCounts"`
+	Tasks                 []TaskSummary     `json:"tasks"`
+	Cleanup               *Cleanup          `json:"cleanup,omitempty"`
+	OrphanedTaskWorktrees []WorktreeRecord  `json:"orphanedTaskWorktrees"`
+	ActiveWorktreeCount   int               `json:"activeWorktreeCount"`
+	ActiveWorktrees       []WorktreeRecord  `json:"activeWorktrees"`
+	SuggestedNextActions  []string          `json:"suggestedNextActions"`
+	Groups                map[string]any    `json:"groups"`
+	Extras                map[string]any    `json:"-"`
 }
 
 type Providers struct {
@@ -70,6 +71,20 @@ type QueuePlan struct {
 	FirstSkipReason  string `json:"firstSkipReason,omitempty"`
 	Error            string `json:"error,omitempty"`
 	ReadOnly         bool   `json:"readOnly"`
+}
+
+type RuntimeExecution struct {
+	Path                     string         `json:"path"`
+	State                    string         `json:"state"`
+	Version                  int            `json:"version"`
+	SupportedVersion         int            `json:"supportedVersion"`
+	TotalExecutions          int            `json:"totalExecutions"`
+	CountsByStatus           map[string]int `json:"countsByStatus"`
+	NewestPlannedTask        string         `json:"newestPlannedTask,omitempty"`
+	DuplicateIDs             []string       `json:"duplicateIds,omitempty"`
+	InvalidRecords           []string       `json:"invalidRecords,omitempty"`
+	UnsupportedFutureVersion bool           `json:"unsupportedFutureVersion"`
+	Error                    string         `json:"error,omitempty"`
 }
 
 type TaskCounts struct {
