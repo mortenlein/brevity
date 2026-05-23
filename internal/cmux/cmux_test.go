@@ -1354,6 +1354,331 @@ func TestFilter_SectionTasks_WithSlugFilter(t *testing.T) {
 	}
 }
 
+// --- OutputMode: markdown rendering tests ----------------------------------
+
+// markdownOpts is a shorthand for default markdown options.
+func markdownOpts() cmux.RenderOptions {
+	return cmux.RenderOptions{Output: cmux.OutputMarkdown}
+}
+
+func TestMarkdown_H1HeaderAtStart(t *testing.T) {
+	snap := cmux.Read(stubFetcher{stateJSON: minimalStateJSON(t), schedulerJSON: minimalSchedulerJSON()})
+	out := renderSnapshotOpts(snap, markdownOpts())
+	if !strings.HasPrefix(out, "# CMUX") {
+		t.Errorf("markdown must start with # CMUX; actual prefix: %q", out[:min(len(out), 30)])
+	}
+}
+
+func TestMarkdown_AllH2SectionsPresent(t *testing.T) {
+	snap := cmux.Read(stubFetcher{stateJSON: minimalStateJSON(t), schedulerJSON: minimalSchedulerJSON()})
+	out := renderSnapshotOpts(snap, markdownOpts())
+	for _, want := range []string{
+		"## Providers",
+		"## Task Counts",
+		"## Task List",
+		"## Queue / Scheduler",
+		"## Suggested Next Actions",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("markdown missing heading %q; output:\n%s", want, out)
+		}
+	}
+}
+
+func TestMarkdown_TaskH3Headings(t *testing.T) {
+	snap := cmux.Read(stubFetcher{stateJSON: minimalStateJSON(t), schedulerJSON: minimalSchedulerJSON()})
+	out := renderSnapshotOpts(snap, markdownOpts())
+	if !strings.Contains(out, "### alpha-task") {
+		t.Errorf("markdown missing ### alpha-task; output:\n%s", out)
+	}
+	if !strings.Contains(out, "### beta-task") {
+		t.Errorf("markdown missing ### beta-task; output:\n%s", out)
+	}
+}
+
+func TestMarkdown_TaskDetail_BulletListItems(t *testing.T) {
+	snap := cmux.Read(stubFetcher{stateJSON: richTaskStateJSON(), schedulerJSON: minimalSchedulerJSON()})
+	out := renderSnapshotOpts(snap, markdownOpts())
+	for _, want := range []string{
+		"- **Worktree:**",
+		"- **Prompt:**",
+		"- **Last Run:**",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("markdown task detail missing bullet %q; output:\n%s", want, out)
+		}
+	}
+}
+
+func TestMarkdown_TaskDetail_StateIsBold(t *testing.T) {
+	snap := cmux.Read(stubFetcher{stateJSON: richTaskStateJSON(), schedulerJSON: minimalSchedulerJSON()})
+	out := renderSnapshotOpts(snap, markdownOpts())
+	if !strings.Contains(out, "**State:** ready-for-worker") {
+		t.Errorf("markdown task state not bold or wrong value; output:\n%s", out)
+	}
+}
+
+func TestMarkdown_ProviderTable_WithProviders(t *testing.T) {
+	snap := cmux.Read(stubFetcher{stateJSON: richProviderStateJSON(), schedulerJSON: minimalSchedulerJSON()})
+	out := renderSnapshotOpts(snap, markdownOpts())
+	if !strings.Contains(out, "| Provider |") {
+		t.Errorf("markdown providers missing table header row; output:\n%s", out)
+	}
+	if !strings.Contains(out, "|---|") {
+		t.Errorf("markdown providers missing table separator row; output:\n%s", out)
+	}
+	if !strings.Contains(out, "| codex |") {
+		t.Errorf("markdown providers missing codex table row; output:\n%s", out)
+	}
+	if !strings.Contains(out, "| gemini |") {
+		t.Errorf("markdown providers missing gemini table row; output:\n%s", out)
+	}
+}
+
+func TestMarkdown_ProviderTable_EmptyProviders_ItalicFallback(t *testing.T) {
+	snap := cmux.Read(stubFetcher{stateJSON: manyTaskStateJSON(0), schedulerJSON: minimalSchedulerJSON()})
+	out := renderSnapshotOpts(snap, markdownOpts())
+	if !strings.Contains(out, "_No providers tracked._") {
+		t.Errorf("markdown empty providers missing italic fallback; output:\n%s", out)
+	}
+	// Must not emit a table header for empty providers.
+	if strings.Contains(out, "| Provider |") {
+		t.Error("markdown empty providers must not emit table header")
+	}
+}
+
+func TestMarkdown_EmptyTaskList_ItalicFallback(t *testing.T) {
+	snap := cmux.Read(stubFetcher{stateJSON: manyTaskStateJSON(0), schedulerJSON: minimalSchedulerJSON()})
+	out := renderSnapshotOpts(snap, markdownOpts())
+	if !strings.Contains(out, "_No tasks tracked._") {
+		t.Errorf("markdown empty task list missing italic fallback; output:\n%s", out)
+	}
+}
+
+func TestMarkdown_EmptyActions_ItalicFallback(t *testing.T) {
+	// manyTaskStateJSON has empty suggestedNextActions.
+	snap := cmux.Read(stubFetcher{stateJSON: manyTaskStateJSON(0), schedulerJSON: minimalSchedulerJSON()})
+	out := renderSnapshotOpts(snap, markdownOpts())
+	if !strings.Contains(out, "_No actions suggested._") {
+		t.Errorf("markdown empty actions missing italic fallback; output:\n%s", out)
+	}
+}
+
+func TestMarkdown_SlugFilter_NotFound_ItalicMessage(t *testing.T) {
+	snap := cmux.Read(stubFetcher{stateJSON: multiStateJSON(), schedulerJSON: minimalSchedulerJSON()})
+	out := renderSnapshotOpts(snap, cmux.RenderOptions{
+		Output:   cmux.OutputMarkdown,
+		TaskSlug: "no-such-task",
+	})
+	if !strings.Contains(out, `_Task "no-such-task" not found._`) {
+		t.Errorf("markdown slug not-found missing italic message; output:\n%s", out)
+	}
+}
+
+func TestMarkdown_StateFilter_NoMatch_ItalicMessage(t *testing.T) {
+	snap := cmux.Read(stubFetcher{stateJSON: multiStateJSON(), schedulerJSON: minimalSchedulerJSON()})
+	out := renderSnapshotOpts(snap, cmux.RenderOptions{
+		Output:      cmux.OutputMarkdown,
+		StateFilter: "stale",
+	})
+	if !strings.Contains(out, `_No tasks with state "stale"._`) {
+		t.Errorf("markdown state no-match missing italic message; output:\n%s", out)
+	}
+}
+
+func TestMarkdown_SlugFilter_Found_ShowsOnlyThatTask(t *testing.T) {
+	snap := cmux.Read(stubFetcher{stateJSON: multiStateJSON(), schedulerJSON: minimalSchedulerJSON()})
+	out := renderSnapshotOpts(snap, cmux.RenderOptions{
+		Output:   cmux.OutputMarkdown,
+		TaskSlug: "task-review",
+	})
+	if !strings.Contains(out, "### task-review") {
+		t.Errorf("markdown slug filter missing ### task-review; output:\n%s", out)
+	}
+	if strings.Contains(out, "### task-ready") {
+		t.Error("markdown slug filter must not contain ### task-ready")
+	}
+	if strings.Contains(out, "### task-blocked") {
+		t.Error("markdown slug filter must not contain ### task-blocked")
+	}
+}
+
+func TestMarkdown_StateFilter_ShowsMatchingTaskH3(t *testing.T) {
+	snap := cmux.Read(stubFetcher{stateJSON: multiStateJSON(), schedulerJSON: minimalSchedulerJSON()})
+	out := renderSnapshotOpts(snap, cmux.RenderOptions{
+		Output:      cmux.OutputMarkdown,
+		StateFilter: "reviewing",
+	})
+	if !strings.Contains(out, "### task-review") {
+		t.Errorf("markdown state filter missing ### task-review; output:\n%s", out)
+	}
+	if strings.Contains(out, "### task-ready") {
+		t.Error("markdown state filter must not contain ### task-ready")
+	}
+}
+
+func TestMarkdown_Limit_ShowsInH2Heading(t *testing.T) {
+	snap := cmux.Read(stubFetcher{stateJSON: manyTaskStateJSON(5), schedulerJSON: minimalSchedulerJSON()})
+	out := renderSnapshotOpts(snap, cmux.RenderOptions{Output: cmux.OutputMarkdown, Limit: 2})
+	if !strings.Contains(out, "## Task List (showing 2 of 5)") {
+		t.Errorf("markdown limit missing truncation in heading; output:\n%s", out)
+	}
+	if strings.Contains(out, "### task-3") {
+		t.Error("markdown limit must not show task-3")
+	}
+}
+
+func TestMarkdown_SectionProviders_NoTaskH3(t *testing.T) {
+	snap := cmux.Read(stubFetcher{stateJSON: minimalStateJSON(t), schedulerJSON: minimalSchedulerJSON()})
+	out := renderSnapshotOpts(snap, cmux.RenderOptions{
+		Output:  cmux.OutputMarkdown,
+		Section: cmux.SectionProviders,
+	})
+	if !strings.Contains(out, "## Providers") {
+		t.Error("markdown section=providers missing ## Providers")
+	}
+	if strings.Contains(out, "### ") {
+		t.Error("markdown section=providers must not contain any ### task headings")
+	}
+	if strings.Contains(out, "## Task") {
+		t.Error("markdown section=providers must not contain ## Task heading")
+	}
+}
+
+func TestMarkdown_SectionTasks_NoProviderTable(t *testing.T) {
+	snap := cmux.Read(stubFetcher{stateJSON: richProviderStateJSON(), schedulerJSON: minimalSchedulerJSON()})
+	out := renderSnapshotOpts(snap, cmux.RenderOptions{
+		Output:  cmux.OutputMarkdown,
+		Section: cmux.SectionTasks,
+	})
+	if !strings.Contains(out, "## Task") {
+		t.Error("markdown section=tasks missing ## Task heading")
+	}
+	if strings.Contains(out, "## Providers") {
+		t.Error("markdown section=tasks must not contain ## Providers")
+	}
+	if strings.Contains(out, "| Provider |") {
+		t.Error("markdown section=tasks must not contain provider table")
+	}
+}
+
+func TestMarkdown_SectionQueue_OnlyQueueH2(t *testing.T) {
+	snap := cmux.Read(stubFetcher{stateJSON: minimalStateJSON(t), schedulerJSON: minimalSchedulerJSON()})
+	out := renderSnapshotOpts(snap, cmux.RenderOptions{
+		Output:  cmux.OutputMarkdown,
+		Section: cmux.SectionQueue,
+	})
+	if !strings.Contains(out, "## Queue / Scheduler") {
+		t.Error("markdown section=queue missing ## Queue / Scheduler")
+	}
+	if strings.Contains(out, "## Providers") {
+		t.Error("markdown section=queue must not contain ## Providers")
+	}
+	if strings.Contains(out, "## Task") {
+		t.Error("markdown section=queue must not contain ## Task heading")
+	}
+}
+
+func TestMarkdown_SectionActions_OnlyActionsH2(t *testing.T) {
+	snap := cmux.Read(stubFetcher{stateJSON: minimalStateJSON(t), schedulerJSON: minimalSchedulerJSON()})
+	out := renderSnapshotOpts(snap, cmux.RenderOptions{
+		Output:  cmux.OutputMarkdown,
+		Section: cmux.SectionActions,
+	})
+	if !strings.Contains(out, "## Suggested Next Actions") {
+		t.Error("markdown section=actions missing ## Suggested Next Actions")
+	}
+	if strings.Contains(out, "## Providers") {
+		t.Error("markdown section=actions must not contain ## Providers")
+	}
+	if strings.Contains(out, "## Task") {
+		t.Error("markdown section=actions must not contain ## Task heading")
+	}
+}
+
+func TestMarkdown_RuntimeStateError_Rendered(t *testing.T) {
+	snap := cmux.Read(stubFetcher{
+		stateErr:      errors.New("runtime unavailable"),
+		schedulerJSON: minimalSchedulerJSON(),
+	})
+	out := renderSnapshotOpts(snap, markdownOpts())
+	if !strings.Contains(out, "runtime-state error:") {
+		t.Errorf("markdown runtime-state error not displayed; output:\n%s", out)
+	}
+	if !strings.Contains(out, "runtime unavailable") {
+		t.Errorf("markdown runtime-state error message missing; output:\n%s", out)
+	}
+}
+
+func TestMarkdown_NoANSISequences(t *testing.T) {
+	snap := cmux.Read(stubFetcher{stateJSON: minimalStateJSON(t), schedulerJSON: minimalSchedulerJSON()})
+	out := renderSnapshotOpts(snap, markdownOpts())
+	if strings.Contains(out, "\x1b[") {
+		t.Error("markdown output contains ANSI escape sequences")
+	}
+}
+
+func TestMarkdown_Deterministic(t *testing.T) {
+	snap := cmux.Read(stubFetcher{stateJSON: minimalStateJSON(t), schedulerJSON: minimalSchedulerJSON()})
+	opts := markdownOpts()
+	out1 := renderSnapshotOpts(snap, opts)
+	out2 := renderSnapshotOpts(snap, opts)
+	if out1 != out2 {
+		t.Error("markdown Render is not deterministic: two calls produced different output")
+	}
+}
+
+func TestMarkdown_OutputTextDefault_NoMarkdownHeadings(t *testing.T) {
+	// OutputText (the default) must not produce markdown headings.
+	snap := cmux.Read(stubFetcher{stateJSON: minimalStateJSON(t), schedulerJSON: minimalSchedulerJSON()})
+	out := renderSnapshot(snap) // uses RenderOptions{} — zero value = text
+	if strings.Contains(out, "# CMUX") {
+		t.Error("text output must not contain # CMUX markdown heading")
+	}
+	if strings.Contains(out, "## Providers") {
+		t.Error("text output must not contain ## Providers markdown heading")
+	}
+}
+
+func TestMarkdown_SchedulerSelection_InQueueSection(t *testing.T) {
+	schedulerWithSelection := []byte(`{
+		"schema": "brevity.runtime-scheduler-plan.v1",
+		"queuePath": ".brevity/runtime-queue.json",
+		"queueState": "valid",
+		"queueVersion": 1,
+		"supportedQueueVersion": 1,
+		"selected": {
+			"id": "abc-123",
+			"task": "alpha-task",
+			"provider": "",
+			"profile": "",
+			"status": "queued",
+			"reason": "first eligible item"
+		},
+		"reservationEligible": true,
+		"reservationEligibility": "eligible",
+		"skipped": [],
+		"safetyChecks": [],
+		"readOnly": true
+	}`)
+	snap := cmux.Read(stubFetcher{stateJSON: minimalStateJSON(t), schedulerJSON: schedulerWithSelection})
+	out := renderSnapshotOpts(snap, markdownOpts())
+	if !strings.Contains(out, "**Scheduler Next:**") {
+		t.Errorf("markdown queue section missing **Scheduler Next:** label; output:\n%s", out)
+	}
+	if !strings.Contains(out, "abc-123") {
+		t.Errorf("markdown queue section missing selected item id; output:\n%s", out)
+	}
+}
+
+// min is used only in tests to safely cap string indexing.
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}
+
 // extractSection returns the text between the first occurrence of startMarker
 // and the next occurrence of endMarker (exclusive).  Used for targeted
 // section assertions.

@@ -25,9 +25,20 @@ const (
 	SectionActions   = "actions"
 )
 
+// OutputMode selects the rendered output format.
+type OutputMode string
+
+const (
+	// OutputText selects the plain-text renderer (default).
+	OutputText OutputMode = "text"
+	// OutputMarkdown selects the GitHub-Flavoured Markdown renderer.
+	OutputMarkdown OutputMode = "markdown"
+)
+
 // RenderOptions controls which sections are rendered, how many tasks are shown,
-// and optional task-level filters.  The zero value selects all sections with
-// the default task limit and no filtering.
+// optional task-level filters, and output format.
+// The zero value selects all sections with the default task limit, no filtering,
+// and plain-text output.
 type RenderOptions struct {
 	// Limit is the maximum number of tasks to show in the task list.
 	// 0 or negative uses DefaultLimit.
@@ -46,6 +57,11 @@ type RenderOptions struct {
 	// matches this value (case-insensitive exact match).
 	// Empty string disables state filtering.
 	StateFilter string
+
+	// Output selects the output format.
+	// Empty string and OutputText both select the plain-text renderer.
+	// OutputMarkdown selects the GitHub-Flavoured Markdown renderer.
+	Output OutputMode
 }
 
 // effectiveLimit returns the active task limit, always >= 1.

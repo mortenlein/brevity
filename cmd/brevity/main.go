@@ -114,6 +114,7 @@ type cliOptions struct {
 	cmuxSection     string
 	cmuxTask        string
 	cmuxState       string
+	cmuxOutput      string
 }
 
 type actionCall func() ([]byte, error)
@@ -312,11 +313,12 @@ func parseCmuxOptions(args []string) (cliOptions, error) {
 	section := flags.String("section", cmux.SectionAll, "section to render: all, providers, tasks, queue, actions")
 	task := flags.String("task", "", "filter task list to this exact task slug")
 	state := flags.String("state", "", "filter task list to tasks with this normalised state")
+	output := flags.String("output", string(cmux.OutputText), "output format: text or markdown")
 	if err := flags.Parse(args[1:]); err != nil {
-		return cliOptions{}, fmt.Errorf("usage: brevity cmux [--limit <n>] [--section <name>] [--task <slug>] [--state <state>]")
+		return cliOptions{}, fmt.Errorf("usage: brevity cmux [--limit <n>] [--section <name>] [--task <slug>] [--state <state>] [--output text|markdown]")
 	}
 	if flags.NArg() > 0 {
-		return cliOptions{}, fmt.Errorf("usage: brevity cmux [--limit <n>] [--section <name>] [--task <slug>] [--state <state>]")
+		return cliOptions{}, fmt.Errorf("usage: brevity cmux [--limit <n>] [--section <name>] [--task <slug>] [--state <state>] [--output text|markdown]")
 	}
 	switch *section {
 	case cmux.SectionAll, cmux.SectionProviders, cmux.SectionTasks, cmux.SectionQueue, cmux.SectionActions:
@@ -327,12 +329,19 @@ func parseCmuxOptions(args []string) (cliOptions, error) {
 	if *limit <= 0 {
 		return cliOptions{}, fmt.Errorf("invalid --limit %d: must be greater than zero", *limit)
 	}
+	switch cmux.OutputMode(*output) {
+	case cmux.OutputText, cmux.OutputMarkdown:
+		// valid
+	default:
+		return cliOptions{}, fmt.Errorf("invalid --output %q: allowed values: text, markdown", *output)
+	}
 	return cliOptions{
 		kind:        commandCmux,
 		cmuxLimit:   *limit,
 		cmuxSection: *section,
 		cmuxTask:    *task,
 		cmuxState:   *state,
+		cmuxOutput:  *output,
 	}, nil
 }
 
@@ -343,6 +352,7 @@ func routeCmuxCommand(stdout io.Writer, options cliOptions) error {
 		Section:     options.cmuxSection,
 		TaskSlug:    options.cmuxTask,
 		StateFilter: options.cmuxState,
+		Output:      cmux.OutputMode(options.cmuxOutput),
 	})
 	return nil
 }

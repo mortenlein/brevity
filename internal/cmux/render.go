@@ -11,13 +11,19 @@ import (
 
 const sectionSep = "---"
 
-// Render writes a plain-text CMUX dashboard to w from a Snapshot.
+// Render writes a CMUX dashboard to w from a Snapshot.
 //
-// opts controls which sections are rendered and how many tasks are shown.
+// opts controls which sections are rendered, how many tasks are shown,
+// optional task filters, and output format (text or markdown).
 // Output is deterministic for a given Snapshot and RenderOptions.
 // No ANSI sequences, no TUI framework, no watch mode, no keyboard handling.
 // Every section degrades gracefully when its contract is unavailable.
 func Render(w io.Writer, snap Snapshot, opts RenderOptions) {
+	if opts.Output == OutputMarkdown {
+		renderMarkdown(w, snap, opts)
+		return
+	}
+
 	section := opts.effectiveSection()
 
 	renderHeader(w, snap)
@@ -219,31 +225,40 @@ func renderTopTasks(w io.Writer, snap Snapshot, opts RenderOptions) {
 	}
 }
 
-// renderTaskWorktree writes the worktree presence and path line for a task.
-func renderTaskWorktree(w io.Writer, t contracts.TaskSummary) {
-	worktreePath := ""
-	worktreePresence := "unknown"
-
+// resolveTaskWorktree extracts the worktree path and presence label from a
+// task summary.  path is empty when no worktree information is available.
+// presence is one of "present", "missing", or "unknown".
+// Both renderers (text and markdown) use this helper to avoid duplicating the
+// field-priority logic.
+func resolveTaskWorktree(t contracts.TaskSummary) (path, presence string) {
+	presence = "unknown"
 	if t.Worktree != nil {
-		worktreePath = t.Worktree.Path
+		path = t.Worktree.Path
 		if t.Worktree.Exists {
-			worktreePresence = "present"
+			presence = "present"
 		} else {
-			worktreePresence = "missing"
+			presence = "missing"
 		}
-	} else if strings.TrimSpace(t.WorktreePath) != "" {
-		worktreePath = t.WorktreePath
+		return
+	}
+	if strings.TrimSpace(t.WorktreePath) != "" {
+		path = t.WorktreePath
 		if t.WorktreeExists != nil {
 			if *t.WorktreeExists {
-				worktreePresence = "present"
+				presence = "present"
 			} else {
-				worktreePresence = "missing"
+				presence = "missing"
 			}
 		}
 	}
+	return
+}
 
-	if worktreePath != "" {
-		fmt.Fprintf(w, "    worktree: %s  (%s)\n", worktreePath, worktreePresence)
+// renderTaskWorktree writes the worktree presence and path line for a task.
+func renderTaskWorktree(w io.Writer, t contracts.TaskSummary) {
+	path, presence := resolveTaskWorktree(t)
+	if path != "" {
+		fmt.Fprintf(w, "    worktree: %s  (%s)\n", path, presence)
 	} else {
 		fmt.Fprintln(w, "    worktree: (none)")
 	}
