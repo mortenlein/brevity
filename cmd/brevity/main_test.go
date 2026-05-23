@@ -1841,7 +1841,14 @@ func tempRepoWithProviderHealth(t *testing.T, health string) string {
 
 func tempGitRepoForTaskNew(t *testing.T) string {
 	t.Helper()
-	repoRoot := t.TempDir()
+	raw := t.TempDir()
+	// On Windows, t.TempDir returns 8.3 short-name paths (e.g. MORTEN~1),
+	// but git resolves worktree paths to their long-name canonical form.
+	// EvalSymlinks normalises the path so worktreeRegistered comparisons succeed.
+	repoRoot, err := filepath.EvalSymlinks(raw)
+	if err != nil {
+		t.Fatalf("EvalSymlinks on temp dir: %v", err)
+	}
 	runTestCommand(t, repoRoot, "git", "init")
 	runTestCommand(t, repoRoot, "git", "config", "user.email", "brevity@example.test")
 	runTestCommand(t, repoRoot, "git", "config", "user.name", "Brevity Test")
