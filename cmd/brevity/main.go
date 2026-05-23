@@ -23,6 +23,7 @@ import (
 	"github.com/mortenlein/brevity/internal/preflight"
 	"github.com/mortenlein/brevity/internal/runmaintenance"
 	runtimequeue "github.com/mortenlein/brevity/internal/runtime/queue"
+	runtimescheduler "github.com/mortenlein/brevity/internal/runtime/scheduler"
 	runtimestate "github.com/mortenlein/brevity/internal/runtime/state"
 	runtimesupervisor "github.com/mortenlein/brevity/internal/runtime/supervisor"
 	"github.com/mortenlein/brevity/internal/runtimeclient"
@@ -52,6 +53,7 @@ const (
 	commandQueueRemove       commandKind = commandKind(commands.QueueRemoveID)
 	commandQueueReserve      commandKind = commandKind(commands.QueueReserveID)
 	commandQueueUnreserve    commandKind = commandKind(commands.QueueUnreserveID)
+	commandSchedulerPlan     commandKind = commandKind(commands.SchedulerPlanID)
 	commandProviderStatus    commandKind = commandKind(commands.ProviderStatusID)
 	commandProviderSet       commandKind = commandKind(commands.ProviderSetID)
 	commandProviderReset     commandKind = commandKind(commands.ProviderResetID)
@@ -144,6 +146,9 @@ func parseOptions(args []string) (cliOptions, error) {
 	}
 	if len(args) > 0 && args[0] == "queue" {
 		return parseQueueOptions(args)
+	}
+	if len(args) > 0 && args[0] == "scheduler" {
+		return parseSchedulerOptions(args)
 	}
 	if len(args) > 0 && args[0] == "task" {
 		return parseTaskOptions(args)
@@ -248,6 +253,25 @@ func parseQueueOptions(args []string) (cliOptions, error) {
 		return cliOptions{kind: commandQueueUnreserve, candidateID: args[2]}, nil
 	default:
 		return cliOptions{}, fmt.Errorf("unsupported queue command %q: supported commands: add, list, inspect, plan, remove, reserve, unreserve", args[1])
+	}
+}
+
+func parseSchedulerOptions(args []string) (cliOptions, error) {
+	if len(args) < 2 {
+		return cliOptions{}, fmt.Errorf("missing scheduler command: supported commands: plan")
+	}
+	switch args[1] {
+	case "plan":
+		options := cliOptions{kind: commandSchedulerPlan}
+		for _, arg := range args[2:] {
+			if arg != "--json" {
+				return cliOptions{}, usageError(commands.SchedulerPlan)
+			}
+			options.json = true
+		}
+		return options, nil
+	default:
+		return cliOptions{}, fmt.Errorf("unsupported scheduler command %q: supported commands: plan", args[1])
 	}
 }
 
@@ -833,6 +857,8 @@ func runWithContextOptions(ctx context.Context, stdout io.Writer, client runtime
 		return routeRuntimeSupervisorCommand(ctx, stdout, options)
 	case commandQueueAdd, commandQueueList, commandQueueInspect, commandQueuePlan, commandQueueRemove, commandQueueReserve, commandQueueUnreserve:
 		return routeQueueCommand(stdout, options)
+	case commandSchedulerPlan:
+		return routeSchedulerCommand(stdout, options)
 	case commandProviderStatus, commandProviderSet, commandProviderReset:
 		return routeProviderCommand(stdout, options)
 	case commandInit:
@@ -874,6 +900,24 @@ func runWithContextOptions(ctx context.Context, stdout io.Writer, client runtime
 		}
 		return routeDashboardCommand(stdout, client)
 	}
+}
+
+func routeSchedulerCommand(stdout io.Writer, options cliOptions) error {
+	store, err := runtimequeue.NewStore("")
+	if err != nil {
+		return err
+	}
+	plan := runtimescheduler.Planner{Queue: store}.Plan()
+	if options.json {
+		output, err := json.Marshal(plan)
+		if err != nil {
+			return err
+		}
+		_, err = stdout.Write(append(output, '\n'))
+		return err
+	}
+	renderSchedulerPlan(stdout, plan)
+	return nil
 }
 
 func routeQueueCommand(stdout io.Writer, options cliOptions) error {
@@ -969,6 +1013,36 @@ func routeQueueCommand(stdout io.Writer, options cliOptions) error {
 	default:
 		return fmt.Errorf("unsupported queue command: %s", options.kind)
 	}
+}
+
+func renderSchedulerPlan(stdout io.Writer, plan runtimescheduler.Plan) {
+	fmt.Fprintln(stdout, "SCHEDULER PLAN")
+	fmt.Fprintf(stdout, "Queue: %s\n", plan.QueuePath)
+	fmt.Fprintf(stdout, "Queue state: %s\n", plan.QueueState)
+	if strings.TrimSpace(plan.Error) != "" {
+		fmt.Fprintf(stdout, "Error: %s\n", plan.Error)
+	}
+	fmt.Fprintln(stdout)
+	if plan.Selected == nil {
+		fmt.Fprintln(stdout, "Selected: none")
+		fmt.Fprintf(stdout, "Reason: %s\n", fallbackDash(plan.NoSelectionReason))
+	} else {
+		fmt.Fprintln(stdout, "Selected:")
+		fmt.Fprintf(stdout, "%s\t%s\t%s\t%s\t%s\n", plan.Selected.ID, plan.Selected.Task, plan.Selected.Provider, plan.Selected.Profile, plan.Selected.Status)
+		fmt.Fprintf(stdout, "Reason: %s\n", plan.Selected.Reason)
+	}
+	fmt.Fprintf(stdout, "Reservation: %s\n", plan.ReservationEligibility)
+	fmt.Fprintln(stdout)
+	fmt.Fprintln(stdout, "Safety checks:")
+	for _, check := range plan.SafetyChecks {
+		status := "blocked"
+		if check.Passed {
+			status = "ok"
+		}
+		fmt.Fprintf(stdout, "- %s: %s (%s)\n", check.Name, status, check.Reason)
+	}
+	fmt.Fprintln(stdout)
+	fmt.Fprintln(stdout, "Scheduler planning is read-only: no provider, worker, supervisor, task state, run history, queue drain, or reservation was started.")
 }
 
 func reservationLabel(reservation *runtimequeue.Reservation) string {

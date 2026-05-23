@@ -306,6 +306,15 @@ Planning does not reserve ownership, update queue state, update task state, or
 introduce scheduler behavior. The planning semantics are documented in
 [`docs/runtime-queue-planning.md`](runtime-queue-planning.md).
 
+`Brevity scheduler plan [--json]` is the first Go-native runtime scheduler
+contract. It consumes the queue plan and selects the single first eligible
+runnable item in queue order, explains why that item would be claimed next,
+reports why no item is selected, and reports reservation eligibility. It remains
+read-only: it does not reserve the item, execute providers, spawn workers, start
+the supervisor, drain the queue, create run history, or mutate task state. The
+contract is documented in
+[`docs/runtime-scheduler-contract.md`](runtime-scheduler-contract.md).
+
 The native Bubble Tea dashboard surfaces this queue as read-only operator
 visibility: file state, item count, status counts, corruption/invalid warnings,
 reserved count, oldest queued age when available, and a compact queue plan

@@ -30,6 +30,12 @@ state. The Bubble Tea dashboard now displays queue file health, item/status
 counts, reserved counts, corruption warnings, and oldest queued age as
 read-only visibility only.
 
+Runtime scheduler planning is Go-native and read-only. `scheduler plan` consumes
+the queue plan, selects the first eligible runnable queue item, explains the
+selection or no-selection reason, and reports reservation eligibility without
+reserving, executing providers, spawning workers, starting the supervisor,
+creating run history, draining the queue, or mutating task state.
+
 Go-owned `.brevity` writes must go through `internal/state` and the advisory
 `.brevity/state.lock` protocol. Provider execution and worker execution for
 `task run --execute`, `task merge`, and explicit cleanup commands are
@@ -67,6 +73,7 @@ go run ./cmd/brevity support matrix --json
 | Dashboard/watch console | Implemented; default PowerShell source, native source optional | Implemented legacy TUI scaffold | Go for future operator UX | read-only | unit tests | Go dashboard and Bubble Tea | migrated frontend direction | Keep improving native source |
 | Runtime state JSON | Native reader implemented | Implemented legacy producer | Go | read-only | unit and contract tests | native source supported | migrated | Keep compatibility schema additive |
 | Runtime queue persistence, inspection, planning, and reservations | Native add, list, inspect, plan, reserve, unreserve, remove for `.brevity\runtime-queue.json`; Bubble Tea displays read-only queue health | Not PowerShell-owned | Go | inert runtime metadata mutation / read-only diagnostics and planning | unit tests | Bubble Tea read-only visibility | migrated foundation | Keep queue execution out of v1 |
+| Runtime scheduler planning | Native scheduler plan selects first eligible runnable queue item from queue plan | Not PowerShell-owned | Go | read-only scheduling decision | unit tests | none | migrated contract | Keep execution out of scheduler v1 |
 | Provider health read/write | Native read, set, reset | Implemented legacy compatibility | Go | mutating metadata | unit tests | actions available | migrated | Deprecate PowerShell-first docs |
 | Task metadata/runtime reads | Native task status, detail, runtime-info | Implemented legacy views | Go | read-only | unit tests | native TUI source | migrated | Keep Go as authority |
 | Task new worktree creation | Native implementation | Implemented legacy compatibility | Go | mutating git and metadata | fixture tests | action available | migrated | Keep PowerShell as fallback only |
@@ -104,6 +111,7 @@ go run ./cmd/brevity support matrix --json
 | `runtime state [--json]` | read-only | `runtime state --json` | legacy/fallback | low | keep fallback |
 | `runtime start|stop|status` | runtime lifecycle metadata | native equivalent | delegated compatibility | medium | delegate only |
 | `queue add|list|inspect|plan|reserve|unreserve|remove` | runtime queue metadata, diagnostics, read-only planning, and explicit reservations | native equivalent | Go-owned | medium | keep PowerShell out of queue authority |
+| `scheduler plan` | read-only scheduler decision | native equivalent | Go-owned | low | keep execution out of scheduler contract |
 | `tui` | read-only | dashboard/Bubble Tea | reference scaffold | low | deprecate later |
 | `session summary` | read-only | none | PowerShell-owned | low | migrate later |
 | `onboard` | not implemented | none | planned | low | implement in Go when requested |
@@ -143,6 +151,7 @@ go run ./cmd/brevity support matrix --json
 | `go run ./cmd/brevity queue reserve <id>` | Runtime queue reservation | Go `.brevity\runtime-queue.json` writer + queue lock | Mutating inert runtime metadata | Implemented foundation | Adds optional reservation ownership metadata to one valid queue item, writes atomically, rejects duplicates/missing items, and does not execute providers, spawn workers, start the supervisor, drain the queue, or mutate task state. |
 | `go run ./cmd/brevity queue unreserve <id>` | Runtime queue reservation | Go `.brevity\runtime-queue.json` writer + queue lock | Mutating inert runtime metadata | Implemented foundation | Clears reservation metadata from one queue item, tolerates already-unreserved items, writes atomically, and does not execute providers, spawn workers, start the supervisor, drain the queue, or mutate task state. |
 | `go run ./cmd/brevity queue remove <id>` | Runtime queue persistence | Go `.brevity\runtime-queue.json` writer + queue lock | Mutating inert runtime metadata | Implemented foundation | Removes only the matching queue item id, writes atomically, and does not mutate task state. |
+| `go run ./cmd/brevity scheduler plan [--json]` | Runtime scheduler planning | Go queue planner consumer | Read-only | Implemented contract | Selects the first eligible runnable queue item, reports why it was selected or why none was selected, and reports reservation eligibility without reserving, executing providers, spawning workers, starting the supervisor, creating run history, draining the queue, or mutating task state. |
 | `go run ./cmd/brevity provider status` | Native state inspection | Go `.brevity/provider-health.json` reader | Read-only | Implemented | Reads provider health through `internal/state`; no PowerShell call. |
 | `go run ./cmd/brevity provider set <provider> <status> [--note <note>]` | Native state action | Go state store + `.brevity/state.lock` | Mutating | Implemented | Updates provider health without PowerShell or provider execution. |
 | `go run ./cmd/brevity provider reset <provider>` | Native state action | Go state store + `.brevity/state.lock` | Mutating | Implemented | Resets provider health to `unknown` without PowerShell or provider execution. |
@@ -184,7 +193,7 @@ go run ./cmd/brevity support matrix --json
 
 ## Documentation Notes
 
-- Go owns init/repair, provider metadata/profile resolution, provider health read/write, runtime queue persistence, `.brevity/tasks.json` reading and locked
+- Go owns init/repair, provider metadata/profile resolution, provider health read/write, runtime queue persistence, runtime scheduler planning, `.brevity/tasks.json` reading and locked
   task-new, task-start, and prompt/context refresh writes,
   `.brevity/runs.jsonl` run-history reading, native runtime-state building,
   native task status, task runtime/detail inspection, doctor diagnostics,

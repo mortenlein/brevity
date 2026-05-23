@@ -52,6 +52,19 @@
     "powerShellDisposition": "none"
   },
   {
+    "id": "runtime-scheduler",
+    "capability": "Runtime scheduler planning",
+    "goSupport": "Native scheduler plan selects first eligible runnable queue item from queue plan",
+    "powerShellSupport": "Not PowerShell-owned",
+    "currentAuthority": "Go",
+    "safetyClass": "read-only scheduling decision",
+    "testCoverage": "unit tests",
+    "tuiSupport": "none",
+    "migrationStatus": "contract migrated",
+    "nextAction": "Keep execution out of scheduler v1",
+    "powerShellDisposition": "none"
+  },
+  {
     "id": "provider-health",
     "capability": "Provider health read/write",
     "goSupport": "Native read, set, reset",
