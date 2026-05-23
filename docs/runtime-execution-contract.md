@@ -37,6 +37,7 @@ go run ./cmd/brevity execution list
 go run ./cmd/brevity execution inspect
 go run ./cmd/brevity execution inspect --json
 go run ./cmd/brevity execution plan-from-reservation <queue-item-id>
+go run ./cmd/brevity scheduler plan-execution
 ```
 
 `execution list` reads `.brevity\runtime-executions.json`, tolerates a missing
@@ -51,6 +52,12 @@ execution record for an already reserved queue item. It requires the queue item
 to exist, requires reservation metadata with a `reservationId`, rejects a
 duplicate execution for the same queue item and reservation, and writes
 `.brevity\runtime-executions.json` atomically.
+
+`scheduler plan-execution` reaches the same execution planning path through the
+scheduler layer. It computes the scheduler plan, requires a reserved scheduler
+candidate, creates one planned execution record, prints the queue item id, task
+slug, reservation id, and execution id, and rejects duplicate planning for the
+same reservation.
 
 ## Reservation vs Execution Plan
 
@@ -115,9 +122,11 @@ controls.
 ## Future Scheduler Relationship
 
 The scheduler can use this contract as the durable boundary between reservation
-ownership and actual execution. A future scheduler execution command can reserve
-a queue item, create a planned execution record, and then explicitly transition
-into provider execution through a separate contract.
+ownership and actual execution. `scheduler plan-execution` now connects
+scheduler reserved-item selection to planned execution metadata. A future
+scheduler execution command can reserve a queue item, create a planned execution
+record, and then explicitly transition into provider execution through a
+separate contract.
 
 Until that future contract exists, planned execution records are inert runtime
 metadata.

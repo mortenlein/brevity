@@ -56,6 +56,7 @@ const (
 	commandQueueUnreserve       commandKind = commandKind(commands.QueueUnreserveID)
 	commandSchedulerPlan        commandKind = commandKind(commands.SchedulerPlanID)
 	commandSchedulerReserveNext commandKind = commandKind(commands.SchedulerReserveNextID)
+	commandSchedulerPlanExec    commandKind = commandKind(commands.SchedulerPlanExecutionID)
 	commandExecutionList        commandKind = commandKind(commands.ExecutionListID)
 	commandExecutionInspect     commandKind = commandKind(commands.ExecutionInspectID)
 	commandExecutionPlan        commandKind = commandKind(commands.ExecutionPlanFromReservationID)
@@ -295,7 +296,7 @@ func parseExecutionOptions(args []string) (cliOptions, error) {
 
 func parseSchedulerOptions(args []string) (cliOptions, error) {
 	if len(args) < 2 {
-		return cliOptions{}, fmt.Errorf("missing scheduler command: supported commands: plan, reserve-next")
+		return cliOptions{}, fmt.Errorf("missing scheduler command: supported commands: plan, reserve-next, plan-execution")
 	}
 	switch args[1] {
 	case "plan":
@@ -312,8 +313,17 @@ func parseSchedulerOptions(args []string) (cliOptions, error) {
 			return cliOptions{}, usageError(commands.SchedulerReserveNext)
 		}
 		return cliOptions{kind: commandSchedulerReserveNext}, nil
+	case "plan-execution":
+		options := cliOptions{kind: commandSchedulerPlanExec}
+		for _, arg := range args[2:] {
+			if arg != "--json" {
+				return cliOptions{}, usageError(commands.SchedulerPlanExecution)
+			}
+			options.json = true
+		}
+		return options, nil
 	default:
-		return cliOptions{}, fmt.Errorf("unsupported scheduler command %q: supported commands: plan, reserve-next", args[1])
+		return cliOptions{}, fmt.Errorf("unsupported scheduler command %q: supported commands: plan, reserve-next, plan-execution", args[1])
 	}
 }
 
@@ -899,7 +909,7 @@ func runWithContextOptions(ctx context.Context, stdout io.Writer, client runtime
 		return routeRuntimeSupervisorCommand(ctx, stdout, options)
 	case commandQueueAdd, commandQueueList, commandQueueInspect, commandQueuePlan, commandQueueRemove, commandQueueReserve, commandQueueUnreserve:
 		return routeQueueCommand(stdout, options)
-	case commandSchedulerPlan, commandSchedulerReserveNext:
+	case commandSchedulerPlan, commandSchedulerReserveNext, commandSchedulerPlanExec:
 		return routeSchedulerCommand(stdout, options)
 	case commandExecutionList, commandExecutionInspect, commandExecutionPlan:
 		return routeExecutionCommand(stdout, options)
@@ -1052,6 +1062,9 @@ func routeSchedulerCommand(stdout io.Writer, options cliOptions) error {
 	if options.kind == commandSchedulerReserveNext {
 		return reserveNextSchedulerItem(stdout, store, plan)
 	}
+	if options.kind == commandSchedulerPlanExec {
+		return planSchedulerExecution(stdout, plan, options.json)
+	}
 	if options.json {
 		output, err := json.Marshal(plan)
 		if err != nil {
@@ -1061,6 +1074,56 @@ func routeSchedulerCommand(stdout io.Writer, options cliOptions) error {
 		return err
 	}
 	renderSchedulerPlan(stdout, plan)
+	return nil
+}
+
+type schedulerPlannedExecution struct {
+	QueueItemID   string `json:"queueItemId"`
+	Task          string `json:"task"`
+	ReservationID string `json:"reservationId"`
+	ExecutionID   string `json:"executionId"`
+	Status        string `json:"status"`
+}
+
+func planSchedulerExecution(stdout io.Writer, plan runtimescheduler.Plan, jsonOutput bool) error {
+	if plan.FirstReserved == nil {
+		if plan.Selected == nil {
+			return fmt.Errorf("no selectable scheduler item: %s", fallbackDash(plan.NoSelectionReason))
+		}
+		return fmt.Errorf("selected queue item is not reserved: %s", plan.Selected.ID)
+	}
+	store, err := runtimeexecution.NewStore("")
+	if err != nil {
+		return err
+	}
+	record, err := store.PlanFromReservation(plan.FirstReserved.ID)
+	if err != nil {
+		return err
+	}
+	result := schedulerPlannedExecution{
+		QueueItemID:   record.QueueItemID,
+		Task:          record.Task,
+		ReservationID: record.ReservationID,
+		ExecutionID:   record.ID,
+		Status:        record.Status,
+	}
+	if jsonOutput {
+		output, err := json.Marshal(result)
+		if err != nil {
+			return err
+		}
+		_, err = stdout.Write(append(output, '\n'))
+		return err
+	}
+	fmt.Fprintln(stdout, "Planned scheduler execution")
+	fmt.Fprintf(stdout, "Path: %s\n", store.Path())
+	fmt.Fprintln(stdout)
+	fmt.Fprintf(stdout, "id: %s\n", result.QueueItemID)
+	fmt.Fprintf(stdout, "task: %s\n", result.Task)
+	fmt.Fprintf(stdout, "reservationId: %s\n", result.ReservationID)
+	fmt.Fprintf(stdout, "executionId: %s\n", result.ExecutionID)
+	fmt.Fprintln(stdout)
+	fmt.Fprintln(stdout, "Execution plan only: no provider, worker, supervisor, task state, run history, or queue drain was started.")
 	return nil
 }
 

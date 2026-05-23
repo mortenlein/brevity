@@ -7,12 +7,18 @@ and reports whether that item is eligible for reservation.
 `brevity scheduler reserve-next` reserves exactly one selected item from that
 same plan. It is reservation only. Neither command is provider execution.
 
+`brevity scheduler plan-execution` creates one planned execution record from a
+reserved scheduler item. It is execution planning only. It does not execute the
+planned record.
+
 ## Command
 
 ```powershell
 go run ./cmd/brevity scheduler plan
 go run ./cmd/brevity scheduler plan --json
 go run ./cmd/brevity scheduler reserve-next
+go run ./cmd/brevity scheduler plan-execution
+go run ./cmd/brevity scheduler plan-execution --json
 ```
 
 The JSON contract uses schema `brevity.runtime-scheduler-plan.v1`.
@@ -63,6 +69,33 @@ selected item through the existing queue reservation path, and prints the queue
 item id, task slug, and reservation id. If no item is selected, it fails without
 mutating queue or task state.
 
+## Execution Planning Relationship
+
+`brevity scheduler plan-execution` computes the scheduler plan and uses the
+plan's reserved-item visibility as the scheduler execution-planning candidate.
+It requires a reserved queue item, calls the existing execution
+`plan-from-reservation` path, and creates exactly one planned execution record
+for that queue item and reservation.
+
+The command prints the selected queue item id, task slug, reservation id, and
+execution id. It rejects duplicate planning for the same queue item and
+reservation with the execution planner's duplicate protection.
+
+If no item can be selected for execution planning, the reason is:
+
+- `no eligible runnable queue item`
+
+If the scheduler-selected item is still unreserved, the reason is:
+
+- `selected queue item is not reserved`
+
+If a matching execution record already exists, the reason is:
+
+- `execution already planned`
+
+Execution planning is not provider execution. It only writes durable execution
+intent metadata.
+
 ## Non-Goals
 
 Scheduler v1 does not introduce:
@@ -89,7 +122,8 @@ and then hand off to a separate execution contract. That future layer must keep
 reservation, task state transitions, run history, provider execution, and
 cleanup boundaries explicit.
 
-Scheduler planning itself remains read-only.
+Scheduler planning itself remains read-only. Scheduler execution planning is a
+separate metadata-writing command that creates only inert execution intent.
 
 ## Safety Invariants
 
@@ -112,3 +146,8 @@ imply provider execution or task start.
 must never launch providers, launch workers, start the supervisor, drain the
 queue, mutate task execution state, create run history, or imply a task has
 started.
+
+`brevity scheduler plan-execution` may mutate only
+`.brevity\runtime-executions.json` and its advisory lock file. It must never
+launch providers, spawn workers, start the supervisor, drain the queue, mutate
+task execution state, create run history, or imply provider work has started.

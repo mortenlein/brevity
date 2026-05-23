@@ -19,6 +19,7 @@ const (
 	QueueUnreserveID               ID = "queue-unreserve"
 	SchedulerPlanID                ID = "scheduler-plan"
 	SchedulerReserveNextID         ID = "scheduler-reserve-next"
+	SchedulerPlanExecutionID       ID = "scheduler-plan-execution"
 	ExecutionListID                ID = "execution-list"
 	ExecutionInspectID             ID = "execution-inspect"
 	ExecutionPlanFromReservationID ID = "execution-plan-from-reservation"
@@ -146,6 +147,11 @@ var (
 		ID:    SchedulerReserveNextID,
 		Words: []string{"scheduler", "reserve-next"},
 		Usage: "brevity scheduler reserve-next",
+	}
+	SchedulerPlanExecution = Command{
+		ID:    SchedulerPlanExecutionID,
+		Words: []string{"scheduler", "plan-execution"},
+		Usage: "brevity scheduler plan-execution [--json]",
 	}
 	ExecutionList = Command{
 		ID:    ExecutionListID,
@@ -309,6 +315,7 @@ var UsageCommands = []Command{
 	QueueUnreserve,
 	SchedulerPlan,
 	SchedulerReserveNext,
+	SchedulerPlanExecution,
 	ExecutionList,
 	ExecutionInspect,
 	ExecutionPlanFromReservation,
