@@ -16,6 +16,7 @@ import (
 	"github.com/mortenlein/brevity/internal/actions"
 	"github.com/mortenlein/brevity/internal/bubbleteadashboard"
 	nativecleanup "github.com/mortenlein/brevity/internal/cleanup"
+	"github.com/mortenlein/brevity/internal/cmux"
 	"github.com/mortenlein/brevity/internal/commands"
 	"github.com/mortenlein/brevity/internal/contracts"
 	"github.com/mortenlein/brevity/internal/dashboard"
@@ -82,6 +83,7 @@ const (
 	commandCleanupPlan          commandKind = commandKind(commands.CleanupPlanID)
 	commandCleanupExecute       commandKind = commandKind(commands.CleanupExecuteID)
 	commandSupportMatrix        commandKind = "support-matrix"
+	commandCmux                 commandKind = "cmux"
 )
 
 type cliOptions struct {
@@ -162,6 +164,9 @@ func parseOptions(args []string) (cliOptions, error) {
 	}
 	if len(args) > 0 && args[0] == "support" {
 		return parseSupportOptions(args)
+	}
+	if len(args) > 0 && args[0] == "cmux" {
+		return parseCmuxOptions(args)
 	}
 
 	flags := flag.NewFlagSet("brevity", flag.ContinueOnError)
@@ -294,6 +299,19 @@ func parseInitOptions(args []string) (cliOptions, error) {
 		}
 	}
 	return options, nil
+}
+
+func parseCmuxOptions(args []string) (cliOptions, error) {
+	if len(args) != 1 {
+		return cliOptions{}, fmt.Errorf("usage: brevity cmux")
+	}
+	return cliOptions{kind: commandCmux}, nil
+}
+
+func routeCmuxCommand(stdout io.Writer) error {
+	snap := cmux.Read(cmux.NativeFetcher{})
+	cmux.Render(stdout, snap)
+	return nil
 }
 
 func parseSupportOptions(args []string) (cliOptions, error) {
@@ -887,6 +905,8 @@ func runWithContextOptions(ctx context.Context, stdout io.Writer, client runtime
 		return routeCleanupCommand(stdout, options)
 	case commandSupportMatrix:
 		return routeSupportMatrixCommand(stdout, options)
+	case commandCmux:
+		return routeCmuxCommand(stdout)
 	default:
 		if options.bubble {
 			if options.refresh <= 0 {
