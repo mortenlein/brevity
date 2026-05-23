@@ -25,6 +25,7 @@ const (
 	ExecutionPlanFromReservationID ID = "execution-plan-from-reservation"
 	ExecutionMarkReadyID           ID = "execution-mark-ready"
 	ExecutionMarkPlannedID         ID = "execution-mark-planned"
+	ExecutionPreflightID           ID = "execution-preflight"
 	ProviderStatusID               ID = "provider-status"
 	ProviderSetID                  ID = "provider-set"
 	ProviderResetID                ID = "provider-reset"
@@ -180,6 +181,11 @@ var (
 		Words: []string{"execution", "mark-planned"},
 		Usage: "brevity execution mark-planned <execution-id>",
 	}
+	ExecutionPreflight = Command{
+		ID:    ExecutionPreflightID,
+		Words: []string{"execution", "preflight"},
+		Usage: "brevity execution preflight <execution-id> [--json]",
+	}
 	ProviderSet = Command{
 		ID:    ProviderSetID,
 		Words: []string{"provider", "set"},
@@ -333,6 +339,7 @@ var UsageCommands = []Command{
 	ExecutionPlanFromReservation,
 	ExecutionMarkReady,
 	ExecutionMarkPlanned,
+	ExecutionPreflight,
 	Doctor,
 	ProviderStatus,
 	ProviderSet,

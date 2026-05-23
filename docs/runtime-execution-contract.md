@@ -39,6 +39,8 @@ go run ./cmd/brevity execution inspect --json
 go run ./cmd/brevity execution plan-from-reservation <queue-item-id>
 go run ./cmd/brevity execution mark-ready <execution-id>
 go run ./cmd/brevity execution mark-planned <execution-id>
+go run ./cmd/brevity execution preflight <execution-id>
+go run ./cmd/brevity execution preflight <execution-id> --json
 go run ./cmd/brevity scheduler plan-execution
 ```
 
@@ -69,6 +71,44 @@ old status, and new status. It is metadata-only pre-execution eligibility.
 `execution mark-planned <execution-id>` transitions one execution record from
 `ready` back to `planned`, updates `updatedAt`, and writes atomically. It is a
 metadata-only rollback and does not affect queue or task state.
+
+`execution preflight <execution-id>` is the final read-only check layer before a
+future provider launch contract. It loads `.brevity\runtime-executions.json`,
+finds the execution record, requires `status: ready`, loads
+`.brevity\runtime-queue.json`, verifies the referenced queue item still exists,
+verifies the queue item is still reserved, verifies the reservation id matches
+the execution record, verifies the queue task still matches the execution task,
+and reports whether the ready execution is launch-eligible.
+
+Preflight does not write any runtime file. It does not start providers, spawn
+workers, start the supervisor, drain the queue, mutate task state, create run
+history, or mark an execution running, succeeded, or failed.
+
+Human output reports each check clearly:
+
+```text
+EXECUTION PREFLIGHT
+Execution: exec-20260522T120000-abc123ef
+Task: some-task
+Status: ready
+
+Checks:
+- execution exists: ok
+- status ready: ok
+- queue item exists: ok
+- queue item has reservation: ok
+- reservation matches: ok
+- task matches: ok
+- execution status is launch-eligible: ok
+
+Result: passed
+```
+
+Compact JSON output is available with `--json`:
+
+```json
+{"executionId":"exec-20260522T120000-abc123ef","task":"some-task","status":"ready","passed":true,"checks":[{"name":"execution exists","passed":true}]}
+```
 
 ## Reservation vs Execution Plan
 
@@ -107,6 +147,9 @@ The v1 lifecycle is intentionally tiny:
 
 `ready` is not provider running. It does not mean a provider process has
 started, a worker exists, logs have been created, or task state has changed.
+`ready` also does not mean preflight has passed. A ready execution is only
+launch-eligible after `execution preflight <execution-id>` confirms the queue
+reservation and task linkage still match at the moment of checking.
 
 No other statuses are valid in v1.
 
@@ -126,9 +169,10 @@ Execution records must never:
 - mark success or failure
 - introduce running, completed, succeeded, or failed statuses
 
-`execution list` and `execution inspect` are read-only. `execution
-plan-from-reservation`, `execution mark-ready`, and `execution mark-planned`
-write only `.brevity\runtime-executions.json` and its advisory lock file.
+`execution list`, `execution inspect`, and `execution preflight` are read-only.
+`execution plan-from-reservation`, `execution mark-ready`, and `execution
+mark-planned` write only `.brevity\runtime-executions.json` and its advisory
+lock file.
 
 ## Non-Goals
 

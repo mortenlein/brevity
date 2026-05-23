@@ -517,6 +517,62 @@ func TestExecutionListAndInspectShowReadyStatus(t *testing.T) {
 	}
 }
 
+func TestExecutionPreflightReportsReadyReservedExecution(t *testing.T) {
+	repoRoot := tempRepoWithQueue(t, runtimequeue.Queue{Version: runtimequeue.Version, Items: []runtimequeue.Item{
+		mainTestReservedQueueItem("queue-1", "alpha", "res-alpha"),
+	}})
+	writeMainTestExecutions(t, repoRoot, runtimeexecution.Executions{Version: runtimeexecution.Version, Records: []runtimeexecution.Record{
+		mainTestExecutionRecord("exec-1", "queue-1", "alpha", "res-alpha", runtimeexecution.StatusReady),
+	}})
+	t.Chdir(repoRoot)
+	queuePath := filepath.Join(repoRoot, ".brevity", runtimequeue.FileName)
+	executionsPath := filepath.Join(repoRoot, ".brevity", runtimeexecution.FileName)
+	beforeQueue := readMainTestFile(t, queuePath)
+	beforeExecutions := readMainTestFile(t, executionsPath)
+
+	var stdout bytes.Buffer
+	if err := runWithOptions(&stdout, &fakeRuntimeClient{}, cliOptions{kind: commandExecutionPreflight, candidateID: "exec-1"}); err != nil {
+		t.Fatalf("runWithOptions returned error: %v", err)
+	}
+	output := stdout.String()
+	for _, want := range []string{"EXECUTION PREFLIGHT", "Execution: exec-1", "Task: alpha", "Status: ready", "- execution exists: ok", "- reservation matches: ok", "- task matches: ok", "Result: passed", "no provider, worker, supervisor, task state, run history, or queue drain"} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("output missing %q:\n%s", want, output)
+		}
+	}
+	if afterQueue := readMainTestFile(t, queuePath); afterQueue != beforeQueue {
+		t.Fatalf("queue mutated\nbefore: %s\nafter: %s", beforeQueue, afterQueue)
+	}
+	if afterExecutions := readMainTestFile(t, executionsPath); afterExecutions != beforeExecutions {
+		t.Fatalf("executions mutated\nbefore: %s\nafter: %s", beforeExecutions, afterExecutions)
+	}
+}
+
+func TestExecutionPreflightJSONFailsForPlannedExecution(t *testing.T) {
+	repoRoot := tempRepoWithQueue(t, runtimequeue.Queue{Version: runtimequeue.Version, Items: []runtimequeue.Item{
+		mainTestReservedQueueItem("queue-1", "alpha", "res-alpha"),
+	}})
+	writeMainTestExecutions(t, repoRoot, runtimeexecution.Executions{Version: runtimeexecution.Version, Records: []runtimeexecution.Record{
+		mainTestExecutionRecord("exec-1", "queue-1", "alpha", "res-alpha", runtimeexecution.StatusPlanned),
+	}})
+	t.Chdir(repoRoot)
+
+	var stdout bytes.Buffer
+	err := runWithOptions(&stdout, &fakeRuntimeClient{}, cliOptions{kind: commandExecutionPreflight, candidateID: "exec-1", json: true})
+	if err == nil {
+		t.Fatal("runWithOptions returned nil error")
+	}
+	if !strings.Contains(err.Error(), "execution preflight failed") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	output := stdout.String()
+	for _, want := range []string{`"executionId":"exec-1"`, `"task":"alpha"`, `"status":"planned"`, `"passed":false`, `"name":"status ready"`} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("json output missing %q:\n%s", want, output)
+		}
+	}
+}
+
 func TestExecutionMarkPlannedRollsReadyBackToPlanned(t *testing.T) {
 	repoRoot := tempRepoWithQueue(t, runtimequeue.Queue{Version: runtimequeue.Version, Items: []runtimequeue.Item{}})
 	writeMainTestExecutions(t, repoRoot, runtimeexecution.Executions{Version: runtimeexecution.Version, Records: []runtimeexecution.Record{

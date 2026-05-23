@@ -63,6 +63,7 @@ const (
 	commandExecutionPlan        commandKind = commandKind(commands.ExecutionPlanFromReservationID)
 	commandExecutionMarkReady   commandKind = commandKind(commands.ExecutionMarkReadyID)
 	commandExecutionMarkPlanned commandKind = commandKind(commands.ExecutionMarkPlannedID)
+	commandExecutionPreflight   commandKind = commandKind(commands.ExecutionPreflightID)
 	commandProviderStatus       commandKind = commandKind(commands.ProviderStatusID)
 	commandProviderSet          commandKind = commandKind(commands.ProviderSetID)
 	commandProviderReset        commandKind = commandKind(commands.ProviderResetID)
@@ -288,7 +289,7 @@ func parseQueueOptions(args []string) (cliOptions, error) {
 
 func parseExecutionOptions(args []string) (cliOptions, error) {
 	if len(args) < 2 {
-		return cliOptions{}, fmt.Errorf("missing execution command: supported commands: list, inspect, plan-from-reservation, mark-ready, mark-planned")
+		return cliOptions{}, fmt.Errorf("missing execution command: supported commands: list, inspect, plan-from-reservation, mark-ready, mark-planned, preflight")
 	}
 	switch args[1] {
 	case "list":
@@ -320,8 +321,24 @@ func parseExecutionOptions(args []string) (cliOptions, error) {
 			return cliOptions{}, usageError(commands.ExecutionMarkPlanned)
 		}
 		return cliOptions{kind: commandExecutionMarkPlanned, candidateID: args[2]}, nil
+	case "preflight":
+		options := cliOptions{kind: commandExecutionPreflight}
+		for _, arg := range args[2:] {
+			switch {
+			case arg == "--json":
+				options.json = true
+			case strings.HasPrefix(arg, "-") || strings.TrimSpace(options.candidateID) != "":
+				return cliOptions{}, usageError(commands.ExecutionPreflight)
+			default:
+				options.candidateID = arg
+			}
+		}
+		if strings.TrimSpace(options.candidateID) == "" {
+			return cliOptions{}, usageError(commands.ExecutionPreflight)
+		}
+		return options, nil
 	default:
-		return cliOptions{}, fmt.Errorf("unsupported execution command %q: supported commands: list, inspect, plan-from-reservation, mark-ready, mark-planned", args[1])
+		return cliOptions{}, fmt.Errorf("unsupported execution command %q: supported commands: list, inspect, plan-from-reservation, mark-ready, mark-planned, preflight", args[1])
 	}
 }
 
@@ -1009,7 +1026,7 @@ func runWithContextOptions(ctx context.Context, stdout io.Writer, client runtime
 		return routeQueueCommand(stdout, options)
 	case commandSchedulerPlan, commandSchedulerReserveNext, commandSchedulerPlanExec:
 		return routeSchedulerCommand(stdout, options)
-	case commandExecutionList, commandExecutionInspect, commandExecutionPlan, commandExecutionMarkReady, commandExecutionMarkPlanned:
+	case commandExecutionList, commandExecutionInspect, commandExecutionPlan, commandExecutionMarkReady, commandExecutionMarkPlanned, commandExecutionPreflight:
 		return routeExecutionCommand(stdout, options)
 	case commandProviderStatus, commandProviderSet, commandProviderReset:
 		return routeProviderCommand(stdout, options)
@@ -1138,6 +1155,29 @@ func routeExecutionCommand(stdout io.Writer, options cliOptions) error {
 		}
 		renderExecutionTransition(stdout, "Marked runtime execution planned", store.Path(), result)
 		return nil
+	case commandExecutionPreflight:
+		result, err := store.Preflight(options.candidateID)
+		if err != nil {
+			return err
+		}
+		if options.json {
+			output, err := json.Marshal(result)
+			if err != nil {
+				return err
+			}
+			if _, err := stdout.Write(append(output, '\n')); err != nil {
+				return err
+			}
+			if !result.Passed {
+				return fmt.Errorf("execution preflight failed: %s", result.Reason)
+			}
+			return nil
+		}
+		renderExecutionPreflight(stdout, result)
+		if !result.Passed {
+			return fmt.Errorf("execution preflight failed: %s", result.Reason)
+		}
+		return nil
 	default:
 		return fmt.Errorf("unsupported execution command: %s", options.kind)
 	}
@@ -1165,6 +1205,31 @@ func renderExecutionTransition(stdout io.Writer, title string, path string, resu
 	fmt.Fprintf(stdout, "newStatus: %s\n", result.NewStatus)
 	fmt.Fprintln(stdout)
 	fmt.Fprintln(stdout, "Execution metadata only: no provider, worker, supervisor, task state, run history, or queue drain was started.")
+}
+
+func renderExecutionPreflight(stdout io.Writer, result runtimeexecution.PreflightResult) {
+	fmt.Fprintln(stdout, "EXECUTION PREFLIGHT")
+	fmt.Fprintf(stdout, "Execution: %s\n", result.ExecutionID)
+	fmt.Fprintf(stdout, "Task: %s\n", fallbackDash(result.Task))
+	fmt.Fprintf(stdout, "Status: %s\n", fallbackDash(result.Status))
+	fmt.Fprintln(stdout)
+	fmt.Fprintln(stdout, "Checks:")
+	for _, check := range result.Checks {
+		status := "failed"
+		if check.Passed {
+			status = "ok"
+		}
+		fmt.Fprintf(stdout, "- %s: %s\n", check.Name, status)
+	}
+	fmt.Fprintln(stdout)
+	if result.Passed {
+		fmt.Fprintln(stdout, "Result: passed")
+	} else {
+		fmt.Fprintln(stdout, "Result: failed")
+		fmt.Fprintf(stdout, "Reason: %s\n", result.Reason)
+	}
+	fmt.Fprintln(stdout)
+	fmt.Fprintln(stdout, "Preflight only: no provider, worker, supervisor, task state, run history, or queue drain was started.")
 }
 
 func renderExecutionInspection(stdout io.Writer, inspection runtimeexecution.Inspection) {
