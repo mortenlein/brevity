@@ -22,6 +22,7 @@ import (
 	"github.com/mortenlein/brevity/internal/diagnostics"
 	"github.com/mortenlein/brevity/internal/preflight"
 	"github.com/mortenlein/brevity/internal/runmaintenance"
+	runtimeexecution "github.com/mortenlein/brevity/internal/runtime/execution"
 	runtimequeue "github.com/mortenlein/brevity/internal/runtime/queue"
 	runtimescheduler "github.com/mortenlein/brevity/internal/runtime/scheduler"
 	runtimestate "github.com/mortenlein/brevity/internal/runtime/state"
@@ -55,6 +56,9 @@ const (
 	commandQueueUnreserve       commandKind = commandKind(commands.QueueUnreserveID)
 	commandSchedulerPlan        commandKind = commandKind(commands.SchedulerPlanID)
 	commandSchedulerReserveNext commandKind = commandKind(commands.SchedulerReserveNextID)
+	commandExecutionList        commandKind = commandKind(commands.ExecutionListID)
+	commandExecutionInspect     commandKind = commandKind(commands.ExecutionInspectID)
+	commandExecutionPlan        commandKind = commandKind(commands.ExecutionPlanFromReservationID)
 	commandProviderStatus       commandKind = commandKind(commands.ProviderStatusID)
 	commandProviderSet          commandKind = commandKind(commands.ProviderSetID)
 	commandProviderReset        commandKind = commandKind(commands.ProviderResetID)
@@ -150,6 +154,9 @@ func parseOptions(args []string) (cliOptions, error) {
 	}
 	if len(args) > 0 && args[0] == "scheduler" {
 		return parseSchedulerOptions(args)
+	}
+	if len(args) > 0 && args[0] == "execution" {
+		return parseExecutionOptions(args)
 	}
 	if len(args) > 0 && args[0] == "task" {
 		return parseTaskOptions(args)
@@ -254,6 +261,35 @@ func parseQueueOptions(args []string) (cliOptions, error) {
 		return cliOptions{kind: commandQueueUnreserve, candidateID: args[2]}, nil
 	default:
 		return cliOptions{}, fmt.Errorf("unsupported queue command %q: supported commands: add, list, inspect, plan, remove, reserve, unreserve", args[1])
+	}
+}
+
+func parseExecutionOptions(args []string) (cliOptions, error) {
+	if len(args) < 2 {
+		return cliOptions{}, fmt.Errorf("missing execution command: supported commands: list, inspect, plan-from-reservation")
+	}
+	switch args[1] {
+	case "list":
+		if len(args) != 2 {
+			return cliOptions{}, usageError(commands.ExecutionList)
+		}
+		return cliOptions{kind: commandExecutionList}, nil
+	case "inspect":
+		options := cliOptions{kind: commandExecutionInspect}
+		for _, arg := range args[2:] {
+			if arg != "--json" {
+				return cliOptions{}, usageError(commands.ExecutionInspect)
+			}
+			options.json = true
+		}
+		return options, nil
+	case "plan-from-reservation":
+		if len(args) != 3 || strings.TrimSpace(args[2]) == "" {
+			return cliOptions{}, usageError(commands.ExecutionPlanFromReservation)
+		}
+		return cliOptions{kind: commandExecutionPlan, candidateID: args[2]}, nil
+	default:
+		return cliOptions{}, fmt.Errorf("unsupported execution command %q: supported commands: list, inspect, plan-from-reservation", args[1])
 	}
 }
 
@@ -865,6 +901,8 @@ func runWithContextOptions(ctx context.Context, stdout io.Writer, client runtime
 		return routeQueueCommand(stdout, options)
 	case commandSchedulerPlan, commandSchedulerReserveNext:
 		return routeSchedulerCommand(stdout, options)
+	case commandExecutionList, commandExecutionInspect, commandExecutionPlan:
+		return routeExecutionCommand(stdout, options)
 	case commandProviderStatus, commandProviderSet, commandProviderReset:
 		return routeProviderCommand(stdout, options)
 	case commandInit:
@@ -905,6 +943,103 @@ func runWithContextOptions(ctx context.Context, stdout io.Writer, client runtime
 			})
 		}
 		return routeDashboardCommand(stdout, client)
+	}
+}
+
+func routeExecutionCommand(stdout io.Writer, options cliOptions) error {
+	store, err := runtimeexecution.NewStore("")
+	if err != nil {
+		return err
+	}
+	switch options.kind {
+	case commandExecutionList:
+		executions, missing, err := store.Load()
+		fmt.Fprintln(stdout, "Runtime executions")
+		fmt.Fprintf(stdout, "Path: %s\n", store.Path())
+		fmt.Fprintln(stdout)
+		if err != nil {
+			fmt.Fprintf(stdout, "File error: %v\n", err)
+			return nil
+		}
+		if missing || len(executions.Records) == 0 {
+			fmt.Fprintln(stdout, "No planned runtime executions.")
+			return nil
+		}
+		fmt.Fprintf(stdout, "Executions: %d\n", len(executions.Records))
+		fmt.Fprintln(stdout)
+		for _, record := range executions.Records {
+			if record.Status != runtimeexecution.StatusPlanned {
+				continue
+			}
+			fmt.Fprintf(stdout, "%s\t%s\t%s\t%s\t%s\t%s\n", record.ID, record.QueueItemID, record.Task, record.ReservationID, record.Status, record.CreatedAt)
+		}
+		return nil
+	case commandExecutionInspect:
+		inspection := store.Inspect()
+		if options.json {
+			output, err := json.Marshal(inspection)
+			if err != nil {
+				return err
+			}
+			_, err = stdout.Write(append(output, '\n'))
+			return err
+		}
+		renderExecutionInspection(stdout, inspection)
+		return nil
+	case commandExecutionPlan:
+		record, err := store.PlanFromReservation(options.candidateID)
+		if err != nil {
+			return err
+		}
+		fmt.Fprintln(stdout, "Planned runtime execution")
+		fmt.Fprintf(stdout, "Path: %s\n", store.Path())
+		fmt.Fprintln(stdout)
+		fmt.Fprintf(stdout, "id: %s\n", record.ID)
+		fmt.Fprintf(stdout, "queueItemId: %s\n", record.QueueItemID)
+		fmt.Fprintf(stdout, "task: %s\n", record.Task)
+		fmt.Fprintf(stdout, "reservationId: %s\n", record.ReservationID)
+		fmt.Fprintf(stdout, "status: %s\n", record.Status)
+		fmt.Fprintln(stdout)
+		fmt.Fprintln(stdout, "Execution plan only: no provider, worker, supervisor, task state, run history, or queue drain was started.")
+		return nil
+	default:
+		return fmt.Errorf("unsupported execution command: %s", options.kind)
+	}
+}
+
+func renderExecutionInspection(stdout io.Writer, inspection runtimeexecution.Inspection) {
+	fmt.Fprintln(stdout, "Runtime execution inspection")
+	fmt.Fprintf(stdout, "Path: %s\n", inspection.Path)
+	fmt.Fprintf(stdout, "File health: %s\n", inspection.State)
+	if strings.TrimSpace(inspection.Error) != "" {
+		fmt.Fprintf(stdout, "Error: %s\n", inspection.Error)
+	}
+	fmt.Fprintf(stdout, "Version: %d (supported %d)\n", inspection.Version, inspection.SupportedVersion)
+	fmt.Fprintf(stdout, "Executions: %d\n", inspection.TotalExecutions)
+	fmt.Fprintln(stdout)
+	if len(inspection.CountsByStatus) == 0 {
+		fmt.Fprintln(stdout, "Status counts: none")
+	} else {
+		fmt.Fprintln(stdout, "Status counts:")
+		statuses := make([]string, 0, len(inspection.CountsByStatus))
+		for status := range inspection.CountsByStatus {
+			statuses = append(statuses, status)
+		}
+		sort.Strings(statuses)
+		for _, status := range statuses {
+			fmt.Fprintf(stdout, "- %s: %d\n", status, inspection.CountsByStatus[status])
+		}
+	}
+	if len(inspection.DuplicateIDs) > 0 {
+		fmt.Fprintln(stdout)
+		fmt.Fprintf(stdout, "Duplicate execution ids: %s\n", strings.Join(inspection.DuplicateIDs, ", "))
+	}
+	if len(inspection.InvalidRecords) > 0 {
+		fmt.Fprintln(stdout)
+		fmt.Fprintln(stdout, "Invalid record warnings:")
+		for _, warning := range inspection.InvalidRecords {
+			fmt.Fprintf(stdout, "- %s\n", warning)
+		}
 	}
 }
 

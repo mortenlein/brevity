@@ -315,6 +315,16 @@ the supervisor, drain the queue, create run history, or mutate task state. The
 contract is documented in
 [`docs/runtime-scheduler-contract.md`](runtime-scheduler-contract.md).
 
+`Brevity execution list`, `Brevity execution inspect`, and `Brevity execution
+plan-from-reservation <queue-item-id>` define the first Go-native runtime
+execution record contract. `.brevity\runtime-executions.json` records planned
+execution intent for an already reserved queue item. These records mean "the
+runtime intends to execute this reserved queue item"; they do not mean a
+provider has started, a worker exists, task state changed, run history was
+created, or work succeeded/failed. The v1 statuses are only `planned` and
+`cancelled`. The contract is documented in
+[`docs/runtime-execution-contract.md`](runtime-execution-contract.md).
+
 The native Bubble Tea dashboard surfaces this queue as read-only operator
 visibility: file state, item count, status counts, corruption/invalid warnings,
 reserved count, oldest queued age when available, and a compact queue plan

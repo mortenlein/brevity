@@ -5,47 +5,50 @@ import "strings"
 type ID string
 
 const (
-	DashboardID            ID = "dashboard"
-	RuntimeStateID         ID = "runtime-state"
-	RuntimeStartID         ID = "runtime-start"
-	RuntimeStopID          ID = "runtime-stop"
-	RuntimeStatusID        ID = "runtime-status"
-	QueueAddID             ID = "queue-add"
-	QueueListID            ID = "queue-list"
-	QueueInspectID         ID = "queue-inspect"
-	QueuePlanID            ID = "queue-plan"
-	QueueRemoveID          ID = "queue-remove"
-	QueueReserveID         ID = "queue-reserve"
-	QueueUnreserveID       ID = "queue-unreserve"
-	SchedulerPlanID        ID = "scheduler-plan"
-	SchedulerReserveNextID ID = "scheduler-reserve-next"
-	ProviderStatusID       ID = "provider-status"
-	ProviderSetID          ID = "provider-set"
-	ProviderResetID        ID = "provider-reset"
-	InitID                 ID = "init"
-	TaskContextRefreshID   ID = "context-refresh"
-	TaskStatusID           ID = "task-status"
-	DoctorID               ID = "doctor"
-	TaskCleanupID          ID = "task-cleanup"
-	TaskMergeID            ID = "task-merge"
-	TaskPreflightID        ID = "task-preflight"
-	TaskNewID              ID = "task-new"
-	TaskActivateID         ID = "task-activate"
-	TaskSpecID             ID = "task-spec"
-	TaskStartID            ID = "task-start"
-	TaskRunID              ID = "task-run"
-	TaskRuntimeInfoID      ID = "task-runtime-info"
-	TaskDetailID           ID = "task-detail"
-	TaskRunsID             ID = "task-runs"
-	TaskRunsReconcileID    ID = "task-runs-reconcile"
-	TaskRunsRetentionID    ID = "task-runs-retention"
-	TaskRunsCompactID      ID = "task-runs-compact"
-	RunsInspectID          ID = "runs-inspect"
-	RunsCompactID          ID = "runs-compact"
-	CleanupInspectID       ID = "cleanup-inspect"
-	CleanupPlanID          ID = "cleanup-plan"
-	CleanupExecuteID       ID = "cleanup-execute"
-	SupportMatrixID        ID = "support-matrix"
+	DashboardID                    ID = "dashboard"
+	RuntimeStateID                 ID = "runtime-state"
+	RuntimeStartID                 ID = "runtime-start"
+	RuntimeStopID                  ID = "runtime-stop"
+	RuntimeStatusID                ID = "runtime-status"
+	QueueAddID                     ID = "queue-add"
+	QueueListID                    ID = "queue-list"
+	QueueInspectID                 ID = "queue-inspect"
+	QueuePlanID                    ID = "queue-plan"
+	QueueRemoveID                  ID = "queue-remove"
+	QueueReserveID                 ID = "queue-reserve"
+	QueueUnreserveID               ID = "queue-unreserve"
+	SchedulerPlanID                ID = "scheduler-plan"
+	SchedulerReserveNextID         ID = "scheduler-reserve-next"
+	ExecutionListID                ID = "execution-list"
+	ExecutionInspectID             ID = "execution-inspect"
+	ExecutionPlanFromReservationID ID = "execution-plan-from-reservation"
+	ProviderStatusID               ID = "provider-status"
+	ProviderSetID                  ID = "provider-set"
+	ProviderResetID                ID = "provider-reset"
+	InitID                         ID = "init"
+	TaskContextRefreshID           ID = "context-refresh"
+	TaskStatusID                   ID = "task-status"
+	DoctorID                       ID = "doctor"
+	TaskCleanupID                  ID = "task-cleanup"
+	TaskMergeID                    ID = "task-merge"
+	TaskPreflightID                ID = "task-preflight"
+	TaskNewID                      ID = "task-new"
+	TaskActivateID                 ID = "task-activate"
+	TaskSpecID                     ID = "task-spec"
+	TaskStartID                    ID = "task-start"
+	TaskRunID                      ID = "task-run"
+	TaskRuntimeInfoID              ID = "task-runtime-info"
+	TaskDetailID                   ID = "task-detail"
+	TaskRunsID                     ID = "task-runs"
+	TaskRunsReconcileID            ID = "task-runs-reconcile"
+	TaskRunsRetentionID            ID = "task-runs-retention"
+	TaskRunsCompactID              ID = "task-runs-compact"
+	RunsInspectID                  ID = "runs-inspect"
+	RunsCompactID                  ID = "runs-compact"
+	CleanupInspectID               ID = "cleanup-inspect"
+	CleanupPlanID                  ID = "cleanup-plan"
+	CleanupExecuteID               ID = "cleanup-execute"
+	SupportMatrixID                ID = "support-matrix"
 )
 
 type Command struct {
@@ -143,6 +146,21 @@ var (
 		ID:    SchedulerReserveNextID,
 		Words: []string{"scheduler", "reserve-next"},
 		Usage: "brevity scheduler reserve-next",
+	}
+	ExecutionList = Command{
+		ID:    ExecutionListID,
+		Words: []string{"execution", "list"},
+		Usage: "brevity execution list",
+	}
+	ExecutionInspect = Command{
+		ID:    ExecutionInspectID,
+		Words: []string{"execution", "inspect"},
+		Usage: "brevity execution inspect [--json]",
+	}
+	ExecutionPlanFromReservation = Command{
+		ID:    ExecutionPlanFromReservationID,
+		Words: []string{"execution", "plan-from-reservation"},
+		Usage: "brevity execution plan-from-reservation <queue-item-id>",
 	}
 	ProviderSet = Command{
 		ID:    ProviderSetID,
@@ -291,6 +309,9 @@ var UsageCommands = []Command{
 	QueueUnreserve,
 	SchedulerPlan,
 	SchedulerReserveNext,
+	ExecutionList,
+	ExecutionInspect,
+	ExecutionPlanFromReservation,
 	Doctor,
 	ProviderStatus,
 	ProviderSet,
