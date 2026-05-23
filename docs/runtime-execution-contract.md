@@ -37,6 +37,8 @@ go run ./cmd/brevity execution list
 go run ./cmd/brevity execution inspect
 go run ./cmd/brevity execution inspect --json
 go run ./cmd/brevity execution plan-from-reservation <queue-item-id>
+go run ./cmd/brevity execution mark-ready <execution-id>
+go run ./cmd/brevity execution mark-planned <execution-id>
 go run ./cmd/brevity scheduler plan-execution
 ```
 
@@ -59,6 +61,15 @@ candidate, creates one planned execution record, prints the queue item id, task
 slug, reservation id, and execution id, and rejects duplicate planning for the
 same reservation.
 
+`execution mark-ready <execution-id>` transitions one execution record from
+`planned` to `ready`, updates `updatedAt`, and writes
+`.brevity\runtime-executions.json` atomically. It prints the execution id, task,
+old status, and new status. It is metadata-only pre-execution eligibility.
+
+`execution mark-planned <execution-id>` transitions one execution record from
+`ready` back to `planned`, updates `updatedAt`, and writes atomically. It is a
+metadata-only rollback and does not affect queue or task state.
+
 ## Reservation vs Execution Plan
 
 A queue reservation records orchestration ownership intent on
@@ -80,16 +91,22 @@ They do not create logs, append `.brevity\runs.jsonl`, change task metadata, or
 mark a task as running, succeeded, or failed.
 
 Provider execution will be introduced by a later contract. That future layer can
-consume planned execution records, but it must add its own explicit state
+consume ready execution records, but it must add its own explicit state
 transition and safety checks.
 
 ## Lifecycle
 
 The v1 lifecycle is intentionally tiny:
 
-- `planned`: the runtime intends to execute the reserved queue item later.
+- `planned`: the runtime intends to execute the reserved queue item later, but
+  the record has not yet passed pre-execution eligibility checks.
+- `ready`: the planned execution record has passed pre-execution checks and is
+  eligible for a future provider launch.
 - `cancelled`: the planned intent was cancelled before provider execution was
   introduced or started.
+
+`ready` is not provider running. It does not mean a provider process has
+started, a worker exists, logs have been created, or task state has changed.
 
 No other statuses are valid in v1.
 
@@ -110,8 +127,8 @@ Execution records must never:
 - introduce running, completed, succeeded, or failed statuses
 
 `execution list` and `execution inspect` are read-only. `execution
-plan-from-reservation` writes only `.brevity\runtime-executions.json` and its
-advisory lock file.
+plan-from-reservation`, `execution mark-ready`, and `execution mark-planned`
+write only `.brevity\runtime-executions.json` and its advisory lock file.
 
 ## Non-Goals
 
@@ -128,5 +145,5 @@ scheduler execution command can reserve a queue item, create a planned execution
 record, and then explicitly transition into provider execution through a
 separate contract.
 
-Until that future contract exists, planned execution records are inert runtime
-metadata.
+Until that future contract exists, planned and ready execution records are inert
+runtime metadata.

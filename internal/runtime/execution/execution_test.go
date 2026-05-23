@@ -113,6 +113,135 @@ func TestPlanFromReservationRejectsDuplicateQueueItemReservation(t *testing.T) {
 	}
 }
 
+func TestMarkReadyTransitionsPlannedExecution(t *testing.T) {
+	store := testStore(t)
+	writeExecutions(t, store, Executions{Version: Version, Records: []Record{recordFixture("exec-1", StatusPlanned)}})
+
+	result, err := store.MarkReady("exec-1")
+	if err != nil {
+		t.Fatalf("MarkReady returned error: %v", err)
+	}
+	if result.ID != "exec-1" || result.Task != "some-task" || result.OldStatus != StatusPlanned || result.NewStatus != StatusReady {
+		t.Fatalf("result = %#v", result)
+	}
+	loaded, _, err := store.Load()
+	if err != nil {
+		t.Fatalf("Load returned error: %v", err)
+	}
+	if loaded.Records[0].Status != StatusReady {
+		t.Fatalf("status = %q, want ready", loaded.Records[0].Status)
+	}
+}
+
+func TestMarkReadyRejectsMissingExecutionID(t *testing.T) {
+	store := testStore(t)
+	writeExecutions(t, store, Executions{Version: Version, Records: []Record{recordFixture("exec-1", StatusPlanned)}})
+	before := readFile(t, store.Path())
+	if _, err := store.MarkReady(" "); err == nil {
+		t.Fatal("MarkReady succeeded, want missing id error")
+	}
+	after := readFile(t, store.Path())
+	if after != before {
+		t.Fatalf("executions mutated\nbefore: %s\nafter: %s", before, after)
+	}
+}
+
+func TestMarkReadyRejectsCancelledExecution(t *testing.T) {
+	store := testStore(t)
+	writeExecutions(t, store, Executions{Version: Version, Records: []Record{recordFixture("exec-1", StatusCancelled)}})
+	before := readFile(t, store.Path())
+	_, err := store.MarkReady("exec-1")
+	if err == nil {
+		t.Fatal("MarkReady succeeded, want cancelled status error")
+	}
+	if !strings.Contains(err.Error(), "status is cancelled, want planned") {
+		t.Fatalf("error = %q", err.Error())
+	}
+	if after := readFile(t, store.Path()); after != before {
+		t.Fatalf("executions mutated\nbefore: %s\nafter: %s", before, after)
+	}
+}
+
+func TestMarkReadyRejectsAlreadyReadyExecution(t *testing.T) {
+	store := testStore(t)
+	writeExecutions(t, store, Executions{Version: Version, Records: []Record{recordFixture("exec-1", StatusReady)}})
+	before := readFile(t, store.Path())
+	_, err := store.MarkReady("exec-1")
+	if err == nil {
+		t.Fatal("MarkReady succeeded, want ready status error")
+	}
+	if !strings.Contains(err.Error(), "status is ready, want planned") {
+		t.Fatalf("error = %q", err.Error())
+	}
+	if after := readFile(t, store.Path()); after != before {
+		t.Fatalf("executions mutated\nbefore: %s\nafter: %s", before, after)
+	}
+}
+
+func TestMarkReadyUpdatesUpdatedAt(t *testing.T) {
+	store := testStore(t)
+	store.Now = func() time.Time { return time.Date(2026, 5, 22, 13, 30, 0, 0, time.UTC) }
+	writeExecutions(t, store, Executions{Version: Version, Records: []Record{recordFixture("exec-1", StatusPlanned)}})
+	if _, err := store.MarkReady("exec-1"); err != nil {
+		t.Fatalf("MarkReady returned error: %v", err)
+	}
+	loaded, _, err := store.Load()
+	if err != nil {
+		t.Fatalf("Load returned error: %v", err)
+	}
+	if loaded.Records[0].CreatedAt != "2026-05-22T12:00:00Z" {
+		t.Fatalf("createdAt = %q", loaded.Records[0].CreatedAt)
+	}
+	if loaded.Records[0].UpdatedAt != "2026-05-22T13:30:00Z" {
+		t.Fatalf("updatedAt = %q, want transition time", loaded.Records[0].UpdatedAt)
+	}
+}
+
+func TestMarkReadyDoesNotMutateQueueState(t *testing.T) {
+	store := testStore(t)
+	item := reservedQueueItemFixture("queue-abc123", "some-task", "res-abc123")
+	writeQueue(t, store, runtimequeue.Queue{Version: runtimequeue.Version, Items: []runtimequeue.Item{item}})
+	writeExecutions(t, store, Executions{Version: Version, Records: []Record{recordFixture("exec-1", StatusPlanned)}})
+	before := readFile(t, store.Queue.QueuePath())
+	if _, err := store.MarkReady("exec-1"); err != nil {
+		t.Fatalf("MarkReady returned error: %v", err)
+	}
+	if after := readFile(t, store.Queue.QueuePath()); after != before {
+		t.Fatalf("queue mutated\nbefore: %s\nafter: %s", before, after)
+	}
+}
+
+func TestInspectCountsReadyStatus(t *testing.T) {
+	store := testStore(t)
+	writeExecutions(t, store, Executions{Version: Version, Records: []Record{
+		recordFixture("exec-1", StatusPlanned),
+		recordFixture("exec-2", StatusReady),
+	}})
+	inspection := store.Inspect()
+	if inspection.CountsByStatus[StatusPlanned] != 1 || inspection.CountsByStatus[StatusReady] != 1 {
+		t.Fatalf("counts = %#v", inspection.CountsByStatus)
+	}
+}
+
+func TestMarkPlannedRollsReadyBackToPlanned(t *testing.T) {
+	store := testStore(t)
+	writeExecutions(t, store, Executions{Version: Version, Records: []Record{recordFixture("exec-1", StatusReady)}})
+	result, err := store.MarkPlanned("exec-1")
+	if err != nil {
+		t.Fatalf("MarkPlanned returned error: %v", err)
+	}
+	if result.OldStatus != StatusReady || result.NewStatus != StatusPlanned {
+		t.Fatalf("result = %#v", result)
+	}
+	loaded, _, err := store.Load()
+	if err != nil {
+		t.Fatalf("Load returned error: %v", err)
+	}
+	if loaded.Records[0].Status != StatusPlanned {
+		t.Fatalf("status = %q, want planned", loaded.Records[0].Status)
+	}
+}
+
 func TestExecutionListLoadIsReadOnly(t *testing.T) {
 	store := testStore(t)
 	writeExecutions(t, store, Executions{Version: Version, Records: []Record{recordFixture("exec-1", "planned")}})

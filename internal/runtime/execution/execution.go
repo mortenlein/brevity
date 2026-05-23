@@ -22,6 +22,7 @@ const (
 	LockFile        = "runtime-executions.lock"
 	Version         = 1
 	StatusPlanned   = "planned"
+	StatusReady     = "ready"
 	StatusCancelled = "cancelled"
 )
 
@@ -42,6 +43,13 @@ type Record struct {
 	Status        string `json:"status"`
 	CreatedAt     string `json:"createdAt"`
 	UpdatedAt     string `json:"updatedAt"`
+}
+
+type TransitionResult struct {
+	ID        string
+	Task      string
+	OldStatus string
+	NewStatus string
 }
 
 type Store struct {
@@ -238,6 +246,55 @@ func (store Store) PlanFromReservation(queueItemID string) (Record, error) {
 	return record, nil
 }
 
+func (store Store) MarkReady(executionID string) (TransitionResult, error) {
+	return store.transitionStatus(executionID, StatusPlanned, StatusReady)
+}
+
+func (store Store) MarkPlanned(executionID string) (TransitionResult, error) {
+	return store.transitionStatus(executionID, StatusReady, StatusPlanned)
+}
+
+func (store Store) transitionStatus(executionID string, fromStatus string, toStatus string) (TransitionResult, error) {
+	executionID = strings.TrimSpace(executionID)
+	if executionID == "" {
+		return TransitionResult{}, errors.New("execution id is required")
+	}
+	lock, err := store.acquireLock()
+	if err != nil {
+		return TransitionResult{}, err
+	}
+	defer func() { _ = lock.Release() }()
+
+	executions, missing, err := store.Load()
+	if err != nil {
+		return TransitionResult{}, err
+	}
+	if missing {
+		return TransitionResult{}, fmt.Errorf("execution not found: %s", executionID)
+	}
+	for index, record := range executions.Records {
+		if record.ID != executionID {
+			continue
+		}
+		oldStatus := strings.ToLower(strings.TrimSpace(record.Status))
+		if oldStatus != fromStatus {
+			return TransitionResult{}, fmt.Errorf("execution %s status is %s, want %s", executionID, fallbackStatus(oldStatus), fromStatus)
+		}
+		executions.Records[index].Status = toStatus
+		executions.Records[index].UpdatedAt = store.now().UTC().Format(time.RFC3339)
+		if err := store.Store.WriteJSON(FileName, executions); err != nil {
+			return TransitionResult{}, err
+		}
+		return TransitionResult{
+			ID:        record.ID,
+			Task:      record.Task,
+			OldStatus: oldStatus,
+			NewStatus: toStatus,
+		}, nil
+	}
+	return TransitionResult{}, fmt.Errorf("execution not found: %s", executionID)
+}
+
 func Validate(executions Executions) error {
 	if executions.Version != Version {
 		return fmt.Errorf("unsupported runtime-executions.json version %d; supported version is %d", executions.Version, Version)
@@ -314,7 +371,7 @@ func validateRecord(record Record) error {
 		return errors.New("reservationId is required")
 	}
 	status := strings.ToLower(strings.TrimSpace(record.Status))
-	if status != StatusPlanned && status != StatusCancelled {
+	if status != StatusPlanned && status != StatusReady && status != StatusCancelled {
 		return fmt.Errorf("status %q is not recognized", record.Status)
 	}
 	if _, err := parseTime(record.CreatedAt); err != nil {
@@ -324,6 +381,13 @@ func validateRecord(record Record) error {
 		return fmt.Errorf("updatedAt is invalid: %w", err)
 	}
 	return nil
+}
+
+func fallbackStatus(status string) string {
+	if strings.TrimSpace(status) == "" {
+		return "(missing)"
+	}
+	return status
 }
 
 func (store Store) acquireLock() (*locking.Lock, error) {

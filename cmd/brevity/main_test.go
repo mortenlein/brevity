@@ -403,6 +403,138 @@ func TestSchedulerPlanExecutionDoesNotExecuteProvidersMutateTaskStateOrCreateRun
 	}
 }
 
+func TestExecutionMarkReadyTransitionsPlannedExecution(t *testing.T) {
+	repoRoot := tempRepoWithQueue(t, runtimequeue.Queue{Version: runtimequeue.Version, Items: []runtimequeue.Item{
+		mainTestReservedQueueItem("queue-1", "alpha", "res-alpha"),
+	}})
+	writeMainTestExecutions(t, repoRoot, runtimeexecution.Executions{Version: runtimeexecution.Version, Records: []runtimeexecution.Record{
+		mainTestExecutionRecord("exec-1", "queue-1", "alpha", "res-alpha", runtimeexecution.StatusPlanned),
+	}})
+	t.Chdir(repoRoot)
+
+	client := &fakeRuntimeClient{}
+	var stdout bytes.Buffer
+	if err := runWithOptions(&stdout, client, cliOptions{kind: commandExecutionMarkReady, candidateID: "exec-1"}); err != nil {
+		t.Fatalf("runWithOptions returned error: %v", err)
+	}
+	if len(client.calls) != 0 {
+		t.Fatalf("calls = %#v, want no PowerShell client calls", client.calls)
+	}
+	output := stdout.String()
+	for _, want := range []string{"Marked runtime execution ready", "id: exec-1", "task: alpha", "oldStatus: planned", "newStatus: ready", "no provider, worker, supervisor, task state, run history, or queue drain"} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("output missing %q:\n%s", want, output)
+		}
+	}
+	executions := readMainTestExecutions(t, repoRoot)
+	if executions.Records[0].Status != runtimeexecution.StatusReady {
+		t.Fatalf("status = %q, want ready", executions.Records[0].Status)
+	}
+}
+
+func TestExecutionMarkReadyRejectsMissingExecutionID(t *testing.T) {
+	if _, err := parseOptions([]string{"execution", "mark-ready"}); err == nil {
+		t.Fatal("parseOptions returned nil error")
+	}
+}
+
+func TestExecutionMarkReadyRejectsCancelledExecution(t *testing.T) {
+	repoRoot := tempRepoWithQueue(t, runtimequeue.Queue{Version: runtimequeue.Version, Items: []runtimequeue.Item{}})
+	writeMainTestExecutions(t, repoRoot, runtimeexecution.Executions{Version: runtimeexecution.Version, Records: []runtimeexecution.Record{
+		mainTestExecutionRecord("exec-1", "queue-1", "alpha", "res-alpha", runtimeexecution.StatusCancelled),
+	}})
+	t.Chdir(repoRoot)
+	before := readMainTestFile(t, filepath.Join(repoRoot, ".brevity", runtimeexecution.FileName))
+
+	err := runWithOptions(&bytes.Buffer{}, &fakeRuntimeClient{}, cliOptions{kind: commandExecutionMarkReady, candidateID: "exec-1"})
+	if err == nil {
+		t.Fatal("runWithOptions returned nil error")
+	}
+	if !strings.Contains(err.Error(), "status is cancelled, want planned") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if after := readMainTestFile(t, filepath.Join(repoRoot, ".brevity", runtimeexecution.FileName)); after != before {
+		t.Fatalf("executions mutated\nbefore: %s\nafter: %s", before, after)
+	}
+}
+
+func TestExecutionMarkReadyRejectsAlreadyReadyExecution(t *testing.T) {
+	repoRoot := tempRepoWithQueue(t, runtimequeue.Queue{Version: runtimequeue.Version, Items: []runtimequeue.Item{}})
+	writeMainTestExecutions(t, repoRoot, runtimeexecution.Executions{Version: runtimeexecution.Version, Records: []runtimeexecution.Record{
+		mainTestExecutionRecord("exec-1", "queue-1", "alpha", "res-alpha", runtimeexecution.StatusReady),
+	}})
+	t.Chdir(repoRoot)
+	err := runWithOptions(&bytes.Buffer{}, &fakeRuntimeClient{}, cliOptions{kind: commandExecutionMarkReady, candidateID: "exec-1"})
+	if err == nil {
+		t.Fatal("runWithOptions returned nil error")
+	}
+	if !strings.Contains(err.Error(), "status is ready, want planned") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestExecutionMarkReadyDoesNotMutateQueueState(t *testing.T) {
+	repoRoot := tempRepoWithQueue(t, runtimequeue.Queue{Version: runtimequeue.Version, Items: []runtimequeue.Item{
+		mainTestReservedQueueItem("queue-1", "alpha", "res-alpha"),
+	}})
+	writeMainTestExecutions(t, repoRoot, runtimeexecution.Executions{Version: runtimeexecution.Version, Records: []runtimeexecution.Record{
+		mainTestExecutionRecord("exec-1", "queue-1", "alpha", "res-alpha", runtimeexecution.StatusPlanned),
+	}})
+	t.Chdir(repoRoot)
+	queuePath := filepath.Join(repoRoot, ".brevity", runtimequeue.FileName)
+	before := readMainTestFile(t, queuePath)
+	if err := runWithOptions(&bytes.Buffer{}, &fakeRuntimeClient{}, cliOptions{kind: commandExecutionMarkReady, candidateID: "exec-1"}); err != nil {
+		t.Fatalf("runWithOptions returned error: %v", err)
+	}
+	if after := readMainTestFile(t, queuePath); after != before {
+		t.Fatalf("queue mutated\nbefore: %s\nafter: %s", before, after)
+	}
+}
+
+func TestExecutionListAndInspectShowReadyStatus(t *testing.T) {
+	repoRoot := tempRepoWithQueue(t, runtimequeue.Queue{Version: runtimequeue.Version, Items: []runtimequeue.Item{}})
+	writeMainTestExecutions(t, repoRoot, runtimeexecution.Executions{Version: runtimeexecution.Version, Records: []runtimeexecution.Record{
+		mainTestExecutionRecord("exec-1", "queue-1", "alpha", "res-alpha", runtimeexecution.StatusPlanned),
+		mainTestExecutionRecord("exec-2", "queue-2", "beta", "res-beta", runtimeexecution.StatusReady),
+	}})
+	t.Chdir(repoRoot)
+
+	var stdout bytes.Buffer
+	if err := runWithOptions(&stdout, &fakeRuntimeClient{}, cliOptions{kind: commandExecutionList}); err != nil {
+		t.Fatalf("execution list returned error: %v", err)
+	}
+	for _, want := range []string{"planned: 1", "ready: 1", "exec-2\tqueue-2\tbeta\tres-beta\tready"} {
+		if !strings.Contains(stdout.String(), want) {
+			t.Fatalf("list output missing %q:\n%s", want, stdout.String())
+		}
+	}
+	stdout.Reset()
+	if err := runWithOptions(&stdout, &fakeRuntimeClient{}, cliOptions{kind: commandExecutionInspect}); err != nil {
+		t.Fatalf("execution inspect returned error: %v", err)
+	}
+	if !strings.Contains(stdout.String(), "- ready: 1") {
+		t.Fatalf("inspect output missing ready count:\n%s", stdout.String())
+	}
+}
+
+func TestExecutionMarkPlannedRollsReadyBackToPlanned(t *testing.T) {
+	repoRoot := tempRepoWithQueue(t, runtimequeue.Queue{Version: runtimequeue.Version, Items: []runtimequeue.Item{}})
+	writeMainTestExecutions(t, repoRoot, runtimeexecution.Executions{Version: runtimeexecution.Version, Records: []runtimeexecution.Record{
+		mainTestExecutionRecord("exec-1", "queue-1", "alpha", "res-alpha", runtimeexecution.StatusReady),
+	}})
+	t.Chdir(repoRoot)
+	var stdout bytes.Buffer
+	if err := runWithOptions(&stdout, &fakeRuntimeClient{}, cliOptions{kind: commandExecutionMarkPlanned, candidateID: "exec-1"}); err != nil {
+		t.Fatalf("runWithOptions returned error: %v", err)
+	}
+	if !strings.Contains(stdout.String(), "oldStatus: ready") || !strings.Contains(stdout.String(), "newStatus: planned") {
+		t.Fatalf("unexpected output:\n%s", stdout.String())
+	}
+	if got := readMainTestExecutions(t, repoRoot).Records[0].Status; got != runtimeexecution.StatusPlanned {
+		t.Fatalf("status = %q, want planned", got)
+	}
+}
+
 func TestTaskStartJSONUsesNativeService(t *testing.T) {
 	root := taskPreflightFixture(t, "alpha", "planned", state.StatusHealthy)
 	previous, err := os.Getwd()
@@ -1575,6 +1707,17 @@ func readMainTestExecutions(t *testing.T, repoRoot string) runtimeexecution.Exec
 	return executions
 }
 
+func writeMainTestExecutions(t *testing.T, repoRoot string, executions runtimeexecution.Executions) {
+	t.Helper()
+	store, err := state.NewStore(repoRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.WriteJSON(runtimeexecution.FileName, executions); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func mainTestQueueItem(id string, task string, status string) runtimequeue.Item {
 	return runtimequeue.Item{
 		ID:        id,
@@ -1595,6 +1738,18 @@ func mainTestReservedQueueItem(id string, task string, reservationID string) run
 		ReservationID: reservationID,
 	}
 	return item
+}
+
+func mainTestExecutionRecord(id string, queueItemID string, task string, reservationID string, status string) runtimeexecution.Record {
+	return runtimeexecution.Record{
+		ID:            id,
+		QueueItemID:   queueItemID,
+		Task:          task,
+		ReservationID: reservationID,
+		Status:        status,
+		CreatedAt:     "2026-05-22T12:00:00Z",
+		UpdatedAt:     "2026-05-22T12:00:00Z",
+	}
 }
 
 func jsonPath(path string) string {

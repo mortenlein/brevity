@@ -23,6 +23,8 @@ const (
 	ExecutionListID                ID = "execution-list"
 	ExecutionInspectID             ID = "execution-inspect"
 	ExecutionPlanFromReservationID ID = "execution-plan-from-reservation"
+	ExecutionMarkReadyID           ID = "execution-mark-ready"
+	ExecutionMarkPlannedID         ID = "execution-mark-planned"
 	ProviderStatusID               ID = "provider-status"
 	ProviderSetID                  ID = "provider-set"
 	ProviderResetID                ID = "provider-reset"
@@ -167,6 +169,16 @@ var (
 		ID:    ExecutionPlanFromReservationID,
 		Words: []string{"execution", "plan-from-reservation"},
 		Usage: "brevity execution plan-from-reservation <queue-item-id>",
+	}
+	ExecutionMarkReady = Command{
+		ID:    ExecutionMarkReadyID,
+		Words: []string{"execution", "mark-ready"},
+		Usage: "brevity execution mark-ready <execution-id>",
+	}
+	ExecutionMarkPlanned = Command{
+		ID:    ExecutionMarkPlannedID,
+		Words: []string{"execution", "mark-planned"},
+		Usage: "brevity execution mark-planned <execution-id>",
 	}
 	ProviderSet = Command{
 		ID:    ProviderSetID,
@@ -319,6 +331,8 @@ var UsageCommands = []Command{
 	ExecutionList,
 	ExecutionInspect,
 	ExecutionPlanFromReservation,
+	ExecutionMarkReady,
+	ExecutionMarkPlanned,
 	Doctor,
 	ProviderStatus,
 	ProviderSet,

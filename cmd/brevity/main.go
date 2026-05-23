@@ -60,6 +60,8 @@ const (
 	commandExecutionList        commandKind = commandKind(commands.ExecutionListID)
 	commandExecutionInspect     commandKind = commandKind(commands.ExecutionInspectID)
 	commandExecutionPlan        commandKind = commandKind(commands.ExecutionPlanFromReservationID)
+	commandExecutionMarkReady   commandKind = commandKind(commands.ExecutionMarkReadyID)
+	commandExecutionMarkPlanned commandKind = commandKind(commands.ExecutionMarkPlannedID)
 	commandProviderStatus       commandKind = commandKind(commands.ProviderStatusID)
 	commandProviderSet          commandKind = commandKind(commands.ProviderSetID)
 	commandProviderReset        commandKind = commandKind(commands.ProviderResetID)
@@ -267,7 +269,7 @@ func parseQueueOptions(args []string) (cliOptions, error) {
 
 func parseExecutionOptions(args []string) (cliOptions, error) {
 	if len(args) < 2 {
-		return cliOptions{}, fmt.Errorf("missing execution command: supported commands: list, inspect, plan-from-reservation")
+		return cliOptions{}, fmt.Errorf("missing execution command: supported commands: list, inspect, plan-from-reservation, mark-ready, mark-planned")
 	}
 	switch args[1] {
 	case "list":
@@ -289,8 +291,18 @@ func parseExecutionOptions(args []string) (cliOptions, error) {
 			return cliOptions{}, usageError(commands.ExecutionPlanFromReservation)
 		}
 		return cliOptions{kind: commandExecutionPlan, candidateID: args[2]}, nil
+	case "mark-ready":
+		if len(args) != 3 || strings.TrimSpace(args[2]) == "" {
+			return cliOptions{}, usageError(commands.ExecutionMarkReady)
+		}
+		return cliOptions{kind: commandExecutionMarkReady, candidateID: args[2]}, nil
+	case "mark-planned":
+		if len(args) != 3 || strings.TrimSpace(args[2]) == "" {
+			return cliOptions{}, usageError(commands.ExecutionMarkPlanned)
+		}
+		return cliOptions{kind: commandExecutionMarkPlanned, candidateID: args[2]}, nil
 	default:
-		return cliOptions{}, fmt.Errorf("unsupported execution command %q: supported commands: list, inspect, plan-from-reservation", args[1])
+		return cliOptions{}, fmt.Errorf("unsupported execution command %q: supported commands: list, inspect, plan-from-reservation, mark-ready, mark-planned", args[1])
 	}
 }
 
@@ -911,7 +923,7 @@ func runWithContextOptions(ctx context.Context, stdout io.Writer, client runtime
 		return routeQueueCommand(stdout, options)
 	case commandSchedulerPlan, commandSchedulerReserveNext, commandSchedulerPlanExec:
 		return routeSchedulerCommand(stdout, options)
-	case commandExecutionList, commandExecutionInspect, commandExecutionPlan:
+	case commandExecutionList, commandExecutionInspect, commandExecutionPlan, commandExecutionMarkReady, commandExecutionMarkPlanned:
 		return routeExecutionCommand(stdout, options)
 	case commandProviderStatus, commandProviderSet, commandProviderReset:
 		return routeProviderCommand(stdout, options)
@@ -976,9 +988,21 @@ func routeExecutionCommand(stdout io.Writer, options cliOptions) error {
 			return nil
 		}
 		fmt.Fprintf(stdout, "Executions: %d\n", len(executions.Records))
+		counts := executionStatusCounts(executions.Records)
+		if len(counts) > 0 {
+			statuses := make([]string, 0, len(counts))
+			for status := range counts {
+				statuses = append(statuses, status)
+			}
+			sort.Strings(statuses)
+			for _, status := range statuses {
+				fmt.Fprintf(stdout, "%s: %d\n", status, counts[status])
+			}
+		}
 		fmt.Fprintln(stdout)
 		for _, record := range executions.Records {
-			if record.Status != runtimeexecution.StatusPlanned {
+			status := strings.ToLower(strings.TrimSpace(record.Status))
+			if status != runtimeexecution.StatusPlanned && status != runtimeexecution.StatusReady {
 				continue
 			}
 			fmt.Fprintf(stdout, "%s\t%s\t%s\t%s\t%s\t%s\n", record.ID, record.QueueItemID, record.Task, record.ReservationID, record.Status, record.CreatedAt)
@@ -1012,9 +1036,47 @@ func routeExecutionCommand(stdout io.Writer, options cliOptions) error {
 		fmt.Fprintln(stdout)
 		fmt.Fprintln(stdout, "Execution plan only: no provider, worker, supervisor, task state, run history, or queue drain was started.")
 		return nil
+	case commandExecutionMarkReady:
+		result, err := store.MarkReady(options.candidateID)
+		if err != nil {
+			return err
+		}
+		renderExecutionTransition(stdout, "Marked runtime execution ready", store.Path(), result)
+		return nil
+	case commandExecutionMarkPlanned:
+		result, err := store.MarkPlanned(options.candidateID)
+		if err != nil {
+			return err
+		}
+		renderExecutionTransition(stdout, "Marked runtime execution planned", store.Path(), result)
+		return nil
 	default:
 		return fmt.Errorf("unsupported execution command: %s", options.kind)
 	}
+}
+
+func executionStatusCounts(records []runtimeexecution.Record) map[string]int {
+	counts := map[string]int{}
+	for _, record := range records {
+		status := strings.ToLower(strings.TrimSpace(record.Status))
+		if status == "" {
+			status = "(missing)"
+		}
+		counts[status]++
+	}
+	return counts
+}
+
+func renderExecutionTransition(stdout io.Writer, title string, path string, result runtimeexecution.TransitionResult) {
+	fmt.Fprintln(stdout, title)
+	fmt.Fprintf(stdout, "Path: %s\n", path)
+	fmt.Fprintln(stdout)
+	fmt.Fprintf(stdout, "id: %s\n", result.ID)
+	fmt.Fprintf(stdout, "task: %s\n", result.Task)
+	fmt.Fprintf(stdout, "oldStatus: %s\n", result.OldStatus)
+	fmt.Fprintf(stdout, "newStatus: %s\n", result.NewStatus)
+	fmt.Fprintln(stdout)
+	fmt.Fprintln(stdout, "Execution metadata only: no provider, worker, supervisor, task state, run history, or queue drain was started.")
 }
 
 func renderExecutionInspection(stdout io.Writer, inspection runtimeexecution.Inspection) {
