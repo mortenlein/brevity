@@ -19,6 +19,8 @@ const sectionSep = "---"
 // task, and state filters are overridden; --limit and --output still apply.
 // When opts.MergeReport is true, merge-readiness report mode is activated and
 // section/task/state filters are overridden; --limit and --output still apply.
+// When opts.BlockedReport is true, blocked-task report mode is activated and
+// section/task/state filters are overridden; --limit and --output still apply.
 // When opts.ReviewTask is non-empty, review-packet mode is activated and
 // section/task filters are overridden; --output still applies.
 // Output is deterministic for a given Snapshot and RenderOptions.
@@ -31,6 +33,10 @@ func Render(w io.Writer, snap Snapshot, opts RenderOptions) {
 	}
 	if opts.MergeReport {
 		renderMerge(w, snap, opts)
+		return
+	}
+	if opts.BlockedReport {
+		renderBlocked(w, snap, opts)
 		return
 	}
 	if opts.ReviewTask != "" {
