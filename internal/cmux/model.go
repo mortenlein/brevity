@@ -86,6 +86,12 @@ type RenderOptions struct {
 	// merge groups: ready-for-merge, reviewing, needs-run, blocked, merged,
 	// and other.
 	MergeReport bool
+
+	// BlockedReport, when true, activates blocked-task report mode.
+	// BlockedReport mode ignores --section, --task, and --state filters;
+	// --limit and --output still apply.  Tasks are classified into four groups:
+	// provider-gated, blocked, reserved-or-queue-gated, and unknown.
+	BlockedReport bool
 }
 
 // effectiveLimit returns the active task limit, always >= 1.

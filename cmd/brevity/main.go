@@ -94,37 +94,38 @@ const (
 )
 
 type cliOptions struct {
-	help            bool
-	kind            commandKind
-	once            bool
-	watch           bool
-	bubble          bool
-	noClear         bool
-	refresh         time.Duration
-	jsonSource      string
-	provider        string
-	status          string
-	note            string
-	slug            string
-	force           bool
-	execute         bool
-	dryRun          bool
-	plan            bool
-	profile         string
-	smoke           bool
-	json            bool
-	all             bool
-	repair          bool
-	candidateID     string
-	preflightAction preflight.Action
-	cmuxLimit       int
-	cmuxSection     string
-	cmuxTask        string
-	cmuxState       string
-	cmuxOutput      string
-	cmuxReview      string
-	cmuxHandoff     bool
-	cmuxMergeReport bool
+	help              bool
+	kind              commandKind
+	once              bool
+	watch             bool
+	bubble            bool
+	noClear           bool
+	refresh           time.Duration
+	jsonSource        string
+	provider          string
+	status            string
+	note              string
+	slug              string
+	force             bool
+	execute           bool
+	dryRun            bool
+	plan              bool
+	profile           string
+	smoke             bool
+	json              bool
+	all               bool
+	repair            bool
+	candidateID       string
+	preflightAction   preflight.Action
+	cmuxLimit         int
+	cmuxSection       string
+	cmuxTask          string
+	cmuxState         string
+	cmuxOutput        string
+	cmuxReview        string
+	cmuxHandoff       bool
+	cmuxMergeReport   bool
+	cmuxBlockedReport bool
 }
 
 type actionCall func() ([]byte, error)
@@ -383,11 +384,12 @@ func parseCmuxOptions(args []string) (cliOptions, error) {
 	review := flags.String("review", "", "generate a focused review packet for this task slug")
 	handoff := flags.Bool("handoff", false, "generate an AI/operator handoff packet")
 	mergeReport := flags.Bool("merge-report", false, "generate a merge readiness report grouped by state")
+	blockedReport := flags.Bool("blocked-report", false, "generate a blocked task report grouped by block reason")
 	if err := flags.Parse(args[1:]); err != nil {
-		return cliOptions{}, fmt.Errorf("usage: brevity cmux [--limit <n>] [--section <name>] [--task <slug>] [--state <state>] [--output text|markdown|json] [--review <slug>] [--handoff] [--merge-report]")
+		return cliOptions{}, fmt.Errorf("usage: brevity cmux [--limit <n>] [--section <name>] [--task <slug>] [--state <state>] [--output text|markdown|json] [--review <slug>] [--handoff] [--merge-report] [--blocked-report]")
 	}
 	if flags.NArg() > 0 {
-		return cliOptions{}, fmt.Errorf("usage: brevity cmux [--limit <n>] [--section <name>] [--task <slug>] [--state <state>] [--output text|markdown|json] [--review <slug>] [--handoff] [--merge-report]")
+		return cliOptions{}, fmt.Errorf("usage: brevity cmux [--limit <n>] [--section <name>] [--task <slug>] [--state <state>] [--output text|markdown|json] [--review <slug>] [--handoff] [--merge-report] [--blocked-report]")
 	}
 	switch *section {
 	case cmux.SectionAll, cmux.SectionProviders, cmux.SectionTasks, cmux.SectionQueue, cmux.SectionActions:
@@ -405,29 +407,31 @@ func parseCmuxOptions(args []string) (cliOptions, error) {
 		return cliOptions{}, fmt.Errorf("invalid --output %q: allowed values: text, markdown, json", *output)
 	}
 	return cliOptions{
-		kind:            commandCmux,
-		cmuxLimit:       *limit,
-		cmuxSection:     *section,
-		cmuxTask:        *task,
-		cmuxState:       *state,
-		cmuxOutput:      *output,
-		cmuxReview:      *review,
-		cmuxHandoff:     *handoff,
-		cmuxMergeReport: *mergeReport,
+		kind:              commandCmux,
+		cmuxLimit:         *limit,
+		cmuxSection:       *section,
+		cmuxTask:          *task,
+		cmuxState:         *state,
+		cmuxOutput:        *output,
+		cmuxReview:        *review,
+		cmuxHandoff:       *handoff,
+		cmuxMergeReport:   *mergeReport,
+		cmuxBlockedReport: *blockedReport,
 	}, nil
 }
 
 func routeCmuxCommand(stdout io.Writer, options cliOptions) error {
 	snap := cmux.Read(cmux.NativeFetcher{})
 	cmux.Render(stdout, snap, cmux.RenderOptions{
-		Limit:       options.cmuxLimit,
-		Section:     options.cmuxSection,
-		TaskSlug:    options.cmuxTask,
-		StateFilter: options.cmuxState,
-		Output:      cmux.OutputMode(options.cmuxOutput),
-		ReviewTask:  options.cmuxReview,
-		Handoff:     options.cmuxHandoff,
-		MergeReport: options.cmuxMergeReport,
+		Limit:         options.cmuxLimit,
+		Section:       options.cmuxSection,
+		TaskSlug:      options.cmuxTask,
+		StateFilter:   options.cmuxState,
+		Output:        cmux.OutputMode(options.cmuxOutput),
+		ReviewTask:    options.cmuxReview,
+		Handoff:       options.cmuxHandoff,
+		MergeReport:   options.cmuxMergeReport,
+		BlockedReport: options.cmuxBlockedReport,
 	})
 	return nil
 }
@@ -2733,6 +2737,11 @@ func writeCmuxUsage(stdout io.Writer) {
 	fmt.Fprintln(stdout, "                            needs-run, blocked, merged, other.")
 	fmt.Fprintln(stdout, "                            Overrides --section, --task, --state.")
 	fmt.Fprintln(stdout, "                            --limit and --output still apply.")
+	fmt.Fprintln(stdout, "  --blocked-report          Generate a blocked task report.")
+	fmt.Fprintln(stdout, "                            Groups: provider-gated, blocked,")
+	fmt.Fprintln(stdout, "                            reserved-or-queue-gated, unknown.")
+	fmt.Fprintln(stdout, "                            Overrides --section, --task, --state.")
+	fmt.Fprintln(stdout, "                            --limit and --output still apply.")
 	fmt.Fprintln(stdout, "  -h, --help                Show this help.")
 	fmt.Fprintln(stdout)
 	fmt.Fprintln(stdout, "Output modes:")
@@ -2758,4 +2767,7 @@ func writeCmuxUsage(stdout io.Writer) {
 	fmt.Fprintln(stdout, "  brevity cmux --merge-report")
 	fmt.Fprintln(stdout, "  brevity cmux --merge-report --output markdown")
 	fmt.Fprintln(stdout, "  brevity cmux --merge-report --output json")
+	fmt.Fprintln(stdout, "  brevity cmux --blocked-report")
+	fmt.Fprintln(stdout, "  brevity cmux --blocked-report --output markdown")
+	fmt.Fprintln(stdout, "  brevity cmux --blocked-report --output json")
 }

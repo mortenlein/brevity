@@ -3055,3 +3055,416 @@ func TestReview_OverridesSection(t *testing.T) {
 		t.Error("review mode with section override must still show Review Checklist")
 	}
 }
+
+// --- blocked report tests --------------------------------------------------
+
+// blockedStateJSON returns a runtime-state fixture covering the blocked and
+// provider-gated task states used by the blocked-report tests.
+func blockedStateJSON() []byte {
+	return []byte(`{
+		"schema": "brevity.runtime-state.v1",
+		"repoRoot": "/dev/test",
+		"generatedAt": "2026-01-01T00:00:00Z",
+		"providers": {
+			"summary": {"total": 2, "degraded": 1, "unavailable": 0},
+			"health": {
+				"codex":  {"status": "healthy",  "updatedAt": "", "note": ""},
+				"gemini": {"status": "degraded", "updatedAt": "", "note": "quota exceeded"}
+			}
+		},
+		"taskCounts": {"tracked": 3, "runnable": 0, "blocked": 1, "stale": 0, "providerGated": 1, "review": 0},
+		"tasks": [
+			{
+				"slug": "blk-pgated",
+				"status": "provider-gated",
+				"normalizedState": "provider-gated",
+				"providerGated": true,
+				"provider": "gemini",
+				"providerHealth": "degraded",
+				"workerStatus": "",
+				"branch": "task/blk-pgated",
+				"worktreePath": ""
+			},
+			{
+				"slug": "blk-blocked",
+				"status": "blocked",
+				"normalizedState": "blocked",
+				"providerGated": false,
+				"provider": "codex",
+				"providerHealth": "healthy",
+				"workerStatus": "failed",
+				"latestRunWorkerStatus": "failed",
+				"latestRunFailureType": "context-exceeded",
+				"branch": "task/blk-blocked",
+				"worktreePath": ""
+			},
+			{
+				"slug": "blk-runnable",
+				"status": "ready-for-worker",
+				"normalizedState": "ready-for-worker",
+				"providerGated": false,
+				"provider": "codex",
+				"providerHealth": "healthy",
+				"workerStatus": "",
+				"branch": "task/blk-runnable",
+				"worktreePath": ""
+			}
+		],
+		"suggestedNextActions": ["Check blocked tasks."],
+		"orphanedTaskWorktrees": [],
+		"activeWorktrees": [],
+		"activeWorktreeCount": 0,
+		"groups": {}
+	}`)
+}
+
+// skippedSchedulerJSON returns a scheduler-plan fixture with one skipped item.
+func skippedSchedulerJSON() []byte {
+	return []byte(`{
+		"schema": "brevity.runtime-scheduler-plan.v1",
+		"queuePath": ".brevity/runtime-queue.json",
+		"queueState": "valid",
+		"queueVersion": 1,
+		"supportedQueueVersion": 1,
+		"noSelectionReason": "all items skipped",
+		"reservationEligible": false,
+		"reservationEligibility": "not eligible: no selected queue item",
+		"skipped": [
+			{
+				"id":       "queue-item-abc123",
+				"task":     "blk-blocked",
+				"provider": "codex",
+				"profile":  "default",
+				"status":   "reserved",
+				"reason":   "item is already reserved by another worker"
+			}
+		],
+		"safetyChecks": [],
+		"readOnly": true
+	}`)
+}
+
+// blockedOpts is a shorthand for blocked-report text options.
+func blockedOpts() cmux.RenderOptions {
+	return cmux.RenderOptions{BlockedReport: true}
+}
+
+// blockedMarkdownOpts is a shorthand for blocked-report markdown options.
+func blockedMarkdownOpts() cmux.RenderOptions {
+	return cmux.RenderOptions{BlockedReport: true, Output: cmux.OutputMarkdown}
+}
+
+// blockedJSONOpts is a shorthand for blocked-report JSON options.
+func blockedJSONOpts() cmux.RenderOptions {
+	return cmux.RenderOptions{BlockedReport: true, Output: cmux.OutputJSON}
+}
+
+func TestBlocked_DispatchActivated(t *testing.T) {
+	// BlockedReport:true must produce the blocked header, not the normal header.
+	snap := cmux.Read(stubFetcher{stateJSON: minimalStateJSON(t), schedulerJSON: minimalSchedulerJSON()})
+	out := renderSnapshotOpts(snap, blockedOpts())
+	if !strings.Contains(out, "CMUX BLOCKED REPORT") {
+		t.Errorf("blocked dispatch missing CMUX BLOCKED REPORT header; output:\n%s", out)
+	}
+	if strings.Contains(out, "CMUX OPERATOR") {
+		t.Error("blocked output must not contain CMUX OPERATOR (normal report) header")
+	}
+}
+
+func TestBlocked_Text_Structure(t *testing.T) {
+	snap := cmux.Read(stubFetcher{stateJSON: blockedStateJSON(), schedulerJSON: minimalSchedulerJSON()})
+	out := renderSnapshotOpts(snap, blockedOpts())
+	for _, want := range []string{
+		"CMUX BLOCKED REPORT",
+		"[read-only]",
+		"source: native",
+		"Summary",
+		"provider-gated",
+		"blocked",
+		"reserved-or-queue-gated",
+		"unknown",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("blocked text missing %q; output:\n%s", want, out)
+		}
+	}
+}
+
+func TestBlocked_Text_GroupingByState(t *testing.T) {
+	snap := cmux.Read(stubFetcher{stateJSON: blockedStateJSON(), schedulerJSON: minimalSchedulerJSON()})
+	out := renderSnapshotOpts(snap, blockedOpts())
+
+	// blk-pgated must appear in the provider-gated section.
+	pgIdx := strings.Index(out, "provider-gated")
+	pgTaskIdx := strings.Index(out, "blk-pgated")
+	blkIdx := strings.Index(out, "\nblocked")
+	blkTaskIdx := strings.Index(out, "blk-blocked")
+
+	if pgIdx < 0 || pgTaskIdx < pgIdx {
+		t.Errorf("blk-pgated must appear after provider-gated header; output:\n%s", out)
+	}
+	if blkIdx < 0 || blkTaskIdx < blkIdx {
+		t.Errorf("blk-blocked must appear after blocked header; output:\n%s", out)
+	}
+	// blk-runnable is ready-for-worker and must NOT appear in any blocked group.
+	if strings.Contains(out, "blk-runnable") {
+		t.Errorf("blk-runnable (ready-for-worker) must not appear in blocked report; output:\n%s", out)
+	}
+}
+
+func TestBlocked_Text_SkippedQueueItemsIncluded(t *testing.T) {
+	snap := cmux.Read(stubFetcher{stateJSON: blockedStateJSON(), schedulerJSON: skippedSchedulerJSON()})
+	out := renderSnapshotOpts(snap, blockedOpts())
+	if !strings.Contains(out, "queue-item-abc123") {
+		t.Errorf("skipped queue item ID must appear in blocked report; output:\n%s", out)
+	}
+	if !strings.Contains(out, "already reserved") {
+		t.Errorf("skipped queue item reason must appear in blocked report; output:\n%s", out)
+	}
+}
+
+func TestBlocked_Text_ReasonForProviderGated(t *testing.T) {
+	snap := cmux.Read(stubFetcher{stateJSON: blockedStateJSON(), schedulerJSON: minimalSchedulerJSON()})
+	out := renderSnapshotOpts(snap, blockedOpts())
+	// blk-pgated has provider=gemini, providerHealth=degraded; reason must mention provider.
+	if !strings.Contains(out, "likely provider") {
+		t.Errorf("provider-gated task must include likely provider reason; output:\n%s", out)
+	}
+}
+
+func TestBlocked_Text_ReasonForBlocked(t *testing.T) {
+	snap := cmux.Read(stubFetcher{stateJSON: blockedStateJSON(), schedulerJSON: minimalSchedulerJSON()})
+	out := renderSnapshotOpts(snap, blockedOpts())
+	// blk-blocked has latestRunFailureType=context-exceeded.
+	if !strings.Contains(out, "context-exceeded") {
+		t.Errorf("blocked task with failure type must show that type as reason; output:\n%s", out)
+	}
+}
+
+func TestBlocked_Text_ReasonUnavailableWhenMissing(t *testing.T) {
+	// A task with normalizedState=blocked but no latestRunFailureType must show
+	// "reason unavailable from current contract".
+	noReasonStateJSON := []byte(`{
+		"schema": "brevity.runtime-state.v1",
+		"repoRoot": "/dev/test",
+		"generatedAt": "2026-01-01T00:00:00Z",
+		"providers": {"summary": {"total": 0, "degraded": 0, "unavailable": 0}, "health": {}},
+		"taskCounts": {"tracked": 1, "runnable": 0, "blocked": 1, "stale": 0, "providerGated": 0, "review": 0},
+		"tasks": [
+			{
+				"slug": "stuck-task",
+				"status": "blocked",
+				"normalizedState": "blocked",
+				"providerGated": false,
+				"workerStatus": "",
+				"branch": "task/stuck-task",
+				"worktreePath": ""
+			}
+		],
+		"suggestedNextActions": [],
+		"orphanedTaskWorktrees": [],
+		"activeWorktrees": [],
+		"activeWorktreeCount": 0,
+		"groups": {}
+	}`)
+	snap := cmux.Read(stubFetcher{stateJSON: noReasonStateJSON, schedulerJSON: minimalSchedulerJSON()})
+	out := renderSnapshotOpts(snap, blockedOpts())
+	if !strings.Contains(out, "reason unavailable from current contract") {
+		t.Errorf("blocked task with no failure type must show unavailable reason; output:\n%s", out)
+	}
+}
+
+func TestBlocked_Markdown_Structure(t *testing.T) {
+	snap := cmux.Read(stubFetcher{stateJSON: blockedStateJSON(), schedulerJSON: minimalSchedulerJSON()})
+	out := renderSnapshotOpts(snap, blockedMarkdownOpts())
+	for _, want := range []string{
+		"# CMUX Blocked Report [read-only]",
+		"## Summary",
+		"## provider-gated",
+		"## blocked",
+		"## reserved-or-queue-gated",
+		"## unknown",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("blocked markdown missing %q; output:\n%s", want, out)
+		}
+	}
+}
+
+func TestBlocked_Markdown_StartsWithH1(t *testing.T) {
+	snap := cmux.Read(stubFetcher{stateJSON: minimalStateJSON(t), schedulerJSON: minimalSchedulerJSON()})
+	out := renderSnapshotOpts(snap, blockedMarkdownOpts())
+	if !strings.HasPrefix(out, "# CMUX Blocked Report") {
+		t.Errorf("blocked markdown must start with # CMUX Blocked Report; prefix: %q", out[:min(len(out), 40)])
+	}
+}
+
+func TestBlocked_JSON_Schema(t *testing.T) {
+	snap := cmux.Read(stubFetcher{stateJSON: minimalStateJSON(t), schedulerJSON: minimalSchedulerJSON()})
+	out := renderSnapshotOpts(snap, blockedJSONOpts())
+	var result map[string]any
+	if err := json.Unmarshal([]byte(out), &result); err != nil {
+		t.Fatalf("blocked JSON invalid: %v\noutput:\n%s", err, out)
+	}
+	if result["schema"] != "brevity.cmux-blocked-report.v1" {
+		t.Errorf("blocked JSON schema = %v, want brevity.cmux-blocked-report.v1", result["schema"])
+	}
+}
+
+func TestBlocked_JSON_StructureFields(t *testing.T) {
+	snap := cmux.Read(stubFetcher{stateJSON: blockedStateJSON(), schedulerJSON: skippedSchedulerJSON()})
+	out := renderSnapshotOpts(snap, blockedJSONOpts())
+	var result map[string]any
+	if err := json.Unmarshal([]byte(out), &result); err != nil {
+		t.Fatalf("blocked JSON invalid: %v\noutput:\n%s", err, out)
+	}
+	for _, field := range []string{"schema", "source", "options", "errors", "summary", "providerGated", "blocked", "reservedOrQueueGated", "unknown"} {
+		if _, ok := result[field]; !ok {
+			t.Errorf("blocked JSON missing top-level field %q; output:\n%s", field, out)
+		}
+	}
+}
+
+func TestBlocked_JSON_EmptyArraysNotNull(t *testing.T) {
+	snap := cmux.Read(stubFetcher{stateJSON: manyTaskStateJSON(0), schedulerJSON: minimalSchedulerJSON()})
+	out := renderSnapshotOpts(snap, blockedJSONOpts())
+	if strings.Contains(out, `null`) {
+		t.Errorf("blocked JSON must not contain null values for array/slice fields; output:\n%s", out)
+	}
+}
+
+func TestBlocked_JSON_SummaryTotals(t *testing.T) {
+	snap := cmux.Read(stubFetcher{stateJSON: blockedStateJSON(), schedulerJSON: minimalSchedulerJSON()})
+	out := renderSnapshotOpts(snap, blockedJSONOpts())
+	var result map[string]any
+	if err := json.Unmarshal([]byte(out), &result); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+	summary := result["summary"].(map[string]any)
+	// blockedStateJSON has 1 provider-gated + 1 blocked = 2 total (no queue items in minimal scheduler).
+	if summary["providerGated"] != float64(1) {
+		t.Errorf("summary.providerGated = %v, want 1", summary["providerGated"])
+	}
+	if summary["blocked"] != float64(1) {
+		t.Errorf("summary.blocked = %v, want 1", summary["blocked"])
+	}
+	if summary["total"] != float64(2) {
+		t.Errorf("summary.total = %v, want 2", summary["total"])
+	}
+}
+
+func TestBlocked_JSON_SkippedQueueItem(t *testing.T) {
+	snap := cmux.Read(stubFetcher{stateJSON: blockedStateJSON(), schedulerJSON: skippedSchedulerJSON()})
+	out := renderSnapshotOpts(snap, blockedJSONOpts())
+	if !strings.Contains(out, "queue-item-abc123") {
+		t.Errorf("blocked JSON must include skipped queue item ID; output:\n%s", out)
+	}
+	if !strings.Contains(out, "already reserved") {
+		t.Errorf("blocked JSON must include skip reason; output:\n%s", out)
+	}
+}
+
+func TestBlocked_Limit_Applied(t *testing.T) {
+	// Build state with 3 blocked tasks; limit=1 must truncate to 1 and show header.
+	threeBlockedJSON := []byte(`{
+		"schema": "brevity.runtime-state.v1",
+		"repoRoot": "/dev/test",
+		"generatedAt": "2026-01-01T00:00:00Z",
+		"providers": {"summary": {"total": 0, "degraded": 0, "unavailable": 0}, "health": {}},
+		"taskCounts": {"tracked": 3, "runnable": 0, "blocked": 3, "stale": 0, "providerGated": 0, "review": 0},
+		"tasks": [
+			{"slug": "blk-a", "status": "blocked", "normalizedState": "blocked", "workerStatus": "", "branch": "task/blk-a", "worktreePath": ""},
+			{"slug": "blk-b", "status": "blocked", "normalizedState": "blocked", "workerStatus": "", "branch": "task/blk-b", "worktreePath": ""},
+			{"slug": "blk-c", "status": "blocked", "normalizedState": "blocked", "workerStatus": "", "branch": "task/blk-c", "worktreePath": ""}
+		],
+		"suggestedNextActions": [],
+		"orphanedTaskWorktrees": [],
+		"activeWorktrees": [],
+		"activeWorktreeCount": 0,
+		"groups": {}
+	}`)
+	snap := cmux.Read(stubFetcher{stateJSON: threeBlockedJSON, schedulerJSON: minimalSchedulerJSON()})
+	out := renderSnapshotOpts(snap, cmux.RenderOptions{BlockedReport: true, Limit: 1})
+	if !strings.Contains(out, "showing 1 of 3") {
+		t.Errorf("blocked limit=1 with 3 blocked tasks must show truncation header; output:\n%s", out)
+	}
+	if strings.Contains(out, "blk-b") {
+		t.Errorf("blocked limit=1 must not show blk-b (second task); output:\n%s", out)
+	}
+}
+
+func TestBlocked_EmptyState_NoTasks(t *testing.T) {
+	snap := cmux.Read(stubFetcher{stateJSON: manyTaskStateJSON(0), schedulerJSON: minimalSchedulerJSON()})
+	out := renderSnapshotOpts(snap, blockedOpts())
+	if !strings.Contains(out, "(none)") {
+		t.Errorf("blocked empty state must show (none) for groups with no tasks; output:\n%s", out)
+	}
+}
+
+func TestBlocked_EmptyState_Markdown(t *testing.T) {
+	snap := cmux.Read(stubFetcher{stateJSON: manyTaskStateJSON(0), schedulerJSON: minimalSchedulerJSON()})
+	out := renderSnapshotOpts(snap, blockedMarkdownOpts())
+	if !strings.Contains(out, "_None._") {
+		t.Errorf("blocked markdown empty state must show _None._; output:\n%s", out)
+	}
+}
+
+func TestBlocked_NoANSI(t *testing.T) {
+	snap := cmux.Read(stubFetcher{stateJSON: blockedStateJSON(), schedulerJSON: skippedSchedulerJSON()})
+	for _, opts := range []cmux.RenderOptions{blockedOpts(), blockedMarkdownOpts(), blockedJSONOpts()} {
+		out := renderSnapshotOpts(snap, opts)
+		if strings.Contains(out, "\x1b[") {
+			t.Errorf("blocked output must not contain ANSI escape sequences (mode=%v); output:\n%s", opts.Output, out)
+		}
+	}
+}
+
+func TestBlocked_Text_Deterministic(t *testing.T) {
+	snap := cmux.Read(stubFetcher{stateJSON: blockedStateJSON(), schedulerJSON: skippedSchedulerJSON()})
+	out1 := renderSnapshotOpts(snap, blockedOpts())
+	out2 := renderSnapshotOpts(snap, blockedOpts())
+	if out1 != out2 {
+		t.Error("blocked text output is not deterministic")
+	}
+}
+
+func TestBlocked_Markdown_Deterministic(t *testing.T) {
+	snap := cmux.Read(stubFetcher{stateJSON: blockedStateJSON(), schedulerJSON: skippedSchedulerJSON()})
+	out1 := renderSnapshotOpts(snap, blockedMarkdownOpts())
+	out2 := renderSnapshotOpts(snap, blockedMarkdownOpts())
+	if out1 != out2 {
+		t.Error("blocked markdown output is not deterministic")
+	}
+}
+
+func TestBlocked_JSON_Deterministic(t *testing.T) {
+	snap := cmux.Read(stubFetcher{stateJSON: blockedStateJSON(), schedulerJSON: skippedSchedulerJSON()})
+	out1 := renderSnapshotOpts(snap, blockedJSONOpts())
+	out2 := renderSnapshotOpts(snap, blockedJSONOpts())
+	if out1 != out2 {
+		t.Error("blocked JSON output is not deterministic")
+	}
+}
+
+func TestBlocked_NormalOutput_Unchanged(t *testing.T) {
+	// Without BlockedReport:true the default text render must not produce blocked output.
+	snap := cmux.Read(stubFetcher{stateJSON: blockedStateJSON(), schedulerJSON: minimalSchedulerJSON()})
+	out := renderSnapshotOpts(snap, cmux.RenderOptions{})
+	if strings.Contains(out, "CMUX BLOCKED REPORT") {
+		t.Error("normal output must not contain CMUX BLOCKED REPORT header")
+	}
+}
+
+func TestBlocked_RuntimeStateError_GracefulDegradation(t *testing.T) {
+	snap := cmux.Read(stubFetcher{
+		stateErr:      fmt.Errorf("runtime unreachable"),
+		schedulerJSON: minimalSchedulerJSON(),
+	})
+	out := renderSnapshotOpts(snap, blockedOpts())
+	if !strings.Contains(out, "CMUX BLOCKED REPORT") {
+		t.Error("blocked header must still appear on runtime error")
+	}
+	if !strings.Contains(out, "runtime-state: error") {
+		t.Errorf("blocked error degradation must show runtime-state error; output:\n%s", out)
+	}
+}
