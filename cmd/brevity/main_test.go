@@ -758,6 +758,88 @@ func TestExecutionLaunchRejectsFailedPreflightBeforeProviderStarts(t *testing.T)
 	assertLaunchDryRunStateUnchanged(t, repoRoot, before)
 }
 
+func TestExecutionLaunchEndToEndSmokeSuccess(t *testing.T) {
+	repoRoot := tempRepoWithExecutionSmokeFixture(t, 0)
+	t.Chdir(repoRoot)
+	tasksBefore := readMainTestFile(t, filepath.Join(repoRoot, ".brevity", state.TasksFile))
+
+	smokeRun(t, "queue", "add", "alpha")
+	if _, err := os.Stat(filepath.Join(repoRoot, ".brevity", runtimequeue.FileName)); err != nil {
+		t.Fatalf("queue file was not created: %v", err)
+	}
+	queue := readMainTestQueue(t, repoRoot)
+	if len(queue.Items) != 1 || queue.Items[0].Task != "alpha" || queue.Items[0].Reservation != nil {
+		t.Fatalf("queue after add = %#v", queue.Items)
+	}
+
+	smokeRun(t, "scheduler", "reserve-next")
+	queue = readMainTestQueue(t, repoRoot)
+	if queue.Items[0].Reservation == nil {
+		t.Fatalf("queue item was not reserved: %#v", queue.Items[0])
+	}
+
+	smokeRun(t, "scheduler", "plan-execution")
+	executions := readMainTestExecutions(t, repoRoot)
+	if len(executions.Records) != 1 {
+		t.Fatalf("executions = %#v, want one planned execution", executions.Records)
+	}
+	executionID := executions.Records[0].ID
+	if executions.Records[0].Status != runtimeexecution.StatusPlanned || executions.Records[0].Task != "alpha" {
+		t.Fatalf("planned execution = %#v", executions.Records[0])
+	}
+
+	smokeRun(t, "execution", "mark-ready", executionID)
+	if got := readMainTestExecutions(t, repoRoot).Records[0].Status; got != runtimeexecution.StatusReady {
+		t.Fatalf("status = %q, want ready", got)
+	}
+
+	smokeRun(t, "execution", "preflight", executionID)
+	dryRunBefore := snapshotLaunchDryRunState(t, repoRoot)
+	smokeRun(t, "execution", "launch-dry-run", executionID)
+	assertLaunchDryRunStateUnchanged(t, repoRoot, dryRunBefore)
+
+	smokeRun(t, "execution", "launch", executionID)
+	if got := readMainTestExecutions(t, repoRoot).Records[0].Status; got != runtimeexecution.StatusCompleted {
+		t.Fatalf("status = %q, want completed", got)
+	}
+	assertSmokeRunHistory(t, repoRoot, executionID, "alpha", runtimeexecution.StatusCompleted, 0, "")
+	if queue = readMainTestQueue(t, repoRoot); len(queue.Items) != 0 {
+		t.Fatalf("queue items after completed launch = %#v, want empty", queue.Items)
+	}
+	if tasksAfter := readMainTestFile(t, filepath.Join(repoRoot, ".brevity", state.TasksFile)); tasksAfter != tasksBefore {
+		t.Fatalf("tasks mutated\nbefore: %s\nafter: %s", tasksBefore, tasksAfter)
+	}
+}
+
+func TestExecutionLaunchEndToEndSmokeFailure(t *testing.T) {
+	repoRoot := tempRepoWithExecutionSmokeFixture(t, 7)
+	t.Chdir(repoRoot)
+	tasksBefore := readMainTestFile(t, filepath.Join(repoRoot, ".brevity", state.TasksFile))
+
+	smokeRun(t, "queue", "add", "alpha")
+	smokeRun(t, "scheduler", "reserve-next")
+	smokeRun(t, "scheduler", "plan-execution")
+	executionID := readMainTestExecutions(t, repoRoot).Records[0].ID
+	smokeRun(t, "execution", "mark-ready", executionID)
+
+	var stdout bytes.Buffer
+	err := run(&stdout, []string{"execution", "launch", executionID})
+	if err == nil || !strings.Contains(err.Error(), "exit status 7") {
+		t.Fatalf("unexpected launch error: %v\n%s", err, stdout.String())
+	}
+	if got := readMainTestExecutions(t, repoRoot).Records[0].Status; got != runtimeexecution.StatusFailed {
+		t.Fatalf("status = %q, want failed", got)
+	}
+	assertSmokeRunHistory(t, repoRoot, executionID, "alpha", runtimeexecution.StatusFailed, 7, "exit status 7")
+	queue := readMainTestQueue(t, repoRoot)
+	if len(queue.Items) != 1 || queue.Items[0].Task != "alpha" || queue.Items[0].Reservation != nil {
+		t.Fatalf("queue after failed launch = %#v, want queued and unreserved", queue.Items)
+	}
+	if tasksAfter := readMainTestFile(t, filepath.Join(repoRoot, ".brevity", state.TasksFile)); tasksAfter != tasksBefore {
+		t.Fatalf("tasks mutated\nbefore: %s\nafter: %s", tasksBefore, tasksAfter)
+	}
+}
+
 func TestExecutionMarkPlannedRollsReadyBackToPlanned(t *testing.T) {
 	repoRoot := tempRepoWithQueue(t, runtimequeue.Queue{Version: runtimequeue.Version, Items: []runtimequeue.Item{}})
 	writeMainTestExecutions(t, repoRoot, runtimeexecution.Executions{Version: runtimeexecution.Version, Records: []runtimeexecution.Record{
@@ -2060,6 +2142,24 @@ func tempRepoWithLaunchFixture(t *testing.T, status string, command string, exit
 	return repoRoot
 }
 
+func tempRepoWithExecutionSmokeFixture(t *testing.T, exitCode int) string {
+	t.Helper()
+	repoRoot := t.TempDir()
+	worktree := filepath.Join(repoRoot, "worktrees", "active", "alpha")
+	promptPath := filepath.Join(worktree, "prompt.md")
+	if err := os.MkdirAll(worktree, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(repoRoot, ".brevity"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeMainTestFile(t, promptPath, "# Alpha\n")
+	writeMainTestFile(t, filepath.Join(repoRoot, ".brevity", state.TasksFile), fmt.Sprintf(`[{"slug":"alpha","status":"ready-for-worker","normalizedState":"ready-for-worker","worktreePath":%q,"promptPath":%q,"provider":"codex","profile":"codex-balanced"}]`+"\n", worktree, promptPath))
+	writeMainTestFile(t, filepath.Join(repoRoot, ".brevity", state.ConfigFile), fmt.Sprintf(`{"defaultProvider":"codex","providers":{"codex":{"command":%q,"mode":"exec","sandbox":"none","env":{"BREVITY_FAKE_PROVIDER_EXIT":%q}}}}`+"\n", fakeProviderExecutable(t, exitCode), fmt.Sprint(exitCode)))
+	writeMainTestFile(t, filepath.Join(repoRoot, ".brevity", state.ProviderHealthFile), `{"codex":{"status":"healthy","note":"","updatedAt":"2026-05-22T12:00:00Z"}}`+"\n")
+	return repoRoot
+}
+
 func fakeProviderExecutable(t *testing.T, exitCode int) string {
 	t.Helper()
 	dir := t.TempDir()
@@ -2083,6 +2183,15 @@ func main() {
 		t.Fatalf("go build fake provider failed: %v\n%s", err, string(output))
 	}
 	return exePath
+}
+
+func smokeRun(t *testing.T, args ...string) string {
+	t.Helper()
+	var stdout bytes.Buffer
+	if err := run(&stdout, args); err != nil {
+		t.Fatalf("brevity %s failed: %v\n%s", strings.Join(args, " "), err, stdout.String())
+	}
+	return stdout.String()
 }
 
 type launchDryRunStateSnapshot struct {
@@ -2202,6 +2311,34 @@ func assertLaunchRunHistoryAppended(t *testing.T, repoRoot string, before string
 	}
 	if record.StartedAt == "" || record.CompletedAt == "" || record.FinishedAt == "" {
 		t.Fatalf("timestamps missing: %#v", record)
+	}
+	if errorContains != "" && !strings.Contains(record.Summary, errorContains) {
+		t.Fatalf("summary = %q, want containing %q", record.Summary, errorContains)
+	}
+}
+
+func assertSmokeRunHistory(t *testing.T, repoRoot string, executionID string, task string, status string, exitCode int, errorContains string) {
+	t.Helper()
+	history := strings.TrimSpace(readMainTestFile(t, filepath.Join(repoRoot, ".brevity", "runs.jsonl")))
+	lines := strings.Split(history, "\n")
+	if len(lines) != 1 {
+		t.Fatalf("run history lines = %d, want one\n%s", len(lines), history)
+	}
+	var record state.RunRecord
+	if err := json.Unmarshal([]byte(lines[0]), &record); err != nil {
+		t.Fatalf("run history row is invalid: %v\n%s", err, lines[0])
+	}
+	if record.ExecutionID != executionID || record.RunID != executionID {
+		t.Fatalf("run ids = %#v, want execution %s", record, executionID)
+	}
+	if record.Slug != task || record.Provider != "codex" || record.Profile != "codex-balanced" {
+		t.Fatalf("run metadata = %#v", record)
+	}
+	if record.FinalExecutionStatus != status || record.ExitCode != float64(exitCode) {
+		t.Fatalf("status/exit = %#v, want %s/%d", record, status, exitCode)
+	}
+	if record.QueueItemID == "" || record.StartedAt == "" || record.CompletedAt == "" || record.FinishedAt == "" {
+		t.Fatalf("required run fields missing: %#v", record)
 	}
 	if errorContains != "" && !strings.Contains(record.Summary, errorContains) {
 		t.Fatalf("summary = %q, want containing %q", record.Summary, errorContains)
