@@ -41,14 +41,14 @@
   {
     "id": "runtime-queue",
     "capability": "Runtime queue persistence, inspection, planning, and reservations",
-    "goSupport": "Native add, list, inspect, plan, reserve, unreserve, remove for runtime-queue.json; Bubble Tea displays read-only queue health, reservation count, and plan summary",
+    "goSupport": "Native add, list, inspect, plan, reserve, unreserve, remove, and manual execution-launch finalization for runtime-queue.json; Bubble Tea displays read-only queue health, reservation count, and plan summary",
     "powerShellSupport": "Not PowerShell-owned",
     "currentAuthority": "Go",
     "safetyClass": "inert runtime metadata / read-only diagnostics and planning",
     "testCoverage": "unit tests",
     "tuiSupport": "Bubble Tea read-only visibility",
     "migrationStatus": "foundation migrated",
-    "nextAction": "Keep execution/draining out of queue v1",
+    "nextAction": "Keep automatic draining out of queue v1",
     "powerShellDisposition": "none"
   },
   {
@@ -67,14 +67,14 @@
   {
     "id": "runtime-execution-records",
     "capability": "Runtime execution record persistence, inspection, and manual launch",
-    "goSupport": "Native list, inspect, plan-from-reservation, readiness transitions, preflight, launch-dry-run, and single foreground provider launch for runtime-executions.json with observational run-history append; native runtime state and Bubble Tea expose compact execution visibility",
+    "goSupport": "Native list, inspect, plan-from-reservation, readiness transitions, preflight, launch-dry-run, and single foreground provider launch for runtime-executions.json with observational run-history append and queue finalization; native runtime state and Bubble Tea expose compact execution visibility",
     "powerShellSupport": "Not PowerShell-owned",
     "currentAuthority": "Go",
     "safetyClass": "execution metadata / manual provider-executing mutation",
     "testCoverage": "unit and fake-provider tests",
     "tuiSupport": "Bubble Tea read-only visibility",
     "migrationStatus": "execution contract migrated",
-    "nextAction": "Keep scheduler loops, queue draining, and task workflow mutation out of execution launch",
+    "nextAction": "Keep scheduler loops, automatic queue draining, and task workflow mutation out of execution launch",
     "powerShellDisposition": "none"
   },
   {

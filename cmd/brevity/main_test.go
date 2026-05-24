@@ -675,7 +675,7 @@ func TestExecutionLaunchRunsFakeProviderSuccess(t *testing.T) {
 			t.Fatalf("output missing %q:\n%s", want, stdout.String())
 		}
 	}
-	assertLaunchQueueAndTasksUnchanged(t, repoRoot, before)
+	assertLaunchCompletedQueueFinalizedAndTasksUnchanged(t, repoRoot, before)
 	assertLaunchRunHistoryAppended(t, repoRoot, before.runs, runtimeexecution.StatusCompleted, 0, "")
 }
 
@@ -692,7 +692,7 @@ func TestExecutionLaunchMissingBinaryMarksFailed(t *testing.T) {
 	if got := readMainTestExecutions(t, repoRoot).Records[0].Status; got != runtimeexecution.StatusFailed {
 		t.Fatalf("status = %q, want failed", got)
 	}
-	assertLaunchQueueAndTasksUnchanged(t, repoRoot, before)
+	assertLaunchFailedQueueFinalizedAndTasksUnchanged(t, repoRoot, before)
 	assertLaunchRunHistoryAppended(t, repoRoot, before.runs, runtimeexecution.StatusFailed, 1, "missing-provider")
 }
 
@@ -712,7 +712,7 @@ func TestExecutionLaunchNonzeroExitMarksFailed(t *testing.T) {
 	if !strings.Contains(stdout.String(), "fake provider stderr") {
 		t.Fatalf("stderr was not streamed:\n%s", stdout.String())
 	}
-	assertLaunchQueueAndTasksUnchanged(t, repoRoot, before)
+	assertLaunchFailedQueueFinalizedAndTasksUnchanged(t, repoRoot, before)
 	assertLaunchRunHistoryAppended(t, repoRoot, before.runs, runtimeexecution.StatusFailed, 7, "exit status 7")
 }
 
@@ -2147,10 +2147,30 @@ func snapshotLaunchAdjacentState(t *testing.T, repoRoot string) launchAdjacentSt
 	}
 }
 
-func assertLaunchQueueAndTasksUnchanged(t *testing.T, repoRoot string, before launchAdjacentStateSnapshot) {
+func assertLaunchCompletedQueueFinalizedAndTasksUnchanged(t *testing.T, repoRoot string, before launchAdjacentStateSnapshot) {
 	t.Helper()
-	if after := readMainTestFile(t, filepath.Join(repoRoot, ".brevity", runtimequeue.FileName)); after != before.queue {
-		t.Fatalf("queue mutated\nbefore: %s\nafter: %s", before.queue, after)
+	queue := readMainTestQueue(t, repoRoot)
+	for _, item := range queue.Items {
+		if item.ID == "queue-1" {
+			t.Fatalf("completed launch left queue item present: %#v", item)
+		}
+	}
+	if after := readMainTestFile(t, filepath.Join(repoRoot, ".brevity", state.TasksFile)); after != before.tasks {
+		t.Fatalf("tasks mutated\nbefore: %s\nafter: %s", before.tasks, after)
+	}
+}
+
+func assertLaunchFailedQueueFinalizedAndTasksUnchanged(t *testing.T, repoRoot string, before launchAdjacentStateSnapshot) {
+	t.Helper()
+	queue := readMainTestQueue(t, repoRoot)
+	if len(queue.Items) != 1 || queue.Items[0].ID != "queue-1" {
+		t.Fatalf("failed launch queue items = %#v, want original item present", queue.Items)
+	}
+	if queue.Items[0].Status != runtimequeue.StatusQueued {
+		t.Fatalf("failed launch queue status = %q, want queued", queue.Items[0].Status)
+	}
+	if queue.Items[0].Reservation != nil {
+		t.Fatalf("failed launch reservation = %#v, want nil", queue.Items[0].Reservation)
 	}
 	if after := readMainTestFile(t, filepath.Join(repoRoot, ".brevity", state.TasksFile)); after != before.tasks {
 		t.Fatalf("tasks mutated\nbefore: %s\nafter: %s", before.tasks, after)

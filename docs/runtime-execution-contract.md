@@ -110,21 +110,36 @@ the final execution state.
 
 Launch uses argv-style process execution. It must not shell-concatenate
 commands, use `Invoke-Expression`, use `cmd /c` as a general execution wrapper,
-start scheduler loops, drain the queue, mutate queue status, mutate task
-workflow state, add retries, launch providers in parallel, or create daemon,
-background, or distributed orchestration.
+start scheduler loops, mutate task workflow state, add retries, launch
+providers in parallel, or create daemon, background, or distributed
+orchestration.
 
 Launch mutates `.brevity\runtime-executions.json` through the execution lock and
 appends one observational row to `.brevity\runs.jsonl` after the launch reaches
-a terminal execution status. Queue semantics remain separate.
+a terminal execution status. After that same terminal state, launch finalizes
+the corresponding queue infrastructure state through the queue contract.
 
 The launch run-history row is not task workflow state. It records the execution
 id, queue item id, task slug, provider/profile, argv-style command when safely
 available, timestamps, exit code, final execution status, and a short error
 summary for failed launches or nonzero provider exits. It must not mark tasks
-done or failed, clear reservations, dequeue items, or imply scheduler progress.
-If preflight fails before a provider launch begins, no launch history row is
-written.
+done or failed or imply scheduler progress. If preflight fails before a
+provider launch begins, no launch history row is written.
+
+Queue finalization is infrastructure state only:
+
+- Completed launch: remove the corresponding item from
+  `.brevity\runtime-queue.json`. Queue v1 has no `completed` status.
+- Failed launch: keep the corresponding item present with `status: queued`,
+  clear reservation metadata, and leave it eligible for explicit later
+  re-reservation or retry.
+- Missing queue item after terminal execution state is handled safely as a
+  no-op.
+
+Queue finalization must happen only after the execution record reaches
+`completed` or `failed`. It must not mutate task metadata/status, mark tasks
+done or failed, auto-retry, auto-merge, auto-cleanup, start scheduler loops, run
+another queue item, or start the supervisor implicitly.
 
 Human output reports each check clearly:
 
@@ -236,13 +251,14 @@ Execution launch must never:
 `execution launch-dry-run` are read-only. `execution plan-from-reservation`,
 `execution mark-ready`, `execution mark-planned`, and `execution launch` write
 only their documented runtime metadata. `execution launch` additionally appends
-observational run history; it does not clear or change queue reservations.
+observational run history and finalizes queue infrastructure state for the
+launched queue item; it does not mutate task workflow state.
 
 ## Non-Goals
 
 This contract does not implement planner automation, provider scheduling,
-worker lifecycle management, retries, queue draining, task mutation, run
-history, TUI controls, provider pools, parallel execution, daemon execution, or
+worker lifecycle management, retries, automatic queue draining, task mutation,
+TUI controls, provider pools, parallel execution, daemon execution, or
 distributed execution.
 
 ## Future Scheduler Relationship

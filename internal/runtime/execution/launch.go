@@ -141,6 +141,9 @@ func (launcher Launcher) Launch(ctx context.Context, payload LaunchPayload) (Lau
 	if err := launcher.appendRunHistory(payload, launchResult); err != nil {
 		return launchResult, err
 	}
+	if _, _, err := launcher.Store.Queue.FinalizeExecution(payload.QueueItemID, finalStatus == StatusCompleted); err != nil {
+		return launchResult, err
+	}
 	if result.Err != nil {
 		return launchResult, result.Err
 	}

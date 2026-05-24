@@ -59,6 +59,12 @@ The v1 contract allows only:
 Do not add `running`, `completed`, or `failed` until queue execution exists and
 has a separate contract update.
 
+Manual execution launch finalization does not add queue statuses. When
+`brevity execution launch <execution-id>` reaches terminal execution state, a
+completed launch removes the corresponding queue item. A failed launch keeps the
+queue item present with `status: queued` and clears reservation metadata so an
+operator can explicitly re-reserve or retry later.
+
 ## Lifecycle
 
 `brevity queue add <task>` appends an item with status `queued` and persists the
@@ -72,6 +78,12 @@ ordering. `brevity queue remove <id>` removes one queue item by queue item id.
 These commands do not drain the queue, run providers, spawn workers, start the
 supervisor, imply execution started, or mutate task execution state. Reserve and
 unreserve mutate only queue reservation metadata.
+
+`brevity execution launch <execution-id>` may also finalize one corresponding
+queue item after the execution reaches `completed` or `failed`. This is
+infrastructure cleanup only: it does not mark tasks done or failed, does not
+auto-retry, does not launch another item, and does not start scheduler or
+supervisor loops.
 
 ## Inspection
 
@@ -160,6 +172,9 @@ The current supervisor foundation is observational and must not drain
 - Dry-run paths must never drain the queue.
 - Provider failures are not queue corruption.
 - Queue remove deletes only the matching queue item id.
+- Completed execution launch removes only the matching queue item id.
+- Failed execution launch keeps the matching item queued and unreserved.
+- Queue finalization must not mutate task workflow state.
 
 ## Non-Goals
 
