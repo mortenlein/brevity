@@ -1493,14 +1493,14 @@ func TestParseOptionsAcceptsCMUXMergeReadinessReport(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parseOptions returned error: %v", err)
 	}
-	if options.kind != commandCMUXMergeReadiness || options.output != "markdown" {
+	if options.kind != commandCmux || !options.cmuxMergeReport || options.cmuxOutput != "markdown" {
 		t.Fatalf("options = %#v, want cmux merge readiness markdown", options)
 	}
 }
 
 func TestParseOptionsRejectsUnsupportedCMUXOutput(t *testing.T) {
 	_, err := parseOptions([]string{"cmux", "--merge-readiness-report", "--output", "yaml"})
-	if err == nil || !strings.Contains(err.Error(), "unsupported cmux output") {
+	if err == nil || !strings.Contains(err.Error(), "invalid --output") {
 		t.Fatalf("err = %v, want unsupported cmux output", err)
 	}
 }
