@@ -71,6 +71,14 @@ type RenderOptions struct {
 	// The rendered packet includes task detail, queue/scheduler context, a
 	// review checklist, and merge/cleanup readiness notes.
 	ReviewTask string
+
+	// Handoff, when true, activates AI handoff packet mode.  Handoff mode
+	// ignores --section, --task, and --state filters; --limit and --output
+	// still apply.  The packet includes runtime summary, providers,
+	// queue/scheduler, important tasks ranked by priority, review candidate
+	// details with checklists, suggested next actions, and a read-only safety
+	// attestation.
+	Handoff bool
 }
 
 // effectiveLimit returns the active task limit, always >= 1.
