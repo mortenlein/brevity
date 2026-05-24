@@ -33,6 +33,8 @@ const (
 	OutputText OutputMode = "text"
 	// OutputMarkdown selects the GitHub-Flavoured Markdown renderer.
 	OutputMarkdown OutputMode = "markdown"
+	// OutputJSON selects the structured JSON renderer.
+	OutputJSON OutputMode = "json"
 )
 
 // RenderOptions controls which sections are rendered, how many tasks are shown,

@@ -2,6 +2,7 @@ package cmux_test
 
 import (
 	"bytes"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -1702,3 +1703,315 @@ const sectionSep = "---"
 // Compile-time check: the test file uses contracts only for the schema
 // constant in TestRead_ParsesRuntimeState; keep the import live.
 var _ = contracts.RuntimeStateSchema
+
+// --- OutputMode: JSON rendering tests -------------------------------------
+
+// jsonOpts is a shorthand for default JSON options.
+func jsonOpts() cmux.RenderOptions {
+	return cmux.RenderOptions{Output: cmux.OutputJSON}
+}
+
+func TestJSON_ValidJSON(t *testing.T) {
+	snap := cmux.Read(stubFetcher{stateJSON: minimalStateJSON(t), schedulerJSON: minimalSchedulerJSON()})
+	out := renderSnapshotOpts(snap, jsonOpts())
+	var result map[string]any
+	if err := json.Unmarshal([]byte(out), &result); err != nil {
+		t.Fatalf("--output json produced invalid JSON: %v\noutput:\n%s", err, out)
+	}
+}
+
+func TestJSON_Schema(t *testing.T) {
+	snap := cmux.Read(stubFetcher{stateJSON: minimalStateJSON(t), schedulerJSON: minimalSchedulerJSON()})
+	out := renderSnapshotOpts(snap, jsonOpts())
+	if !strings.Contains(out, `"brevity.cmux-report.v1"`) {
+		t.Errorf("JSON output missing schema field; output:\n%s", out)
+	}
+}
+
+func TestJSON_SourceNative(t *testing.T) {
+	snap := cmux.Read(stubFetcher{stateJSON: minimalStateJSON(t), schedulerJSON: minimalSchedulerJSON()})
+	out := renderSnapshotOpts(snap, jsonOpts())
+	if !strings.Contains(out, `"source": "native"`) {
+		t.Errorf("JSON output missing source=native; output:\n%s", out)
+	}
+}
+
+func TestJSON_ErrorsEmptyArray_WhenNoErrors(t *testing.T) {
+	snap := cmux.Read(stubFetcher{stateJSON: minimalStateJSON(t), schedulerJSON: minimalSchedulerJSON()})
+	out := renderSnapshotOpts(snap, jsonOpts())
+	if !strings.Contains(out, `"errors": []`) {
+		t.Errorf("JSON errors must be [] when no errors; output:\n%s", out)
+	}
+}
+
+func TestJSON_ErrorsContainMessage_WhenRuntimeStateFails(t *testing.T) {
+	snap := cmux.Read(stubFetcher{
+		stateErr:      errors.New("runtime unavailable"),
+		schedulerJSON: minimalSchedulerJSON(),
+	})
+	out := renderSnapshotOpts(snap, jsonOpts())
+	if !strings.Contains(out, "runtime-state:") {
+		t.Errorf("JSON errors missing runtime-state error; output:\n%s", out)
+	}
+	if !strings.Contains(out, "runtime unavailable") {
+		t.Errorf("JSON errors missing error message; output:\n%s", out)
+	}
+}
+
+func TestJSON_SectionAll_AllTopLevelKeysPresent(t *testing.T) {
+	snap := cmux.Read(stubFetcher{stateJSON: minimalStateJSON(t), schedulerJSON: minimalSchedulerJSON()})
+	out := renderSnapshotOpts(snap, jsonOpts())
+	for _, key := range []string{`"providers"`, `"tasks"`, `"queue"`, `"actions"`} {
+		if !strings.Contains(out, key) {
+			t.Errorf("JSON section=all missing key %s; output:\n%s", key, out)
+		}
+	}
+}
+
+func TestJSON_SectionProviders_OnlyProviders(t *testing.T) {
+	snap := cmux.Read(stubFetcher{stateJSON: minimalStateJSON(t), schedulerJSON: minimalSchedulerJSON()})
+	out := renderSnapshotOpts(snap, cmux.RenderOptions{
+		Output:  cmux.OutputJSON,
+		Section: cmux.SectionProviders,
+	})
+	var result map[string]any
+	if err := json.Unmarshal([]byte(out), &result); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+	if _, ok := result["providers"]; !ok {
+		t.Error("JSON section=providers missing providers key")
+	}
+	if _, ok := result["tasks"]; ok {
+		t.Error("JSON section=providers must not contain tasks key")
+	}
+	if _, ok := result["queue"]; ok {
+		t.Error("JSON section=providers must not contain queue key")
+	}
+	if _, ok := result["actions"]; ok {
+		t.Error("JSON section=providers must not contain actions key")
+	}
+}
+
+func TestJSON_SectionTasks_OnlyTasks(t *testing.T) {
+	snap := cmux.Read(stubFetcher{stateJSON: minimalStateJSON(t), schedulerJSON: minimalSchedulerJSON()})
+	out := renderSnapshotOpts(snap, cmux.RenderOptions{
+		Output:  cmux.OutputJSON,
+		Section: cmux.SectionTasks,
+	})
+	var result map[string]any
+	if err := json.Unmarshal([]byte(out), &result); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+	if _, ok := result["tasks"]; !ok {
+		t.Error("JSON section=tasks missing tasks key")
+	}
+	if _, ok := result["providers"]; ok {
+		t.Error("JSON section=tasks must not contain providers key")
+	}
+	if _, ok := result["queue"]; ok {
+		t.Error("JSON section=tasks must not contain queue key")
+	}
+}
+
+func TestJSON_SectionQueue_OnlyQueue(t *testing.T) {
+	snap := cmux.Read(stubFetcher{stateJSON: minimalStateJSON(t), schedulerJSON: minimalSchedulerJSON()})
+	out := renderSnapshotOpts(snap, cmux.RenderOptions{
+		Output:  cmux.OutputJSON,
+		Section: cmux.SectionQueue,
+	})
+	var result map[string]any
+	if err := json.Unmarshal([]byte(out), &result); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+	if _, ok := result["queue"]; !ok {
+		t.Error("JSON section=queue missing queue key")
+	}
+	if _, ok := result["providers"]; ok {
+		t.Error("JSON section=queue must not contain providers key")
+	}
+	if _, ok := result["tasks"]; ok {
+		t.Error("JSON section=queue must not contain tasks key")
+	}
+}
+
+func TestJSON_SectionActions_OnlyActions(t *testing.T) {
+	snap := cmux.Read(stubFetcher{stateJSON: minimalStateJSON(t), schedulerJSON: minimalSchedulerJSON()})
+	out := renderSnapshotOpts(snap, cmux.RenderOptions{
+		Output:  cmux.OutputJSON,
+		Section: cmux.SectionActions,
+	})
+	var result map[string]any
+	if err := json.Unmarshal([]byte(out), &result); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+	if _, ok := result["actions"]; !ok {
+		t.Error("JSON section=actions missing actions key")
+	}
+	if _, ok := result["providers"]; ok {
+		t.Error("JSON section=actions must not contain providers key")
+	}
+	if _, ok := result["tasks"]; ok {
+		t.Error("JSON section=actions must not contain tasks key")
+	}
+}
+
+func TestJSON_ProvidersEmptyArray_WhenNoProviders(t *testing.T) {
+	snap := cmux.Read(stubFetcher{stateJSON: manyTaskStateJSON(0), schedulerJSON: minimalSchedulerJSON()})
+	out := renderSnapshotOpts(snap, jsonOpts())
+	if !strings.Contains(out, `"providers": []`) {
+		t.Errorf("JSON providers.providers must be [] not null for empty providers; output:\n%s", out)
+	}
+}
+
+func TestJSON_TasksEmptyArray_WhenNoTasks(t *testing.T) {
+	snap := cmux.Read(stubFetcher{stateJSON: manyTaskStateJSON(0), schedulerJSON: minimalSchedulerJSON()})
+	out := renderSnapshotOpts(snap, jsonOpts())
+	if !strings.Contains(out, `"tasks": []`) {
+		t.Errorf("JSON tasks.tasks must be [] not null for empty tasks; output:\n%s", out)
+	}
+}
+
+func TestJSON_ActionsEmptyArray_WhenNoActions(t *testing.T) {
+	// manyTaskStateJSON(0) has empty suggestedNextActions.
+	snap := cmux.Read(stubFetcher{stateJSON: manyTaskStateJSON(0), schedulerJSON: minimalSchedulerJSON()})
+	out := renderSnapshotOpts(snap, jsonOpts())
+	if !strings.Contains(out, `"actions": []`) {
+		t.Errorf("JSON actions must be [] not null when no actions; output:\n%s", out)
+	}
+}
+
+func TestJSON_TaskSlugFilter_OnlyMatchingTask(t *testing.T) {
+	snap := cmux.Read(stubFetcher{stateJSON: multiStateJSON(), schedulerJSON: minimalSchedulerJSON()})
+	out := renderSnapshotOpts(snap, cmux.RenderOptions{
+		Output:   cmux.OutputJSON,
+		TaskSlug: "task-review",
+	})
+	if !strings.Contains(out, `"task-review"`) {
+		t.Errorf("JSON slug filter missing task-review; output:\n%s", out)
+	}
+	if strings.Contains(out, `"task-ready"`) {
+		t.Error("JSON slug filter must not contain task-ready")
+	}
+	if strings.Contains(out, `"task-blocked"`) {
+		t.Error("JSON slug filter must not contain task-blocked")
+	}
+}
+
+func TestJSON_StateFilter_OnlyMatchingState(t *testing.T) {
+	snap := cmux.Read(stubFetcher{stateJSON: multiStateJSON(), schedulerJSON: minimalSchedulerJSON()})
+	out := renderSnapshotOpts(snap, cmux.RenderOptions{
+		Output:      cmux.OutputJSON,
+		StateFilter: "reviewing",
+	})
+	if !strings.Contains(out, `"task-review"`) {
+		t.Errorf("JSON state filter missing task-review; output:\n%s", out)
+	}
+	if strings.Contains(out, `"task-ready"`) {
+		t.Error("JSON state filter must not contain task-ready")
+	}
+}
+
+func TestJSON_Limit_AppliedToTasks(t *testing.T) {
+	snap := cmux.Read(stubFetcher{stateJSON: manyTaskStateJSON(5), schedulerJSON: minimalSchedulerJSON()})
+	out := renderSnapshotOpts(snap, cmux.RenderOptions{Output: cmux.OutputJSON, Limit: 2})
+	if !strings.Contains(out, `"task-1"`) {
+		t.Error("JSON limit=2 missing task-1")
+	}
+	if !strings.Contains(out, `"task-2"`) {
+		t.Error("JSON limit=2 missing task-2")
+	}
+	if strings.Contains(out, `"task-3"`) {
+		t.Error("JSON limit=2 must not contain task-3")
+	}
+	// shown=2, matched=5
+	if !strings.Contains(out, `"shown": 2`) {
+		t.Errorf("JSON limit=2 missing shown=2; output:\n%s", out)
+	}
+	if !strings.Contains(out, `"matched": 5`) {
+		t.Errorf("JSON limit=2 missing matched=5; output:\n%s", out)
+	}
+}
+
+func TestJSON_RichTask_DetailFields(t *testing.T) {
+	snap := cmux.Read(stubFetcher{stateJSON: richTaskStateJSON(), schedulerJSON: minimalSchedulerJSON()})
+	out := renderSnapshotOpts(snap, jsonOpts())
+	for _, want := range []string{
+		`"rich-task"`,
+		`"ready-for-worker"`,
+		`/repo/worktrees/active/brevity-rich-task`,
+		`"present"`,
+		`prompt.md`,
+		`"succeeded"`,
+		`"codex"`,
+		`"default"`,
+		`"0"`,
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("JSON rich task missing %q; output:\n%s", want, out)
+		}
+	}
+}
+
+func TestJSON_NoMarkdownHeadings(t *testing.T) {
+	snap := cmux.Read(stubFetcher{stateJSON: minimalStateJSON(t), schedulerJSON: minimalSchedulerJSON()})
+	out := renderSnapshotOpts(snap, jsonOpts())
+	if strings.Contains(out, "# CMUX") || strings.Contains(out, "## ") || strings.Contains(out, "### ") {
+		t.Error("JSON output must not contain markdown headings")
+	}
+}
+
+func TestJSON_NoANSISequences(t *testing.T) {
+	snap := cmux.Read(stubFetcher{stateJSON: minimalStateJSON(t), schedulerJSON: minimalSchedulerJSON()})
+	out := renderSnapshotOpts(snap, jsonOpts())
+	if strings.Contains(out, "\x1b[") {
+		t.Error("JSON output contains ANSI escape sequences")
+	}
+}
+
+func TestJSON_Deterministic(t *testing.T) {
+	snap := cmux.Read(stubFetcher{stateJSON: minimalStateJSON(t), schedulerJSON: minimalSchedulerJSON()})
+	opts := jsonOpts()
+	out1 := renderSnapshotOpts(snap, opts)
+	out2 := renderSnapshotOpts(snap, opts)
+	if out1 != out2 {
+		t.Error("JSON Render is not deterministic: two calls produced different output")
+	}
+}
+
+func TestJSON_ProvidersSortedByName(t *testing.T) {
+	snap := cmux.Read(stubFetcher{stateJSON: richProviderStateJSON(), schedulerJSON: minimalSchedulerJSON()})
+	out := renderSnapshotOpts(snap, jsonOpts())
+	codexIdx := strings.Index(out, `"codex"`)
+	geminiIdx := strings.Index(out, `"gemini"`)
+	if codexIdx < 0 || geminiIdx < 0 {
+		t.Fatalf("JSON providers missing codex or gemini; output:\n%s", out)
+	}
+	if codexIdx > geminiIdx {
+		t.Error("JSON providers must be sorted: codex should appear before gemini")
+	}
+}
+
+func TestJSON_OutputTextDefault_NotJSON(t *testing.T) {
+	// OutputText (the default) must not produce JSON.
+	snap := cmux.Read(stubFetcher{stateJSON: minimalStateJSON(t), schedulerJSON: minimalSchedulerJSON()})
+	out := renderSnapshot(snap)
+	if strings.Contains(out, `"schema"`) && strings.Contains(out, `"brevity.cmux-report.v1"`) {
+		t.Error("text output must not contain JSON cmux-report schema")
+	}
+}
+
+func TestJSON_RuntimeStateError_ReflectedInErrors(t *testing.T) {
+	snap := cmux.Read(stubFetcher{
+		stateErr:      errors.New("state file missing"),
+		schedulerJSON: minimalSchedulerJSON(),
+	})
+	out := renderSnapshotOpts(snap, jsonOpts())
+	var result map[string]any
+	if err := json.Unmarshal([]byte(out), &result); err != nil {
+		t.Fatalf("invalid JSON on state error: %v\noutput:\n%s", err, out)
+	}
+	errList, _ := result["errors"].([]any)
+	if len(errList) == 0 {
+		t.Errorf("JSON errors must be non-empty when runtime state fails; output:\n%s", out)
+	}
+}

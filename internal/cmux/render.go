@@ -23,6 +23,10 @@ func Render(w io.Writer, snap Snapshot, opts RenderOptions) {
 		renderMarkdown(w, snap, opts)
 		return
 	}
+	if opts.Output == OutputJSON {
+		renderJSON(w, snap, opts)
+		return
+	}
 
 	section := opts.effectiveSection()
 

@@ -313,12 +313,12 @@ func parseCmuxOptions(args []string) (cliOptions, error) {
 	section := flags.String("section", cmux.SectionAll, "section to render: all, providers, tasks, queue, actions")
 	task := flags.String("task", "", "filter task list to this exact task slug")
 	state := flags.String("state", "", "filter task list to tasks with this normalised state")
-	output := flags.String("output", string(cmux.OutputText), "output format: text or markdown")
+	output := flags.String("output", string(cmux.OutputText), "output format: text, markdown, or json")
 	if err := flags.Parse(args[1:]); err != nil {
-		return cliOptions{}, fmt.Errorf("usage: brevity cmux [--limit <n>] [--section <name>] [--task <slug>] [--state <state>] [--output text|markdown]")
+		return cliOptions{}, fmt.Errorf("usage: brevity cmux [--limit <n>] [--section <name>] [--task <slug>] [--state <state>] [--output text|markdown|json]")
 	}
 	if flags.NArg() > 0 {
-		return cliOptions{}, fmt.Errorf("usage: brevity cmux [--limit <n>] [--section <name>] [--task <slug>] [--state <state>] [--output text|markdown]")
+		return cliOptions{}, fmt.Errorf("usage: brevity cmux [--limit <n>] [--section <name>] [--task <slug>] [--state <state>] [--output text|markdown|json]")
 	}
 	switch *section {
 	case cmux.SectionAll, cmux.SectionProviders, cmux.SectionTasks, cmux.SectionQueue, cmux.SectionActions:
@@ -330,10 +330,10 @@ func parseCmuxOptions(args []string) (cliOptions, error) {
 		return cliOptions{}, fmt.Errorf("invalid --limit %d: must be greater than zero", *limit)
 	}
 	switch cmux.OutputMode(*output) {
-	case cmux.OutputText, cmux.OutputMarkdown:
+	case cmux.OutputText, cmux.OutputMarkdown, cmux.OutputJSON:
 		// valid
 	default:
-		return cliOptions{}, fmt.Errorf("invalid --output %q: allowed values: text, markdown", *output)
+		return cliOptions{}, fmt.Errorf("invalid --output %q: allowed values: text, markdown, json", *output)
 	}
 	return cliOptions{
 		kind:        commandCmux,
