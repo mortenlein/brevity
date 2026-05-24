@@ -66,6 +66,7 @@ const (
 	commandExecutionMarkPlanned  commandKind = commandKind(commands.ExecutionMarkPlannedID)
 	commandExecutionPreflight    commandKind = commandKind(commands.ExecutionPreflightID)
 	commandExecutionLaunchDryRun commandKind = commandKind(commands.ExecutionLaunchDryRunID)
+	commandExecutionLaunch       commandKind = commandKind(commands.ExecutionLaunchID)
 	commandProviderStatus        commandKind = commandKind(commands.ProviderStatusID)
 	commandProviderSet           commandKind = commandKind(commands.ProviderSetID)
 	commandProviderReset         commandKind = commandKind(commands.ProviderResetID)
@@ -305,7 +306,7 @@ func parseQueueOptions(args []string) (cliOptions, error) {
 
 func parseExecutionOptions(args []string) (cliOptions, error) {
 	if len(args) < 2 {
-		return cliOptions{}, fmt.Errorf("missing execution command: supported commands: list, inspect, plan-from-reservation, mark-ready, mark-planned, preflight, launch-dry-run")
+		return cliOptions{}, fmt.Errorf("missing execution command: supported commands: list, inspect, plan-from-reservation, mark-ready, mark-planned, preflight, launch-dry-run, launch")
 	}
 	switch args[1] {
 	case "list":
@@ -369,8 +370,24 @@ func parseExecutionOptions(args []string) (cliOptions, error) {
 			return cliOptions{}, usageError(commands.ExecutionLaunchDryRun)
 		}
 		return options, nil
+	case "launch":
+		options := cliOptions{kind: commandExecutionLaunch}
+		for _, arg := range args[2:] {
+			switch {
+			case arg == "--json":
+				options.json = true
+			case strings.HasPrefix(arg, "-") || strings.TrimSpace(options.candidateID) != "":
+				return cliOptions{}, usageError(commands.ExecutionLaunch)
+			default:
+				options.candidateID = arg
+			}
+		}
+		if strings.TrimSpace(options.candidateID) == "" {
+			return cliOptions{}, usageError(commands.ExecutionLaunch)
+		}
+		return options, nil
 	default:
-		return cliOptions{}, fmt.Errorf("unsupported execution command %q: supported commands: list, inspect, plan-from-reservation, mark-ready, mark-planned, preflight, launch-dry-run", args[1])
+		return cliOptions{}, fmt.Errorf("unsupported execution command %q: supported commands: list, inspect, plan-from-reservation, mark-ready, mark-planned, preflight, launch-dry-run, launch", args[1])
 	}
 }
 
@@ -1058,8 +1075,8 @@ func runWithContextOptions(ctx context.Context, stdout io.Writer, client runtime
 		return routeQueueCommand(stdout, options)
 	case commandSchedulerPlan, commandSchedulerReserveNext, commandSchedulerPlanExec:
 		return routeSchedulerCommand(stdout, options)
-	case commandExecutionList, commandExecutionInspect, commandExecutionPlan, commandExecutionMarkReady, commandExecutionMarkPlanned, commandExecutionPreflight, commandExecutionLaunchDryRun:
-		return routeExecutionCommand(stdout, options)
+	case commandExecutionList, commandExecutionInspect, commandExecutionPlan, commandExecutionMarkReady, commandExecutionMarkPlanned, commandExecutionPreflight, commandExecutionLaunchDryRun, commandExecutionLaunch:
+		return routeExecutionCommand(ctx, stdout, options)
 	case commandProviderStatus, commandProviderSet, commandProviderReset:
 		return routeProviderCommand(stdout, options)
 	case commandInit:
@@ -1105,7 +1122,7 @@ func runWithContextOptions(ctx context.Context, stdout io.Writer, client runtime
 	}
 }
 
-func routeExecutionCommand(stdout io.Writer, options cliOptions) error {
+func routeExecutionCommand(ctx context.Context, stdout io.Writer, options cliOptions) error {
 	store, err := runtimeexecution.NewStore("")
 	if err != nil {
 		return err
@@ -1139,7 +1156,7 @@ func routeExecutionCommand(stdout io.Writer, options cliOptions) error {
 		fmt.Fprintln(stdout)
 		for _, record := range executions.Records {
 			status := strings.ToLower(strings.TrimSpace(record.Status))
-			if status != runtimeexecution.StatusPlanned && status != runtimeexecution.StatusReady {
+			if status != runtimeexecution.StatusPlanned && status != runtimeexecution.StatusReady && status != runtimeexecution.StatusLaunching && status != runtimeexecution.StatusCompleted && status != runtimeexecution.StatusFailed {
 				continue
 			}
 			fmt.Fprintf(stdout, "%s\t%s\t%s\t%s\t%s\t%s\n", record.ID, record.QueueItemID, record.Task, record.ReservationID, record.Status, record.CreatedAt)
@@ -1233,15 +1250,67 @@ func routeExecutionCommand(stdout io.Writer, options cliOptions) error {
 			return fmt.Errorf("execution launch dry run failed: %s", result.Reason)
 		}
 		return nil
+	case commandExecutionLaunch:
+		dryRun, payload, err := buildExecutionLaunchPayload(store, options.candidateID)
+		if err != nil {
+			return err
+		}
+		if !dryRun.LaunchEligible {
+			if options.json {
+				output, err := json.Marshal(dryRun)
+				if err != nil {
+					return err
+				}
+				if _, err := stdout.Write(append(output, '\n')); err != nil {
+					return err
+				}
+			} else {
+				renderExecutionLaunchDryRun(stdout, dryRun)
+			}
+			return fmt.Errorf("execution launch blocked: %s", dryRun.Reason)
+		}
+		streamOut := stdout
+		streamErr := stdout
+		if options.json {
+			streamOut = os.Stderr
+			streamErr = os.Stderr
+		}
+		if !options.json {
+			renderExecutionLaunchStart(stdout, payload)
+		}
+		result, launchErr := runtimeexecution.Launcher{Store: store, Stdout: streamOut, Stderr: streamErr}.Launch(ctx, payload)
+		if options.json {
+			output, err := json.Marshal(result)
+			if err != nil {
+				return err
+			}
+			if _, err := stdout.Write(append(output, '\n')); err != nil {
+				return err
+			}
+		} else {
+			renderExecutionLaunchResult(stdout, result)
+		}
+		if launchErr != nil {
+			return fmt.Errorf("execution launch failed: %w", launchErr)
+		}
+		if result.FinalStatus != runtimeexecution.StatusCompleted {
+			return fmt.Errorf("execution launch failed with exit code %d", result.ExitCode)
+		}
+		return nil
 	default:
 		return fmt.Errorf("unsupported execution command: %s", options.kind)
 	}
 }
 
 func buildExecutionLaunchDryRun(execStore runtimeexecution.Store, executionID string) (executionLaunchDryRunResult, error) {
+	result, _, err := buildExecutionLaunchPayload(execStore, executionID)
+	return result, err
+}
+
+func buildExecutionLaunchPayload(execStore runtimeexecution.Store, executionID string) (executionLaunchDryRunResult, runtimeexecution.LaunchPayload, error) {
 	preflightResult, err := execStore.Preflight(executionID)
 	if err != nil {
-		return executionLaunchDryRunResult{}, err
+		return executionLaunchDryRunResult{}, runtimeexecution.LaunchPayload{}, err
 	}
 	result := executionLaunchDryRunResult{
 		ExecutionID: preflightResult.ExecutionID,
@@ -1251,19 +1320,19 @@ func buildExecutionLaunchDryRun(execStore runtimeexecution.Store, executionID st
 		Reason:      preflightResult.Reason,
 	}
 	if !preflightResult.Passed {
-		return result, nil
+		return result, runtimeexecution.LaunchPayload{}, nil
 	}
 
 	store := execStore.Store
 	tasks, _, err := state.LoadTasks(store)
 	if err != nil {
-		return result, err
+		return result, runtimeexecution.LaunchPayload{}, err
 	}
 	task, ok := findLaunchDryRunTask(tasks, preflightResult.Task)
 	if !ok {
 		result.Reason = "task not found: " + preflightResult.Task
 		result.Checks = append(result.Checks, runtimeexecution.PreflightCheck{Name: "task metadata exists", Passed: false, Reason: result.Reason})
-		return result, nil
+		return result, runtimeexecution.LaunchPayload{}, nil
 	}
 	result.Checks = append(result.Checks, runtimeexecution.PreflightCheck{Name: "task metadata exists", Passed: true})
 
@@ -1274,7 +1343,7 @@ func buildExecutionLaunchDryRun(execStore runtimeexecution.Store, executionID st
 	if err != nil {
 		result.Reason = err.Error()
 		result.Checks = append(result.Checks, runtimeexecution.PreflightCheck{Name: "provider health readable", Passed: false, Reason: result.Reason})
-		return result, nil
+		return result, runtimeexecution.LaunchPayload{}, nil
 	}
 	if missing {
 		health = state.ProviderHealthState{}
@@ -1283,7 +1352,7 @@ func buildExecutionLaunchDryRun(execStore runtimeexecution.Store, executionID st
 	if len(resolverBlockers) > 0 {
 		result.Reason = resolverBlockers[0].Message
 		result.Checks = append(result.Checks, runtimeexecution.PreflightCheck{Name: "provider profile resolves", Passed: false, Reason: result.Reason})
-		return result, nil
+		return result, runtimeexecution.LaunchPayload{}, nil
 	}
 	result.Checks = append(result.Checks, runtimeexecution.PreflightCheck{Name: "provider profile resolves", Passed: true})
 
@@ -1293,7 +1362,7 @@ func buildExecutionLaunchDryRun(execStore runtimeexecution.Store, executionID st
 	if commandBlocker != nil {
 		result.Reason = commandBlocker.Message
 		result.Checks = append(result.Checks, runtimeexecution.PreflightCheck{Name: "launch payload builds", Passed: false, Reason: result.Reason})
-		return result, nil
+		return result, runtimeexecution.LaunchPayload{}, nil
 	}
 	if len(configWarnings) > 0 {
 		result.Checks = append(result.Checks, runtimeexecution.PreflightCheck{Name: "provider config defaults", Passed: true, Reason: configWarnings[0].Message})
@@ -1308,7 +1377,9 @@ func buildExecutionLaunchDryRun(execStore runtimeexecution.Store, executionID st
 	result.Prompt = promptPath
 	result.Command = append([]string{command.Command}, command.Arguments...)
 	result.LaunchEligible = true
-	return result, nil
+	payload := runtimeexecution.PayloadFromWorkerCommand(preflightResult.ExecutionID, preflightResult.Task, worker.Provider, worker.Profile, worktreePath, promptPath, command)
+	payload.Environment = worker.Config.Env
+	return result, payload, nil
 }
 
 func executionStatusCounts(records []runtimeexecution.Record) map[string]int {
@@ -1357,6 +1428,29 @@ func renderExecutionLaunchDryRun(stdout io.Writer, result executionLaunchDryRunR
 	}
 	fmt.Fprintln(stdout)
 	fmt.Fprintln(stdout, "NO PROVIDER WAS STARTED.")
+}
+
+func renderExecutionLaunchStart(stdout io.Writer, payload runtimeexecution.LaunchPayload) {
+	fmt.Fprintln(stdout, "EXECUTION LAUNCH")
+	fmt.Fprintln(stdout)
+	fmt.Fprintf(stdout, "Execution: %s\n", payload.ExecutionID)
+	fmt.Fprintf(stdout, "Task: %s\n", payload.Task)
+	fmt.Fprintf(stdout, "Provider: %s\n", payload.Provider)
+	fmt.Fprintf(stdout, "Profile: %s\n", payload.Profile)
+	fmt.Fprintf(stdout, "Worktree: %s\n", payload.Worktree)
+	fmt.Fprintf(stdout, "Command: %s\n", formatLaunchDryRunCommand(payload.Argv))
+	fmt.Fprintln(stdout)
+	fmt.Fprintln(stdout, "Provider output:")
+}
+
+func renderExecutionLaunchResult(stdout io.Writer, result runtimeexecution.LaunchResult) {
+	fmt.Fprintln(stdout)
+	fmt.Fprintln(stdout, "Execution result:")
+	fmt.Fprintf(stdout, "- exit code: %d\n", result.ExitCode)
+	fmt.Fprintf(stdout, "- final state: %s\n", result.FinalStatus)
+	if strings.TrimSpace(result.Error) != "" {
+		fmt.Fprintf(stdout, "- error: %s\n", result.Error)
+	}
 }
 
 func findLaunchDryRunTask(tasks state.Tasks, slug string) (state.Task, bool) {

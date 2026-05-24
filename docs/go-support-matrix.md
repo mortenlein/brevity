@@ -36,12 +36,15 @@ selection or no-selection reason, and reports reservation eligibility without
 reserving, executing providers, spawning workers, starting the supervisor,
 creating run history, draining the queue, or mutating task state.
 
-Runtime execution records are Go-native inert infrastructure state. `execution
-list` and `execution inspect` read `.brevity\runtime-executions.json`, while
-`execution plan-from-reservation <queue-item-id>` creates one planned execution
-record from an already reserved queue item. These commands do not execute
-providers, spawn workers, start the supervisor, create run history, drain the
-queue, or mutate task state.
+Runtime execution records and explicit manual launch are Go-native.
+`execution list` and `execution inspect` read
+`.brevity\runtime-executions.json`, `execution plan-from-reservation
+<queue-item-id>` creates one planned execution record from an already reserved
+queue item, and `execution launch <execution-id>` runs exactly one ready
+execution in the foreground. It invokes one provider process with argv-style
+`os/exec`, streams output, captures the exit code, and updates only execution
+state. It does not start scheduler loops, drain the queue, create retries, run
+in the background, mutate task workflow state, or create provider pools.
 
 Go-owned `.brevity` writes must go through `internal/state` and the advisory
 `.brevity/state.lock` protocol. Provider execution and worker execution for
@@ -81,7 +84,7 @@ go run ./cmd/brevity support matrix --json
 | Runtime state JSON | Native reader implemented | Implemented legacy producer | Go | read-only | unit and contract tests | native source supported | migrated | Keep compatibility schema additive |
 | Runtime queue persistence, inspection, planning, and reservations | Native add, list, inspect, plan, reserve, unreserve, remove for `.brevity\runtime-queue.json`; Bubble Tea displays read-only queue health | Not PowerShell-owned | Go | inert runtime metadata mutation / read-only diagnostics and planning | unit tests | Bubble Tea read-only visibility | migrated foundation | Keep queue execution out of v1 |
 | Runtime scheduler planning and reservation | Native scheduler plan selects first eligible runnable queue item from queue plan; `reserve-next` reserves that one item through queue reservation | Not PowerShell-owned | Go | read-only scheduling decision / inert reservation metadata | unit tests | none | migrated contract | Keep execution out of scheduler v1 |
-| Runtime execution records | Native list, inspect, and plan-from-reservation for `.brevity\runtime-executions.json`; native runtime state and Bubble Tea expose compact planned execution visibility | Not PowerShell-owned | Go | inert execution intent metadata / read-only diagnostics | unit tests | Bubble Tea read-only visibility | migrated contract | Keep provider execution out of execution-record v1 |
+| Runtime execution records and manual launch | Native list, inspect, plan-from-reservation, readiness transitions, preflight, launch-dry-run, and single foreground provider launch for `.brevity\runtime-executions.json`; native runtime state and Bubble Tea expose compact execution visibility | Not PowerShell-owned | Go | execution metadata / manual provider-executing mutation | unit and fake-provider tests | Bubble Tea read-only visibility | migrated execution contract | Keep scheduler loops and queue draining out of execution launch |
 | Provider health read/write | Native read, set, reset | Implemented legacy compatibility | Go | mutating metadata | unit tests | actions available | migrated | Deprecate PowerShell-first docs |
 | Task metadata/runtime reads | Native task status, detail, runtime-info | Implemented legacy views | Go | read-only | unit tests | native TUI source | migrated | Keep Go as authority |
 | Task new worktree creation | Native implementation | Implemented legacy compatibility | Go | mutating git and metadata | fixture tests | action available | migrated | Keep PowerShell as fallback only |
@@ -120,7 +123,7 @@ go run ./cmd/brevity support matrix --json
 | `runtime start|stop|status` | runtime lifecycle metadata | native equivalent | delegated compatibility | medium | delegate only |
 | `queue add|list|inspect|plan|reserve|unreserve|remove` | runtime queue metadata, diagnostics, read-only planning, and explicit reservations | native equivalent | Go-owned | medium | keep PowerShell out of queue authority |
 | `scheduler plan|reserve-next` | read-only scheduler decision / explicit reservation | native equivalent | Go-owned | low | keep execution out of scheduler contract |
-| `execution list|inspect|plan-from-reservation` | runtime execution intent metadata and diagnostics | native equivalent | Go-owned | low | keep provider execution out of execution-record contract |
+| `execution list|inspect|plan-from-reservation|launch` | runtime execution metadata, diagnostics, and explicit single provider launch | native equivalent | Go-owned | high for launch | keep launch manual and foreground |
 | `tui` | read-only | dashboard/Bubble Tea | reference scaffold | low | deprecate later |
 | `session summary` | read-only | none | PowerShell-owned | low | migrate later |
 | `onboard` | not implemented | none | planned | low | implement in Go when requested |
@@ -162,11 +165,12 @@ go run ./cmd/brevity support matrix --json
 | `go run ./cmd/brevity queue remove <id>` | Runtime queue persistence | Go `.brevity\runtime-queue.json` writer + queue lock | Mutating inert runtime metadata | Implemented foundation | Removes only the matching queue item id, writes atomically, and does not mutate task state. |
 | `go run ./cmd/brevity scheduler plan [--json]` | Runtime scheduler planning | Go queue planner consumer | Read-only | Implemented contract | Selects the first eligible runnable queue item, reports why it was selected or why none was selected, and reports reservation eligibility without reserving, executing providers, spawning workers, starting the supervisor, creating run history, draining the queue, or mutating task state. |
 | `go run ./cmd/brevity scheduler reserve-next` | Runtime scheduler reservation | Go queue planner consumer + queue reservation writer | Mutating inert runtime metadata | Implemented contract | Computes the scheduler plan, reserves the selected item through queue reservation, prints id/task/reservation id, and does not execute providers, spawn workers, start the supervisor, create run history, drain the queue, or mutate task state. |
-| `go run ./cmd/brevity execution list` | Runtime execution records | Go `.brevity\runtime-executions.json` reader | Read-only | Implemented contract | Lists planned and ready execution records with status counts, treats a missing file as empty, reports corrupted JSON safely, and does not execute providers, spawn workers, start the supervisor, create run history, drain the queue, or mutate task state. |
+| `go run ./cmd/brevity execution list` | Runtime execution records | Go `.brevity\runtime-executions.json` reader | Read-only | Implemented contract | Lists planned, ready, launching, completed, and failed execution records with status counts, treats a missing file as empty, reports corrupted JSON safely, and does not execute providers, spawn workers, start the supervisor, create run history, drain the queue, or mutate task state. |
 | `go run ./cmd/brevity execution inspect [--json]` | Runtime execution diagnostics | Go tolerant `.brevity\runtime-executions.json` inspector | Read-only | Implemented contract | Reports path, file health, version, total executions, status counts, duplicate ids, invalid records, and parse/version errors without mutation. |
 | `go run ./cmd/brevity execution plan-from-reservation <queue-item-id>` | Runtime execution intent planning | Go queue reader + execution writer | Mutating inert runtime metadata | Implemented contract | Creates exactly one planned execution record for an already reserved queue item and rejects missing, unreserved, reservation-less, or duplicate queue item/reservation pairs. It does not execute providers, spawn workers, start the supervisor, create run history, drain the queue, or mutate task state. |
 | `go run ./cmd/brevity execution mark-ready <execution-id>` | Runtime execution readiness transition | Go execution writer + execution lock | Mutating inert runtime metadata | Implemented contract | Transitions exactly one execution record from planned to ready, updates `updatedAt`, and does not execute providers, spawn workers, start the supervisor, create run history, drain the queue, or mutate task state. |
 | `go run ./cmd/brevity execution mark-planned <execution-id>` | Runtime execution readiness rollback | Go execution writer + execution lock | Mutating inert runtime metadata | Implemented contract | Transitions exactly one execution record from ready back to planned, updates `updatedAt`, and does not execute providers, spawn workers, start the supervisor, create run history, drain the queue, or mutate task state. |
+| `go run ./cmd/brevity execution launch <execution-id> [--json]` | Runtime execution provider launch | Go execution preflight + provider resolver + argv `os/exec` + execution lock | Manual provider-executing mutation | Implemented contract | Requires a ready execution, runs preflight, resolves provider/profile/worktree/prompt context, launches exactly one provider process in the foreground, streams output, captures exit code, and transitions ready -> launching -> completed/failed. It does not mutate queue or task workflow state, create retries, run scheduler loops, or background execution. |
 | `go run ./cmd/brevity provider status` | Native state inspection | Go `.brevity/provider-health.json` reader | Read-only | Implemented | Reads provider health through `internal/state`; no PowerShell call. |
 | `go run ./cmd/brevity provider set <provider> <status> [--note <note>]` | Native state action | Go state store + `.brevity/state.lock` | Mutating | Implemented | Updates provider health without PowerShell or provider execution. |
 | `go run ./cmd/brevity provider reset <provider>` | Native state action | Go state store + `.brevity/state.lock` | Mutating | Implemented | Resets provider health to `unknown` without PowerShell or provider execution. |

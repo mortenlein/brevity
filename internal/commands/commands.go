@@ -27,6 +27,7 @@ const (
 	ExecutionMarkPlannedID         ID = "execution-mark-planned"
 	ExecutionPreflightID           ID = "execution-preflight"
 	ExecutionLaunchDryRunID        ID = "execution-launch-dry-run"
+	ExecutionLaunchID              ID = "execution-launch"
 	ProviderStatusID               ID = "provider-status"
 	ProviderSetID                  ID = "provider-set"
 	ProviderResetID                ID = "provider-reset"
@@ -192,6 +193,11 @@ var (
 		Words: []string{"execution", "launch-dry-run"},
 		Usage: "brevity execution launch-dry-run <execution-id> [--json]",
 	}
+	ExecutionLaunch = Command{
+		ID:    ExecutionLaunchID,
+		Words: []string{"execution", "launch"},
+		Usage: "brevity execution launch <execution-id> [--json]",
+	}
 	ProviderSet = Command{
 		ID:    ProviderSetID,
 		Words: []string{"provider", "set"},
@@ -347,6 +353,7 @@ var UsageCommands = []Command{
 	ExecutionMarkPlanned,
 	ExecutionPreflight,
 	ExecutionLaunchDryRun,
+	ExecutionLaunch,
 	Doctor,
 	ProviderStatus,
 	ProviderSet,

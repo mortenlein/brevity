@@ -9,7 +9,8 @@ same plan. It is reservation only. Neither command is provider execution.
 
 `brevity scheduler plan-execution` creates one planned execution record from a
 reserved scheduler item. It is execution planning only. It does not execute the
-planned record.
+planned record. Real provider launch is an explicit separate
+`brevity execution launch <execution-id>` command.
 
 ## Command
 
@@ -94,7 +95,7 @@ If a matching execution record already exists, the reason is:
 - `execution already planned`
 
 Execution planning is not provider execution. It only writes durable execution
-intent metadata.
+intent metadata. It never calls `execution launch`.
 
 ## Non-Goals
 
@@ -117,13 +118,13 @@ Scheduler v1 does not introduce:
 
 ## Future Execution Relationship
 
-Future execution may consume a scheduler decision, reserve the selected item,
-and then hand off to a separate execution contract. That future layer must keep
-reservation, task state transitions, run history, provider execution, and
-cleanup boundaries explicit.
+Manual execution may consume a scheduler-created execution id through
+`brevity execution launch <execution-id>`. The scheduler still does not own
+provider execution, queue draining, retries, task state transitions, run
+history, or cleanup.
 
 Scheduler planning itself remains read-only. Scheduler execution planning is a
-separate metadata-writing command that creates only inert execution intent.
+separate metadata-writing command that creates only execution intent.
 
 ## Safety Invariants
 

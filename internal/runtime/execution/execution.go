@@ -23,6 +23,9 @@ const (
 	Version         = 1
 	StatusPlanned   = "planned"
 	StatusReady     = "ready"
+	StatusLaunching = "launching"
+	StatusCompleted = "completed"
+	StatusFailed    = "failed"
 	StatusCancelled = "cancelled"
 )
 
@@ -254,6 +257,18 @@ func (store Store) MarkPlanned(executionID string) (TransitionResult, error) {
 	return store.transitionStatus(executionID, StatusReady, StatusPlanned)
 }
 
+func (store Store) MarkLaunching(executionID string) (TransitionResult, error) {
+	return store.transitionStatus(executionID, StatusReady, StatusLaunching)
+}
+
+func (store Store) MarkCompleted(executionID string) (TransitionResult, error) {
+	return store.transitionStatus(executionID, StatusLaunching, StatusCompleted)
+}
+
+func (store Store) MarkFailed(executionID string) (TransitionResult, error) {
+	return store.transitionStatus(executionID, StatusLaunching, StatusFailed)
+}
+
 func (store Store) transitionStatus(executionID string, fromStatus string, toStatus string) (TransitionResult, error) {
 	executionID = strings.TrimSpace(executionID)
 	if executionID == "" {
@@ -371,7 +386,7 @@ func validateRecord(record Record) error {
 		return errors.New("reservationId is required")
 	}
 	status := strings.ToLower(strings.TrimSpace(record.Status))
-	if status != StatusPlanned && status != StatusReady && status != StatusCancelled {
+	if status != StatusPlanned && status != StatusReady && status != StatusLaunching && status != StatusCompleted && status != StatusFailed && status != StatusCancelled {
 		return fmt.Errorf("status %q is not recognized", record.Status)
 	}
 	if _, err := parseTime(record.CreatedAt); err != nil {

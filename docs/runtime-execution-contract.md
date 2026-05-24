@@ -1,12 +1,12 @@
 # Runtime Execution Record Contract
 
-`.brevity\runtime-executions.json` is the first durable runtime execution
-intent contract. It records that the runtime intends to execute a reserved queue
-item later.
+`.brevity\runtime-executions.json` is the durable runtime execution contract.
+It records that the runtime intends to execute a reserved queue item and now
+tracks the first explicit manual foreground provider launch path.
 
-An execution record is not provider execution. It does not mean a provider has
-started, a worker has been spawned, task state has changed, run history has been
-created, or work has succeeded or failed.
+An execution record is not automatic scheduling. A record does not imply the
+scheduler will run, the queue will drain, task state will change, run history
+will be created, retries will occur, or background orchestration exists.
 
 ## File
 
@@ -43,6 +43,8 @@ go run ./cmd/brevity execution preflight <execution-id>
 go run ./cmd/brevity execution preflight <execution-id> --json
 go run ./cmd/brevity execution launch-dry-run <execution-id>
 go run ./cmd/brevity execution launch-dry-run <execution-id> --json
+go run ./cmd/brevity execution launch <execution-id>
+go run ./cmd/brevity execution launch <execution-id> --json
 go run ./cmd/brevity scheduler plan-execution
 ```
 
@@ -98,6 +100,24 @@ It does not call provider binaries, create subprocesses, start workers, start
 the supervisor, mutate queue/task/execution state, create run history, or add
 running/succeeded/failed statuses.
 
+`execution launch <execution-id>` is the first real provider execution path. It
+is manual, foreground-only, and single-execution-only. It loads the execution
+record, requires `status: ready`, runs execution preflight, resolves the same
+provider/profile/worktree/prompt context as launch dry-run, builds the same
+argv-style provider launch payload, starts exactly one provider process, streams
+provider stdout/stderr live to the console, captures the exit code, and prints
+the final execution state.
+
+Launch uses argv-style process execution. It must not shell-concatenate
+commands, use `Invoke-Expression`, use `cmd /c` as a general execution wrapper,
+start scheduler loops, drain the queue, mutate queue status, mutate task
+workflow state, add retries, launch providers in parallel, or create daemon,
+background, or distributed orchestration.
+
+Launch mutates only `.brevity\runtime-executions.json` through the execution
+lock. Queue semantics remain separate. Run history integration is intentionally
+not part of this v1 launch contract.
+
 Human output reports each check clearly:
 
 ```text
@@ -146,14 +166,15 @@ execution loop.
 
 ## Execution Plan vs Provider Execution
 
-Execution records do not launch Codex, Gemini, Copilot, or any worker process.
-They do not create logs, append `.brevity\runs.jsonl`, change task metadata, or
-mark a task as running, succeeded, or failed.
+Execution planning does not launch Codex, Gemini, Copilot, or any worker
+process. It does not create logs, append `.brevity\runs.jsonl`, change task
+metadata, or mark a task as running, succeeded, or failed.
 
 Launch dry-run is still not provider execution. It is the final preview layer
-between `ready` execution records and a later provider launch contract. Provider
-execution will be introduced by a separate contract with its own explicit state
-transition and safety checks.
+between `ready` execution records and `execution launch`.
+
+Provider execution occurs only through `execution launch <execution-id>`, and
+only for that one named ready execution record.
 
 ## Lifecycle
 
@@ -163,8 +184,12 @@ The v1 lifecycle is intentionally tiny:
   the record has not yet passed pre-execution eligibility checks.
 - `ready`: the planned execution record has passed pre-execution checks and is
   eligible for a future provider launch.
-- `cancelled`: the planned intent was cancelled before provider execution was
-  introduced or started.
+- `launching`: the provider launch path has started and the provider process is
+  being invoked for this single foreground execution.
+- `completed`: the provider process exited successfully with exit code `0`.
+- `failed`: provider launch failed or the provider process exited nonzero.
+- `cancelled`: the planned intent was cancelled before provider execution
+  started.
 
 `ready` is not provider running. It does not mean a provider process has
 started, a worker exists, logs have been created, or task state has changed.
@@ -172,43 +197,48 @@ started, a worker exists, logs have been created, or task state has changed.
 launch-eligible after `execution preflight <execution-id>` confirms the queue
 reservation and task linkage still match at the moment of checking.
 
-No other statuses are valid in v1.
+The launch state transition is:
 
-Future provider execution work may add statuses such as running, succeeded, or
-failed through a new or expanded contract. They are deliberately absent here.
+```text
+ready -> launching -> completed
+ready -> launching -> failed
+```
+
+Every transition updates `updatedAt`, writes atomically, and uses the execution
+lock. A failed preflight leaves the record unchanged. A provider launch failure
+or nonzero provider exit marks the execution `failed`.
+
+No other statuses are valid in v1. Do not add retries, paused, abandoned,
+resumed, timeout, killed, or provider-pool states.
 
 ## Safety Invariants
 
-Execution records must never:
+Execution launch must never:
 
-- launch providers
-- spawn workers
 - start the supervisor implicitly
 - drain the queue
 - mutate task execution state
 - create run history
-- mark success or failure
-- introduce running, completed, succeeded, or failed statuses
+- add retries
+- run multiple executions
+- introduce background or daemon orchestration
+- introduce distributed coordination
 
 `execution list`, `execution inspect`, `execution preflight`, and
 `execution launch-dry-run` are read-only. `execution plan-from-reservation`,
-`execution mark-ready`, and `execution mark-planned` write only
-`.brevity\runtime-executions.json` and its advisory lock file.
+`execution mark-ready`, `execution mark-planned`, and `execution launch` write
+only `.brevity\runtime-executions.json` and its advisory lock file.
 
 ## Non-Goals
 
 This contract does not implement planner automation, provider scheduling,
-worker lifecycle, retries, queue draining, task mutation, run history, or TUI
-controls.
+worker lifecycle management, retries, queue draining, task mutation, run
+history, TUI controls, provider pools, parallel execution, daemon execution, or
+distributed execution.
 
 ## Future Scheduler Relationship
 
-The scheduler can use this contract as the durable boundary between reservation
-ownership and actual execution. `scheduler plan-execution` now connects
-scheduler reserved-item selection to planned execution metadata. A future
-scheduler execution command can reserve a queue item, create a planned execution
-record, and then explicitly transition into provider execution through a
-separate contract.
-
-Until that future contract exists, planned and ready execution records are inert
-runtime metadata.
+The scheduler uses this contract as the durable boundary between reservation
+ownership and execution metadata. `scheduler plan-execution` connects scheduler
+reserved-item selection to planned execution metadata. It still does not call
+`execution launch`, start loops, or auto-drain the queue.
