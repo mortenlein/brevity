@@ -71,6 +71,27 @@ type RenderOptions struct {
 	// The rendered packet includes task detail, queue/scheduler context, a
 	// review checklist, and merge/cleanup readiness notes.
 	ReviewTask string
+
+	// Handoff, when true, activates AI handoff packet mode.  Handoff mode
+	// ignores --section, --task, and --state filters; --limit and --output
+	// still apply.  The packet includes runtime summary, providers,
+	// queue/scheduler, important tasks ranked by priority, review candidate
+	// details with checklists, suggested next actions, and a read-only safety
+	// attestation.
+	Handoff bool
+
+	// MergeReport, when true, activates merge-readiness report mode.
+	// MergeReport mode ignores --section, --task, and --state filters;
+	// --limit and --output still apply.  Tasks are grouped into six canonical
+	// merge groups: ready-for-merge, reviewing, needs-run, blocked, merged,
+	// and other.
+	MergeReport bool
+
+	// BlockedReport, when true, activates blocked-task report mode.
+	// BlockedReport mode ignores --section, --task, and --state filters;
+	// --limit and --output still apply.  Tasks are classified into four groups:
+	// provider-gated, blocked, reserved-or-queue-gated, and unknown.
+	BlockedReport bool
 }
 
 // effectiveLimit returns the active task limit, always >= 1.

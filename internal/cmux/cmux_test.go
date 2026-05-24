@@ -2373,6 +2373,670 @@ func TestReview_RuntimeStateError_GracefulDegradation(t *testing.T) {
 	}
 }
 
+// --- handoff packet mode tests ---------------------------------------------
+
+// handoffOpts is a shorthand for default text handoff options.
+func handoffOpts() cmux.RenderOptions {
+	return cmux.RenderOptions{Handoff: true}
+}
+
+// handoffMarkdownOpts is a shorthand for markdown handoff options.
+func handoffMarkdownOpts() cmux.RenderOptions {
+	return cmux.RenderOptions{Handoff: true, Output: cmux.OutputMarkdown}
+}
+
+// handoffJSONOpts is a shorthand for JSON handoff options.
+func handoffJSONOpts() cmux.RenderOptions {
+	return cmux.RenderOptions{Handoff: true, Output: cmux.OutputJSON}
+}
+
+func TestHandoff_DispatchActivated(t *testing.T) {
+	// With Handoff:true the output must start with the handoff header, not the
+	// normal CMUX OPERATOR header.
+	snap := cmux.Read(stubFetcher{stateJSON: minimalStateJSON(t), schedulerJSON: minimalSchedulerJSON()})
+	out := renderSnapshotOpts(snap, handoffOpts())
+	if !strings.Contains(out, "CMUX HANDOFF PACKET") {
+		t.Errorf("handoff dispatch missing CMUX HANDOFF PACKET header; output:\n%s", out)
+	}
+	if strings.Contains(out, "CMUX OPERATOR") {
+		t.Error("handoff output must not contain CMUX OPERATOR (normal report) header")
+	}
+}
+
+func TestHandoff_Text_Structure(t *testing.T) {
+	snap := cmux.Read(stubFetcher{stateJSON: minimalStateJSON(t), schedulerJSON: minimalSchedulerJSON()})
+	out := renderSnapshotOpts(snap, handoffOpts())
+	for _, want := range []string{
+		"CMUX HANDOFF PACKET",
+		"[read-only]",
+		"source: native",
+		"Runtime Summary",
+		"Providers",
+		"Queue / Scheduler",
+		"Important Tasks",
+		"Review Candidates",
+		"Suggested Next Actions",
+		"[read-only]", // safety attestation
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("handoff text missing section %q; output:\n%s", want, out)
+		}
+	}
+}
+
+func TestHandoff_Markdown_Structure(t *testing.T) {
+	snap := cmux.Read(stubFetcher{stateJSON: minimalStateJSON(t), schedulerJSON: minimalSchedulerJSON()})
+	out := renderSnapshotOpts(snap, handoffMarkdownOpts())
+	for _, want := range []string{
+		"# CMUX Handoff Packet [read-only]",
+		"## Runtime Summary",
+		"## Providers",
+		"## Queue / Scheduler",
+		"## Important Tasks",
+		"## Review Candidates",
+		"## Suggested Next Actions",
+		"Safety note:",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("handoff markdown missing heading %q; output:\n%s", want, out)
+		}
+	}
+}
+
+func TestHandoff_Markdown_StartsWithH1(t *testing.T) {
+	snap := cmux.Read(stubFetcher{stateJSON: minimalStateJSON(t), schedulerJSON: minimalSchedulerJSON()})
+	out := renderSnapshotOpts(snap, handoffMarkdownOpts())
+	if !strings.HasPrefix(out, "# CMUX Handoff Packet") {
+		t.Errorf("handoff markdown must start with # CMUX Handoff Packet; prefix: %q", out[:min(len(out), 40)])
+	}
+}
+
+func TestHandoff_JSON_Schema(t *testing.T) {
+	snap := cmux.Read(stubFetcher{stateJSON: minimalStateJSON(t), schedulerJSON: minimalSchedulerJSON()})
+	out := renderSnapshotOpts(snap, handoffJSONOpts())
+	var result map[string]any
+	if err := json.Unmarshal([]byte(out), &result); err != nil {
+		t.Fatalf("handoff JSON invalid: %v\noutput:\n%s", err, out)
+	}
+	if !strings.Contains(out, `"brevity.cmux-handoff.v1"`) {
+		t.Errorf("handoff JSON missing schema field; output:\n%s", out)
+	}
+	for _, key := range []string{
+		"schema", "source", "options", "errors",
+		"importantTasks", "reviewCandidates", "suggestedNextActions", "safety",
+	} {
+		if _, ok := result[key]; !ok {
+			t.Errorf("handoff JSON missing key %q; output:\n%s", key, out)
+		}
+	}
+}
+
+func TestHandoff_JSON_SafetyBlock(t *testing.T) {
+	snap := cmux.Read(stubFetcher{stateJSON: minimalStateJSON(t), schedulerJSON: minimalSchedulerJSON()})
+	out := renderSnapshotOpts(snap, handoffJSONOpts())
+	var result map[string]any
+	if err := json.Unmarshal([]byte(out), &result); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+	safety, ok := result["safety"].(map[string]any)
+	if !ok {
+		t.Fatalf("handoff JSON safety must be an object; output:\n%s", out)
+	}
+	if safety["readOnly"] != true {
+		t.Errorf("handoff JSON safety.readOnly must be true; got %v", safety["readOnly"])
+	}
+	if _, ok := safety["note"]; !ok {
+		t.Error("handoff JSON safety must have a note field")
+	}
+}
+
+func TestHandoff_JSON_EmptyArraysNotNull(t *testing.T) {
+	// With no tasks or actions in manyTaskStateJSON(0), slices must be [] not null.
+	snap := cmux.Read(stubFetcher{stateJSON: manyTaskStateJSON(0), schedulerJSON: minimalSchedulerJSON()})
+	out := renderSnapshotOpts(snap, handoffJSONOpts())
+	for _, want := range []string{`"importantTasks": []`, `"reviewCandidates": []`, `"suggestedNextActions": []`} {
+		if !strings.Contains(out, want) {
+			t.Errorf("handoff JSON slice must be [] not null: missing %q; output:\n%s", want, out)
+		}
+	}
+}
+
+func TestHandoff_ImportantTask_Ordering(t *testing.T) {
+	// multiStateJSON has tasks: task-ready (ready-for-worker), task-review
+	// (reviewing), task-blocked (blocked), task-merged (merged).
+	// After ranking: task-review (0) → task-blocked (1) → task-ready (2) → task-merged (3).
+	snap := cmux.Read(stubFetcher{stateJSON: multiStateJSON(), schedulerJSON: minimalSchedulerJSON()})
+	out := renderSnapshotOpts(snap, handoffOpts())
+
+	reviewIdx := strings.Index(out, "task-review")
+	blockedIdx := strings.Index(out, "task-blocked")
+	readyIdx := strings.Index(out, "task-ready")
+	if reviewIdx < 0 || blockedIdx < 0 || readyIdx < 0 {
+		t.Fatalf("handoff text missing expected task slugs; output:\n%s", out)
+	}
+	if reviewIdx > blockedIdx {
+		t.Errorf("handoff: task-review (priority 0) must appear before task-blocked (priority 1)")
+	}
+	if blockedIdx > readyIdx {
+		t.Errorf("handoff: task-blocked (priority 1) must appear before task-ready (priority 2)")
+	}
+}
+
+func TestHandoff_ReviewCandidates_OnlyReviewingTasks(t *testing.T) {
+	// Only task-review (reviewing) should appear in Review Candidates.
+	// task-blocked and task-ready must not.
+	snap := cmux.Read(stubFetcher{stateJSON: multiStateJSON(), schedulerJSON: minimalSchedulerJSON()})
+	out := renderSnapshotOpts(snap, handoffOpts())
+
+	// Extract the Review Candidates section (between its heading and the next ---).
+	candidateSection := extractSection(out, "Review Candidates", sectionSep)
+	if !strings.Contains(candidateSection, "task-review") {
+		t.Errorf("handoff Review Candidates missing task-review; section:\n%s", candidateSection)
+	}
+	if strings.Contains(candidateSection, "task-blocked") {
+		t.Error("handoff Review Candidates must not contain task-blocked")
+	}
+	if strings.Contains(candidateSection, "task-ready") {
+		t.Error("handoff Review Candidates must not contain task-ready")
+	}
+}
+
+func TestHandoff_ReviewCandidates_ChecklistPresent(t *testing.T) {
+	// Review candidates must include inline checklist items.
+	snap := cmux.Read(stubFetcher{stateJSON: multiStateJSON(), schedulerJSON: minimalSchedulerJSON()})
+	out := renderSnapshotOpts(snap, handoffOpts())
+	candidateSection := extractSection(out, "Review Candidates", sectionSep)
+	if !strings.Contains(candidateSection, "[x]") && !strings.Contains(candidateSection, "[ ]") {
+		t.Errorf("handoff Review Candidates missing checklist markers; section:\n%s", candidateSection)
+	}
+}
+
+func TestHandoff_Limit_Applied(t *testing.T) {
+	// 15 tasks, limit=3: important tasks shows first 3 and a truncation header.
+	snap := cmux.Read(stubFetcher{stateJSON: manyTaskStateJSON(15), schedulerJSON: minimalSchedulerJSON()})
+	out := renderSnapshotOpts(snap, cmux.RenderOptions{Handoff: true, Limit: 3})
+	if !strings.Contains(out, "showing 3 of 15") {
+		t.Errorf("handoff limit=3 with 15 tasks missing truncation header; output:\n%s", out)
+	}
+	if !strings.Contains(out, "task-1") {
+		t.Error("handoff limit=3 missing task-1")
+	}
+	if strings.Contains(out, "task-4") {
+		t.Error("handoff limit=3 must not show task-4 in important tasks")
+	}
+}
+
+func TestHandoff_EmptyState_NoTasks(t *testing.T) {
+	snap := cmux.Read(stubFetcher{stateJSON: manyTaskStateJSON(0), schedulerJSON: minimalSchedulerJSON()})
+	out := renderSnapshotOpts(snap, handoffOpts())
+	if !strings.Contains(out, "Important Tasks: none tracked") {
+		t.Errorf("handoff empty state missing 'Important Tasks: none tracked'; output:\n%s", out)
+	}
+	if !strings.Contains(out, "Review Candidates: none") {
+		t.Errorf("handoff empty state missing 'Review Candidates: none'; output:\n%s", out)
+	}
+}
+
+func TestHandoff_EmptyState_Markdown(t *testing.T) {
+	snap := cmux.Read(stubFetcher{stateJSON: manyTaskStateJSON(0), schedulerJSON: minimalSchedulerJSON()})
+	out := renderSnapshotOpts(snap, handoffMarkdownOpts())
+	if !strings.Contains(out, "_No tasks tracked._") {
+		t.Errorf("handoff markdown empty state missing '_No tasks tracked._'; output:\n%s", out)
+	}
+	if !strings.Contains(out, "_No review candidates._") {
+		t.Errorf("handoff markdown empty state missing '_No review candidates._'; output:\n%s", out)
+	}
+}
+
+func TestHandoff_RuntimeStateError_GracefulDegradation(t *testing.T) {
+	snap := cmux.Read(stubFetcher{
+		stateErr:      errors.New("runtime unavailable"),
+		schedulerJSON: minimalSchedulerJSON(),
+	})
+	out := renderSnapshotOpts(snap, handoffOpts())
+	if !strings.Contains(out, "CMUX HANDOFF PACKET") {
+		t.Error("handoff text missing header even on error")
+	}
+	if !strings.Contains(out, "runtime unavailable") {
+		t.Errorf("handoff text missing runtime error message; output:\n%s", out)
+	}
+}
+
+func TestHandoff_NoANSI(t *testing.T) {
+	snap := cmux.Read(stubFetcher{stateJSON: minimalStateJSON(t), schedulerJSON: minimalSchedulerJSON()})
+	for _, name := range []string{"text", "markdown", "json"} {
+		var opts cmux.RenderOptions
+		switch name {
+		case "text":
+			opts = handoffOpts()
+		case "markdown":
+			opts = handoffMarkdownOpts()
+		case "json":
+			opts = handoffJSONOpts()
+		}
+		if out := renderSnapshotOpts(snap, opts); strings.Contains(out, "\x1b[") {
+			t.Errorf("handoff %s output contains ANSI escape sequences", name)
+		}
+	}
+}
+
+func TestHandoff_Text_Deterministic(t *testing.T) {
+	snap := cmux.Read(stubFetcher{stateJSON: minimalStateJSON(t), schedulerJSON: minimalSchedulerJSON()})
+	opts := handoffOpts()
+	if out1, out2 := renderSnapshotOpts(snap, opts), renderSnapshotOpts(snap, opts); out1 != out2 {
+		t.Error("handoff text Render is not deterministic")
+	}
+}
+
+func TestHandoff_Markdown_Deterministic(t *testing.T) {
+	snap := cmux.Read(stubFetcher{stateJSON: minimalStateJSON(t), schedulerJSON: minimalSchedulerJSON()})
+	opts := handoffMarkdownOpts()
+	if out1, out2 := renderSnapshotOpts(snap, opts), renderSnapshotOpts(snap, opts); out1 != out2 {
+		t.Error("handoff markdown Render is not deterministic")
+	}
+}
+
+func TestHandoff_JSON_Deterministic(t *testing.T) {
+	snap := cmux.Read(stubFetcher{stateJSON: minimalStateJSON(t), schedulerJSON: minimalSchedulerJSON()})
+	opts := handoffJSONOpts()
+	if out1, out2 := renderSnapshotOpts(snap, opts), renderSnapshotOpts(snap, opts); out1 != out2 {
+		t.Error("handoff JSON Render is not deterministic")
+	}
+}
+
+func TestHandoff_NormalOutput_Unchanged(t *testing.T) {
+	// Without Handoff:true the default text render must not produce handoff output.
+	snap := cmux.Read(stubFetcher{stateJSON: minimalStateJSON(t), schedulerJSON: minimalSchedulerJSON()})
+	out := renderSnapshot(snap) // zero RenderOptions
+	if strings.Contains(out, "CMUX HANDOFF PACKET") {
+		t.Error("normal cmux output must not contain CMUX HANDOFF PACKET header")
+	}
+	if !strings.Contains(out, "CMUX OPERATOR") {
+		t.Error("normal cmux output must still contain CMUX OPERATOR header")
+	}
+}
+
+func TestHandoff_JSON_OptionsBlock(t *testing.T) {
+	snap := cmux.Read(stubFetcher{stateJSON: minimalStateJSON(t), schedulerJSON: minimalSchedulerJSON()})
+	out := renderSnapshotOpts(snap, cmux.RenderOptions{Handoff: true, Output: cmux.OutputJSON, Limit: 5})
+	var result map[string]any
+	if err := json.Unmarshal([]byte(out), &result); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+	options, ok := result["options"].(map[string]any)
+	if !ok {
+		t.Fatalf("handoff JSON options must be an object; output:\n%s", out)
+	}
+	if options["limit"] != float64(5) {
+		t.Errorf("handoff JSON options.limit must be 5; got %v", options["limit"])
+	}
+	if options["output"] != "json" {
+		t.Errorf("handoff JSON options.output must be \"json\"; got %v", options["output"])
+	}
+}
+
+func TestHandoff_JSON_RuntimeSummaryPresent(t *testing.T) {
+	snap := cmux.Read(stubFetcher{stateJSON: minimalStateJSON(t), schedulerJSON: minimalSchedulerJSON()})
+	out := renderSnapshotOpts(snap, handoffJSONOpts())
+	var result map[string]any
+	if err := json.Unmarshal([]byte(out), &result); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+	if _, ok := result["runtimeSummary"]; !ok {
+		t.Errorf("handoff JSON missing runtimeSummary when runtime state available; output:\n%s", out)
+	}
+}
+
+func TestHandoff_Markdown_ReviewCandidatesHaveChecklist(t *testing.T) {
+	// multiStateJSON has task-review in reviewing state — it should appear in
+	// the markdown Review Candidates section with a GFM checklist.
+	snap := cmux.Read(stubFetcher{stateJSON: multiStateJSON(), schedulerJSON: minimalSchedulerJSON()})
+	out := renderSnapshotOpts(snap, handoffMarkdownOpts())
+	if !strings.Contains(out, "#### Review Checklist") {
+		t.Errorf("handoff markdown Review Candidates missing #### Review Checklist heading; output:\n%s", out)
+	}
+	if !strings.Contains(out, "**Merge Readiness:**") {
+		t.Errorf("handoff markdown Review Candidates missing **Merge Readiness:**; output:\n%s", out)
+	}
+}
+
+// --- merge-readiness report tests ------------------------------------------
+
+// mergeReportStateJSON returns a runtime-state fixture covering all six merge
+// groups: ready-for-merge, reviewing, needs-run (ready-for-worker), blocked,
+// merged, and a task in an unrecognised state that lands in "other".
+func mergeReportStateJSON() []byte {
+	return []byte(`{
+		"schema": "brevity.runtime-state.v1",
+		"repoRoot": "/dev/test",
+		"generatedAt": "2026-01-01T00:00:00Z",
+		"providers": {
+			"summary": {"total": 1, "degraded": 0, "unavailable": 0},
+			"health": {"codex": {"status": "healthy", "updatedAt": "", "note": ""}}
+		},
+		"taskCounts": {"tracked": 6, "runnable": 1, "blocked": 1, "stale": 0, "providerGated": 0, "review": 2},
+		"tasks": [
+			{"slug": "mrg-rfm",     "status": "ready-for-merge", "normalizedState": "ready-for-merge", "workerStatus": "succeeded", "branch": "task/mrg-rfm",     "worktreePath": ""},
+			{"slug": "mrg-review",  "status": "reviewing",       "normalizedState": "reviewing",       "workerStatus": "succeeded", "branch": "task/mrg-review",  "worktreePath": ""},
+			{"slug": "mrg-run",     "status": "ready-for-worker","normalizedState": "ready-for-worker","workerStatus": "",          "branch": "task/mrg-run",     "worktreePath": ""},
+			{"slug": "mrg-blocked", "status": "blocked",         "normalizedState": "blocked",         "workerStatus": "",          "branch": "task/mrg-blocked", "worktreePath": ""},
+			{"slug": "mrg-merged",  "status": "merged",          "normalizedState": "merged",          "workerStatus": "succeeded", "branch": "task/mrg-merged",  "worktreePath": ""},
+			{"slug": "mrg-other",   "status": "queued",          "normalizedState": "queued",          "workerStatus": "",          "branch": "task/mrg-other",   "worktreePath": ""}
+		],
+		"suggestedNextActions": ["Check merge candidates."],
+		"orphanedTaskWorktrees": [],
+		"activeWorktrees": [],
+		"activeWorktreeCount": 0,
+		"groups": {}
+	}`)
+}
+
+// mergeOpts is a shorthand for merge-report text options.
+func mergeOpts() cmux.RenderOptions {
+	return cmux.RenderOptions{MergeReport: true}
+}
+
+// mergeMarkdownOpts is a shorthand for merge-report markdown options.
+func mergeMarkdownOpts() cmux.RenderOptions {
+	return cmux.RenderOptions{MergeReport: true, Output: cmux.OutputMarkdown}
+}
+
+// mergeJSONOpts is a shorthand for merge-report JSON options.
+func mergeJSONOpts() cmux.RenderOptions {
+	return cmux.RenderOptions{MergeReport: true, Output: cmux.OutputJSON}
+}
+
+func TestMerge_DispatchActivated(t *testing.T) {
+	// MergeReport:true must produce the merge header, not the normal CMUX OPERATOR header.
+	snap := cmux.Read(stubFetcher{stateJSON: minimalStateJSON(t), schedulerJSON: minimalSchedulerJSON()})
+	out := renderSnapshotOpts(snap, mergeOpts())
+	if !strings.Contains(out, "CMUX MERGE READINESS") {
+		t.Errorf("merge dispatch missing CMUX MERGE READINESS header; output:\n%s", out)
+	}
+	if strings.Contains(out, "CMUX OPERATOR") {
+		t.Error("merge output must not contain CMUX OPERATOR (normal report) header")
+	}
+}
+
+func TestMerge_Text_Structure(t *testing.T) {
+	snap := cmux.Read(stubFetcher{stateJSON: mergeReportStateJSON(), schedulerJSON: minimalSchedulerJSON()})
+	out := renderSnapshotOpts(snap, mergeOpts())
+	for _, want := range []string{
+		"CMUX MERGE READINESS",
+		"[read-only]",
+		"source: native",
+		"ready-for-merge",
+		"reviewing",
+		"needs-run",
+		"blocked",
+		"merged",
+		"other",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("merge text missing %q; output:\n%s", want, out)
+		}
+	}
+}
+
+func TestMerge_Text_GroupingByState(t *testing.T) {
+	snap := cmux.Read(stubFetcher{stateJSON: mergeReportStateJSON(), schedulerJSON: minimalSchedulerJSON()})
+	out := renderSnapshotOpts(snap, mergeOpts())
+
+	// Each task must appear in its correct group.
+	// We verify positional ordering: the group header appears before the task slug.
+	rfmIdx := strings.Index(out, "ready-for-merge")
+	rfmTaskIdx := strings.Index(out, "mrg-rfm")
+	reviewIdx := strings.Index(out, "\nreviewing")
+	reviewTaskIdx := strings.Index(out, "mrg-review")
+	needsRunIdx := strings.Index(out, "needs-run")
+	needsRunTaskIdx := strings.Index(out, "mrg-run")
+	blockedIdx := strings.Index(out, "\nblocked")
+	blockedTaskIdx := strings.Index(out, "mrg-blocked")
+	mergedIdx := strings.Index(out, "\nmerged")
+	mergedTaskIdx := strings.Index(out, "mrg-merged")
+	otherIdx := strings.Index(out, "\nother")
+	otherTaskIdx := strings.Index(out, "mrg-other")
+
+	if rfmIdx < 0 || rfmTaskIdx < rfmIdx {
+		t.Errorf("mrg-rfm must appear after ready-for-merge group header")
+	}
+	if reviewIdx < 0 || reviewTaskIdx < reviewIdx {
+		t.Errorf("mrg-review must appear after reviewing group header")
+	}
+	if needsRunIdx < 0 || needsRunTaskIdx < needsRunIdx {
+		t.Errorf("mrg-run must appear after needs-run group header")
+	}
+	if blockedIdx < 0 || blockedTaskIdx < blockedIdx {
+		t.Errorf("mrg-blocked must appear after blocked group header")
+	}
+	if mergedIdx < 0 || mergedTaskIdx < mergedIdx {
+		t.Errorf("mrg-merged must appear after merged group header")
+	}
+	if otherIdx < 0 || otherTaskIdx < otherIdx {
+		t.Errorf("mrg-other must appear after other group header")
+	}
+}
+
+func TestMerge_Markdown_Structure(t *testing.T) {
+	snap := cmux.Read(stubFetcher{stateJSON: mergeReportStateJSON(), schedulerJSON: minimalSchedulerJSON()})
+	out := renderSnapshotOpts(snap, mergeMarkdownOpts())
+	for _, want := range []string{
+		"# CMUX Merge Readiness [read-only]",
+		"## ready-for-merge",
+		"## reviewing",
+		"## needs-run",
+		"## blocked",
+		"## merged",
+		"## other",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("merge markdown missing %q; output:\n%s", want, out)
+		}
+	}
+}
+
+func TestMerge_Markdown_StartsWithH1(t *testing.T) {
+	snap := cmux.Read(stubFetcher{stateJSON: minimalStateJSON(t), schedulerJSON: minimalSchedulerJSON()})
+	out := renderSnapshotOpts(snap, mergeMarkdownOpts())
+	if !strings.HasPrefix(out, "# CMUX Merge Readiness") {
+		t.Errorf("merge markdown must start with # CMUX Merge Readiness; prefix: %q", out[:min(len(out), 40)])
+	}
+}
+
+func TestMerge_JSON_Schema(t *testing.T) {
+	snap := cmux.Read(stubFetcher{stateJSON: minimalStateJSON(t), schedulerJSON: minimalSchedulerJSON()})
+	out := renderSnapshotOpts(snap, mergeJSONOpts())
+	var result map[string]any
+	if err := json.Unmarshal([]byte(out), &result); err != nil {
+		t.Fatalf("merge JSON invalid: %v\noutput:\n%s", err, out)
+	}
+	if result["schema"] != "brevity.cmux-merge-report.v1" {
+		t.Errorf("merge JSON schema = %v, want brevity.cmux-merge-report.v1", result["schema"])
+	}
+}
+
+func TestMerge_JSON_GroupsPresent(t *testing.T) {
+	snap := cmux.Read(stubFetcher{stateJSON: mergeReportStateJSON(), schedulerJSON: minimalSchedulerJSON()})
+	out := renderSnapshotOpts(snap, mergeJSONOpts())
+	var result map[string]any
+	if err := json.Unmarshal([]byte(out), &result); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+	groups, ok := result["groups"].([]any)
+	if !ok {
+		t.Fatalf("merge JSON missing groups array; output:\n%s", out)
+	}
+	if len(groups) != 6 {
+		t.Errorf("merge JSON groups len = %d, want 6", len(groups))
+	}
+	// Verify order: first group must be ready-for-merge.
+	first, ok := groups[0].(map[string]any)
+	if !ok {
+		t.Fatal("merge JSON groups[0] is not an object")
+	}
+	if first["group"] != "ready-for-merge" {
+		t.Errorf("merge JSON groups[0].group = %v, want ready-for-merge", first["group"])
+	}
+}
+
+func TestMerge_JSON_EmptyArraysNotNull(t *testing.T) {
+	// With no tasks, every group's tasks field must be [] not null.
+	snap := cmux.Read(stubFetcher{stateJSON: manyTaskStateJSON(0), schedulerJSON: minimalSchedulerJSON()})
+	out := renderSnapshotOpts(snap, mergeJSONOpts())
+	// A null tasks field would appear as `"tasks":null`; [] never does.
+	if strings.Contains(out, `"tasks":null`) {
+		t.Errorf("merge JSON must not contain null tasks array; output:\n%s", out)
+	}
+	if strings.Contains(out, `"errors":null`) {
+		t.Errorf("merge JSON must not contain null errors array; output:\n%s", out)
+	}
+}
+
+func TestMerge_Limit_Applied(t *testing.T) {
+	// mergeReportStateJSON has 1 task per group; all groups with 1 task should
+	// show it; groups with 0 tasks show (none).
+	// Now give needs-run 3 tasks and set limit=1 to trigger truncation.
+	multiRunStateJSON := []byte(`{
+		"schema": "brevity.runtime-state.v1",
+		"repoRoot": "/dev/test",
+		"generatedAt": "2026-01-01T00:00:00Z",
+		"providers": {"summary": {"total": 0, "degraded": 0, "unavailable": 0}, "health": {}},
+		"taskCounts": {"tracked": 3, "runnable": 3, "blocked": 0, "stale": 0, "providerGated": 0, "review": 0},
+		"tasks": [
+			{"slug": "run-a", "status": "ready-for-worker", "normalizedState": "ready-for-worker", "workerStatus": "", "branch": "task/run-a", "worktreePath": ""},
+			{"slug": "run-b", "status": "ready-for-worker", "normalizedState": "ready-for-worker", "workerStatus": "", "branch": "task/run-b", "worktreePath": ""},
+			{"slug": "run-c", "status": "ready-for-worker", "normalizedState": "ready-for-worker", "workerStatus": "", "branch": "task/run-c", "worktreePath": ""}
+		],
+		"suggestedNextActions": [],
+		"orphanedTaskWorktrees": [],
+		"activeWorktrees": [],
+		"activeWorktreeCount": 0,
+		"groups": {}
+	}`)
+	snap := cmux.Read(stubFetcher{stateJSON: multiRunStateJSON, schedulerJSON: minimalSchedulerJSON()})
+	out := renderSnapshotOpts(snap, cmux.RenderOptions{MergeReport: true, Limit: 1})
+	if !strings.Contains(out, "showing 1 of 3") {
+		t.Errorf("merge limit=1 with 3 needs-run tasks must show truncation header; output:\n%s", out)
+	}
+	if strings.Contains(out, "run-b") {
+		t.Errorf("merge limit=1 must not show run-b (second task); output:\n%s", out)
+	}
+}
+
+func TestMerge_EmptyState_NoTasks(t *testing.T) {
+	snap := cmux.Read(stubFetcher{stateJSON: manyTaskStateJSON(0), schedulerJSON: minimalSchedulerJSON()})
+	out := renderSnapshotOpts(snap, mergeOpts())
+	// All groups should show (none).
+	if !strings.Contains(out, "(none)") {
+		t.Errorf("merge empty state must show (none) for groups; output:\n%s", out)
+	}
+}
+
+func TestMerge_EmptyState_Markdown(t *testing.T) {
+	snap := cmux.Read(stubFetcher{stateJSON: manyTaskStateJSON(0), schedulerJSON: minimalSchedulerJSON()})
+	out := renderSnapshotOpts(snap, mergeMarkdownOpts())
+	if !strings.Contains(out, "_None._") {
+		t.Errorf("merge markdown empty state must show _None._; output:\n%s", out)
+	}
+}
+
+func TestMerge_RuntimeStateError_GracefulDegradation(t *testing.T) {
+	snap := cmux.Read(stubFetcher{
+		stateErr:      fmt.Errorf("runtime unreachable"),
+		schedulerJSON: minimalSchedulerJSON(),
+	})
+	out := renderSnapshotOpts(snap, mergeOpts())
+	if !strings.Contains(out, "CMUX MERGE READINESS") {
+		t.Error("merge header must still appear on runtime error")
+	}
+	if !strings.Contains(out, "runtime-state: error") {
+		t.Errorf("merge error degradation must show runtime-state error; output:\n%s", out)
+	}
+}
+
+func TestMerge_NoANSI(t *testing.T) {
+	snap := cmux.Read(stubFetcher{stateJSON: mergeReportStateJSON(), schedulerJSON: minimalSchedulerJSON()})
+	for _, opts := range []cmux.RenderOptions{mergeOpts(), mergeMarkdownOpts(), mergeJSONOpts()} {
+		out := renderSnapshotOpts(snap, opts)
+		if strings.Contains(out, "\x1b[") {
+			t.Errorf("merge output must not contain ANSI escape sequences (mode=%v); output:\n%s", opts.Output, out)
+		}
+	}
+}
+
+func TestMerge_Text_Deterministic(t *testing.T) {
+	snap := cmux.Read(stubFetcher{stateJSON: mergeReportStateJSON(), schedulerJSON: minimalSchedulerJSON()})
+	out1 := renderSnapshotOpts(snap, mergeOpts())
+	out2 := renderSnapshotOpts(snap, mergeOpts())
+	if out1 != out2 {
+		t.Error("merge text output is not deterministic")
+	}
+}
+
+func TestMerge_Markdown_Deterministic(t *testing.T) {
+	snap := cmux.Read(stubFetcher{stateJSON: mergeReportStateJSON(), schedulerJSON: minimalSchedulerJSON()})
+	out1 := renderSnapshotOpts(snap, mergeMarkdownOpts())
+	out2 := renderSnapshotOpts(snap, mergeMarkdownOpts())
+	if out1 != out2 {
+		t.Error("merge markdown output is not deterministic")
+	}
+}
+
+func TestMerge_JSON_Deterministic(t *testing.T) {
+	snap := cmux.Read(stubFetcher{stateJSON: mergeReportStateJSON(), schedulerJSON: minimalSchedulerJSON()})
+	out1 := renderSnapshotOpts(snap, mergeJSONOpts())
+	out2 := renderSnapshotOpts(snap, mergeJSONOpts())
+	if out1 != out2 {
+		t.Error("merge JSON output is not deterministic")
+	}
+}
+
+func TestMerge_NormalOutput_Unchanged(t *testing.T) {
+	// Without MergeReport:true the normal text render must not produce merge output.
+	snap := cmux.Read(stubFetcher{stateJSON: minimalStateJSON(t), schedulerJSON: minimalSchedulerJSON()})
+	out := renderSnapshotOpts(snap, cmux.RenderOptions{})
+	if strings.Contains(out, "CMUX MERGE READINESS") {
+		t.Error("normal output must not contain CMUX MERGE READINESS header")
+	}
+}
+
+func TestMerge_JSON_OptionsBlock(t *testing.T) {
+	snap := cmux.Read(stubFetcher{stateJSON: mergeReportStateJSON(), schedulerJSON: minimalSchedulerJSON()})
+	out := renderSnapshotOpts(snap, cmux.RenderOptions{MergeReport: true, Output: cmux.OutputJSON, Limit: 5})
+	var result map[string]any
+	if err := json.Unmarshal([]byte(out), &result); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+	options, ok := result["options"].(map[string]any)
+	if !ok {
+		t.Fatalf("merge JSON missing options object; output:\n%s", out)
+	}
+	if options["limit"] != float64(5) {
+		t.Errorf("merge JSON options.limit must be 5; got %v", options["limit"])
+	}
+	if options["output"] != "json" {
+		t.Errorf("merge JSON options.output must be \"json\"; got %v", options["output"])
+	}
+}
+
+func TestMerge_GroupOrder_ReadyForMergeFirst(t *testing.T) {
+	// The groups slice must follow mergeGroupOrder: ready-for-merge is index 0.
+	snap := cmux.Read(stubFetcher{stateJSON: mergeReportStateJSON(), schedulerJSON: minimalSchedulerJSON()})
+	out := renderSnapshotOpts(snap, mergeJSONOpts())
+	var result map[string]any
+	if err := json.Unmarshal([]byte(out), &result); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+	groups := result["groups"].([]any)
+	wantOrder := []string{"ready-for-merge", "reviewing", "needs-run", "blocked", "merged", "other"}
+	for i, wantGroup := range wantOrder {
+		g := groups[i].(map[string]any)
+		if g["group"] != wantGroup {
+			t.Errorf("merge JSON groups[%d].group = %v, want %s", i, g["group"], wantGroup)
+		}
+	}
+}
+
 func TestReview_OverridesSection(t *testing.T) {
 	// --review overrides --section; section=providers is ignored.
 	snap := cmux.Read(stubFetcher{
@@ -2389,5 +3053,418 @@ func TestReview_OverridesSection(t *testing.T) {
 	}
 	if !strings.Contains(out, "Review Checklist") {
 		t.Error("review mode with section override must still show Review Checklist")
+	}
+}
+
+// --- blocked report tests --------------------------------------------------
+
+// blockedStateJSON returns a runtime-state fixture covering the blocked and
+// provider-gated task states used by the blocked-report tests.
+func blockedStateJSON() []byte {
+	return []byte(`{
+		"schema": "brevity.runtime-state.v1",
+		"repoRoot": "/dev/test",
+		"generatedAt": "2026-01-01T00:00:00Z",
+		"providers": {
+			"summary": {"total": 2, "degraded": 1, "unavailable": 0},
+			"health": {
+				"codex":  {"status": "healthy",  "updatedAt": "", "note": ""},
+				"gemini": {"status": "degraded", "updatedAt": "", "note": "quota exceeded"}
+			}
+		},
+		"taskCounts": {"tracked": 3, "runnable": 0, "blocked": 1, "stale": 0, "providerGated": 1, "review": 0},
+		"tasks": [
+			{
+				"slug": "blk-pgated",
+				"status": "provider-gated",
+				"normalizedState": "provider-gated",
+				"providerGated": true,
+				"provider": "gemini",
+				"providerHealth": "degraded",
+				"workerStatus": "",
+				"branch": "task/blk-pgated",
+				"worktreePath": ""
+			},
+			{
+				"slug": "blk-blocked",
+				"status": "blocked",
+				"normalizedState": "blocked",
+				"providerGated": false,
+				"provider": "codex",
+				"providerHealth": "healthy",
+				"workerStatus": "failed",
+				"latestRunWorkerStatus": "failed",
+				"latestRunFailureType": "context-exceeded",
+				"branch": "task/blk-blocked",
+				"worktreePath": ""
+			},
+			{
+				"slug": "blk-runnable",
+				"status": "ready-for-worker",
+				"normalizedState": "ready-for-worker",
+				"providerGated": false,
+				"provider": "codex",
+				"providerHealth": "healthy",
+				"workerStatus": "",
+				"branch": "task/blk-runnable",
+				"worktreePath": ""
+			}
+		],
+		"suggestedNextActions": ["Check blocked tasks."],
+		"orphanedTaskWorktrees": [],
+		"activeWorktrees": [],
+		"activeWorktreeCount": 0,
+		"groups": {}
+	}`)
+}
+
+// skippedSchedulerJSON returns a scheduler-plan fixture with one skipped item.
+func skippedSchedulerJSON() []byte {
+	return []byte(`{
+		"schema": "brevity.runtime-scheduler-plan.v1",
+		"queuePath": ".brevity/runtime-queue.json",
+		"queueState": "valid",
+		"queueVersion": 1,
+		"supportedQueueVersion": 1,
+		"noSelectionReason": "all items skipped",
+		"reservationEligible": false,
+		"reservationEligibility": "not eligible: no selected queue item",
+		"skipped": [
+			{
+				"id":       "queue-item-abc123",
+				"task":     "blk-blocked",
+				"provider": "codex",
+				"profile":  "default",
+				"status":   "reserved",
+				"reason":   "item is already reserved by another worker"
+			}
+		],
+		"safetyChecks": [],
+		"readOnly": true
+	}`)
+}
+
+// blockedOpts is a shorthand for blocked-report text options.
+func blockedOpts() cmux.RenderOptions {
+	return cmux.RenderOptions{BlockedReport: true}
+}
+
+// blockedMarkdownOpts is a shorthand for blocked-report markdown options.
+func blockedMarkdownOpts() cmux.RenderOptions {
+	return cmux.RenderOptions{BlockedReport: true, Output: cmux.OutputMarkdown}
+}
+
+// blockedJSONOpts is a shorthand for blocked-report JSON options.
+func blockedJSONOpts() cmux.RenderOptions {
+	return cmux.RenderOptions{BlockedReport: true, Output: cmux.OutputJSON}
+}
+
+func TestBlocked_DispatchActivated(t *testing.T) {
+	// BlockedReport:true must produce the blocked header, not the normal header.
+	snap := cmux.Read(stubFetcher{stateJSON: minimalStateJSON(t), schedulerJSON: minimalSchedulerJSON()})
+	out := renderSnapshotOpts(snap, blockedOpts())
+	if !strings.Contains(out, "CMUX BLOCKED REPORT") {
+		t.Errorf("blocked dispatch missing CMUX BLOCKED REPORT header; output:\n%s", out)
+	}
+	if strings.Contains(out, "CMUX OPERATOR") {
+		t.Error("blocked output must not contain CMUX OPERATOR (normal report) header")
+	}
+}
+
+func TestBlocked_Text_Structure(t *testing.T) {
+	snap := cmux.Read(stubFetcher{stateJSON: blockedStateJSON(), schedulerJSON: minimalSchedulerJSON()})
+	out := renderSnapshotOpts(snap, blockedOpts())
+	for _, want := range []string{
+		"CMUX BLOCKED REPORT",
+		"[read-only]",
+		"source: native",
+		"Summary",
+		"provider-gated",
+		"blocked",
+		"reserved-or-queue-gated",
+		"unknown",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("blocked text missing %q; output:\n%s", want, out)
+		}
+	}
+}
+
+func TestBlocked_Text_GroupingByState(t *testing.T) {
+	snap := cmux.Read(stubFetcher{stateJSON: blockedStateJSON(), schedulerJSON: minimalSchedulerJSON()})
+	out := renderSnapshotOpts(snap, blockedOpts())
+
+	// blk-pgated must appear in the provider-gated section.
+	pgIdx := strings.Index(out, "provider-gated")
+	pgTaskIdx := strings.Index(out, "blk-pgated")
+	blkIdx := strings.Index(out, "\nblocked")
+	blkTaskIdx := strings.Index(out, "blk-blocked")
+
+	if pgIdx < 0 || pgTaskIdx < pgIdx {
+		t.Errorf("blk-pgated must appear after provider-gated header; output:\n%s", out)
+	}
+	if blkIdx < 0 || blkTaskIdx < blkIdx {
+		t.Errorf("blk-blocked must appear after blocked header; output:\n%s", out)
+	}
+	// blk-runnable is ready-for-worker and must NOT appear in any blocked group.
+	if strings.Contains(out, "blk-runnable") {
+		t.Errorf("blk-runnable (ready-for-worker) must not appear in blocked report; output:\n%s", out)
+	}
+}
+
+func TestBlocked_Text_SkippedQueueItemsIncluded(t *testing.T) {
+	snap := cmux.Read(stubFetcher{stateJSON: blockedStateJSON(), schedulerJSON: skippedSchedulerJSON()})
+	out := renderSnapshotOpts(snap, blockedOpts())
+	if !strings.Contains(out, "queue-item-abc123") {
+		t.Errorf("skipped queue item ID must appear in blocked report; output:\n%s", out)
+	}
+	if !strings.Contains(out, "already reserved") {
+		t.Errorf("skipped queue item reason must appear in blocked report; output:\n%s", out)
+	}
+}
+
+func TestBlocked_Text_ReasonForProviderGated(t *testing.T) {
+	snap := cmux.Read(stubFetcher{stateJSON: blockedStateJSON(), schedulerJSON: minimalSchedulerJSON()})
+	out := renderSnapshotOpts(snap, blockedOpts())
+	// blk-pgated has provider=gemini, providerHealth=degraded; reason must mention provider.
+	if !strings.Contains(out, "likely provider") {
+		t.Errorf("provider-gated task must include likely provider reason; output:\n%s", out)
+	}
+}
+
+func TestBlocked_Text_ReasonForBlocked(t *testing.T) {
+	snap := cmux.Read(stubFetcher{stateJSON: blockedStateJSON(), schedulerJSON: minimalSchedulerJSON()})
+	out := renderSnapshotOpts(snap, blockedOpts())
+	// blk-blocked has latestRunFailureType=context-exceeded.
+	if !strings.Contains(out, "context-exceeded") {
+		t.Errorf("blocked task with failure type must show that type as reason; output:\n%s", out)
+	}
+}
+
+func TestBlocked_Text_ReasonUnavailableWhenMissing(t *testing.T) {
+	// A task with normalizedState=blocked but no latestRunFailureType must show
+	// "reason unavailable from current contract".
+	noReasonStateJSON := []byte(`{
+		"schema": "brevity.runtime-state.v1",
+		"repoRoot": "/dev/test",
+		"generatedAt": "2026-01-01T00:00:00Z",
+		"providers": {"summary": {"total": 0, "degraded": 0, "unavailable": 0}, "health": {}},
+		"taskCounts": {"tracked": 1, "runnable": 0, "blocked": 1, "stale": 0, "providerGated": 0, "review": 0},
+		"tasks": [
+			{
+				"slug": "stuck-task",
+				"status": "blocked",
+				"normalizedState": "blocked",
+				"providerGated": false,
+				"workerStatus": "",
+				"branch": "task/stuck-task",
+				"worktreePath": ""
+			}
+		],
+		"suggestedNextActions": [],
+		"orphanedTaskWorktrees": [],
+		"activeWorktrees": [],
+		"activeWorktreeCount": 0,
+		"groups": {}
+	}`)
+	snap := cmux.Read(stubFetcher{stateJSON: noReasonStateJSON, schedulerJSON: minimalSchedulerJSON()})
+	out := renderSnapshotOpts(snap, blockedOpts())
+	if !strings.Contains(out, "reason unavailable from current contract") {
+		t.Errorf("blocked task with no failure type must show unavailable reason; output:\n%s", out)
+	}
+}
+
+func TestBlocked_Markdown_Structure(t *testing.T) {
+	snap := cmux.Read(stubFetcher{stateJSON: blockedStateJSON(), schedulerJSON: minimalSchedulerJSON()})
+	out := renderSnapshotOpts(snap, blockedMarkdownOpts())
+	for _, want := range []string{
+		"# CMUX Blocked Report [read-only]",
+		"## Summary",
+		"## provider-gated",
+		"## blocked",
+		"## reserved-or-queue-gated",
+		"## unknown",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("blocked markdown missing %q; output:\n%s", want, out)
+		}
+	}
+}
+
+func TestBlocked_Markdown_StartsWithH1(t *testing.T) {
+	snap := cmux.Read(stubFetcher{stateJSON: minimalStateJSON(t), schedulerJSON: minimalSchedulerJSON()})
+	out := renderSnapshotOpts(snap, blockedMarkdownOpts())
+	if !strings.HasPrefix(out, "# CMUX Blocked Report") {
+		t.Errorf("blocked markdown must start with # CMUX Blocked Report; prefix: %q", out[:min(len(out), 40)])
+	}
+}
+
+func TestBlocked_JSON_Schema(t *testing.T) {
+	snap := cmux.Read(stubFetcher{stateJSON: minimalStateJSON(t), schedulerJSON: minimalSchedulerJSON()})
+	out := renderSnapshotOpts(snap, blockedJSONOpts())
+	var result map[string]any
+	if err := json.Unmarshal([]byte(out), &result); err != nil {
+		t.Fatalf("blocked JSON invalid: %v\noutput:\n%s", err, out)
+	}
+	if result["schema"] != "brevity.cmux-blocked-report.v1" {
+		t.Errorf("blocked JSON schema = %v, want brevity.cmux-blocked-report.v1", result["schema"])
+	}
+}
+
+func TestBlocked_JSON_StructureFields(t *testing.T) {
+	snap := cmux.Read(stubFetcher{stateJSON: blockedStateJSON(), schedulerJSON: skippedSchedulerJSON()})
+	out := renderSnapshotOpts(snap, blockedJSONOpts())
+	var result map[string]any
+	if err := json.Unmarshal([]byte(out), &result); err != nil {
+		t.Fatalf("blocked JSON invalid: %v\noutput:\n%s", err, out)
+	}
+	for _, field := range []string{"schema", "source", "options", "errors", "summary", "providerGated", "blocked", "reservedOrQueueGated", "unknown"} {
+		if _, ok := result[field]; !ok {
+			t.Errorf("blocked JSON missing top-level field %q; output:\n%s", field, out)
+		}
+	}
+}
+
+func TestBlocked_JSON_EmptyArraysNotNull(t *testing.T) {
+	snap := cmux.Read(stubFetcher{stateJSON: manyTaskStateJSON(0), schedulerJSON: minimalSchedulerJSON()})
+	out := renderSnapshotOpts(snap, blockedJSONOpts())
+	if strings.Contains(out, `null`) {
+		t.Errorf("blocked JSON must not contain null values for array/slice fields; output:\n%s", out)
+	}
+}
+
+func TestBlocked_JSON_SummaryTotals(t *testing.T) {
+	snap := cmux.Read(stubFetcher{stateJSON: blockedStateJSON(), schedulerJSON: minimalSchedulerJSON()})
+	out := renderSnapshotOpts(snap, blockedJSONOpts())
+	var result map[string]any
+	if err := json.Unmarshal([]byte(out), &result); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+	summary := result["summary"].(map[string]any)
+	// blockedStateJSON has 1 provider-gated + 1 blocked = 2 total (no queue items in minimal scheduler).
+	if summary["providerGated"] != float64(1) {
+		t.Errorf("summary.providerGated = %v, want 1", summary["providerGated"])
+	}
+	if summary["blocked"] != float64(1) {
+		t.Errorf("summary.blocked = %v, want 1", summary["blocked"])
+	}
+	if summary["total"] != float64(2) {
+		t.Errorf("summary.total = %v, want 2", summary["total"])
+	}
+}
+
+func TestBlocked_JSON_SkippedQueueItem(t *testing.T) {
+	snap := cmux.Read(stubFetcher{stateJSON: blockedStateJSON(), schedulerJSON: skippedSchedulerJSON()})
+	out := renderSnapshotOpts(snap, blockedJSONOpts())
+	if !strings.Contains(out, "queue-item-abc123") {
+		t.Errorf("blocked JSON must include skipped queue item ID; output:\n%s", out)
+	}
+	if !strings.Contains(out, "already reserved") {
+		t.Errorf("blocked JSON must include skip reason; output:\n%s", out)
+	}
+}
+
+func TestBlocked_Limit_Applied(t *testing.T) {
+	// Build state with 3 blocked tasks; limit=1 must truncate to 1 and show header.
+	threeBlockedJSON := []byte(`{
+		"schema": "brevity.runtime-state.v1",
+		"repoRoot": "/dev/test",
+		"generatedAt": "2026-01-01T00:00:00Z",
+		"providers": {"summary": {"total": 0, "degraded": 0, "unavailable": 0}, "health": {}},
+		"taskCounts": {"tracked": 3, "runnable": 0, "blocked": 3, "stale": 0, "providerGated": 0, "review": 0},
+		"tasks": [
+			{"slug": "blk-a", "status": "blocked", "normalizedState": "blocked", "workerStatus": "", "branch": "task/blk-a", "worktreePath": ""},
+			{"slug": "blk-b", "status": "blocked", "normalizedState": "blocked", "workerStatus": "", "branch": "task/blk-b", "worktreePath": ""},
+			{"slug": "blk-c", "status": "blocked", "normalizedState": "blocked", "workerStatus": "", "branch": "task/blk-c", "worktreePath": ""}
+		],
+		"suggestedNextActions": [],
+		"orphanedTaskWorktrees": [],
+		"activeWorktrees": [],
+		"activeWorktreeCount": 0,
+		"groups": {}
+	}`)
+	snap := cmux.Read(stubFetcher{stateJSON: threeBlockedJSON, schedulerJSON: minimalSchedulerJSON()})
+	out := renderSnapshotOpts(snap, cmux.RenderOptions{BlockedReport: true, Limit: 1})
+	if !strings.Contains(out, "showing 1 of 3") {
+		t.Errorf("blocked limit=1 with 3 blocked tasks must show truncation header; output:\n%s", out)
+	}
+	if strings.Contains(out, "blk-b") {
+		t.Errorf("blocked limit=1 must not show blk-b (second task); output:\n%s", out)
+	}
+}
+
+func TestBlocked_EmptyState_NoTasks(t *testing.T) {
+	snap := cmux.Read(stubFetcher{stateJSON: manyTaskStateJSON(0), schedulerJSON: minimalSchedulerJSON()})
+	out := renderSnapshotOpts(snap, blockedOpts())
+	if !strings.Contains(out, "(none)") {
+		t.Errorf("blocked empty state must show (none) for groups with no tasks; output:\n%s", out)
+	}
+}
+
+func TestBlocked_EmptyState_Markdown(t *testing.T) {
+	snap := cmux.Read(stubFetcher{stateJSON: manyTaskStateJSON(0), schedulerJSON: minimalSchedulerJSON()})
+	out := renderSnapshotOpts(snap, blockedMarkdownOpts())
+	if !strings.Contains(out, "_None._") {
+		t.Errorf("blocked markdown empty state must show _None._; output:\n%s", out)
+	}
+}
+
+func TestBlocked_NoANSI(t *testing.T) {
+	snap := cmux.Read(stubFetcher{stateJSON: blockedStateJSON(), schedulerJSON: skippedSchedulerJSON()})
+	for _, opts := range []cmux.RenderOptions{blockedOpts(), blockedMarkdownOpts(), blockedJSONOpts()} {
+		out := renderSnapshotOpts(snap, opts)
+		if strings.Contains(out, "\x1b[") {
+			t.Errorf("blocked output must not contain ANSI escape sequences (mode=%v); output:\n%s", opts.Output, out)
+		}
+	}
+}
+
+func TestBlocked_Text_Deterministic(t *testing.T) {
+	snap := cmux.Read(stubFetcher{stateJSON: blockedStateJSON(), schedulerJSON: skippedSchedulerJSON()})
+	out1 := renderSnapshotOpts(snap, blockedOpts())
+	out2 := renderSnapshotOpts(snap, blockedOpts())
+	if out1 != out2 {
+		t.Error("blocked text output is not deterministic")
+	}
+}
+
+func TestBlocked_Markdown_Deterministic(t *testing.T) {
+	snap := cmux.Read(stubFetcher{stateJSON: blockedStateJSON(), schedulerJSON: skippedSchedulerJSON()})
+	out1 := renderSnapshotOpts(snap, blockedMarkdownOpts())
+	out2 := renderSnapshotOpts(snap, blockedMarkdownOpts())
+	if out1 != out2 {
+		t.Error("blocked markdown output is not deterministic")
+	}
+}
+
+func TestBlocked_JSON_Deterministic(t *testing.T) {
+	snap := cmux.Read(stubFetcher{stateJSON: blockedStateJSON(), schedulerJSON: skippedSchedulerJSON()})
+	out1 := renderSnapshotOpts(snap, blockedJSONOpts())
+	out2 := renderSnapshotOpts(snap, blockedJSONOpts())
+	if out1 != out2 {
+		t.Error("blocked JSON output is not deterministic")
+	}
+}
+
+func TestBlocked_NormalOutput_Unchanged(t *testing.T) {
+	// Without BlockedReport:true the default text render must not produce blocked output.
+	snap := cmux.Read(stubFetcher{stateJSON: blockedStateJSON(), schedulerJSON: minimalSchedulerJSON()})
+	out := renderSnapshotOpts(snap, cmux.RenderOptions{})
+	if strings.Contains(out, "CMUX BLOCKED REPORT") {
+		t.Error("normal output must not contain CMUX BLOCKED REPORT header")
+	}
+}
+
+func TestBlocked_RuntimeStateError_GracefulDegradation(t *testing.T) {
+	snap := cmux.Read(stubFetcher{
+		stateErr:      fmt.Errorf("runtime unreachable"),
+		schedulerJSON: minimalSchedulerJSON(),
+	})
+	out := renderSnapshotOpts(snap, blockedOpts())
+	if !strings.Contains(out, "CMUX BLOCKED REPORT") {
+		t.Error("blocked header must still appear on runtime error")
+	}
+	if !strings.Contains(out, "runtime-state: error") {
+		t.Errorf("blocked error degradation must show runtime-state error; output:\n%s", out)
 	}
 }
