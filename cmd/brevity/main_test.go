@@ -1193,6 +1193,43 @@ func TestRunWritesHelp(t *testing.T) {
 	}
 }
 
+func TestRunCmuxHelp(t *testing.T) {
+	for _, args := range [][]string{
+		{"cmux", "--help"},
+		{"cmux", "-h"},
+	} {
+		t.Run(strings.Join(args, " "), func(t *testing.T) {
+			var stdout bytes.Buffer
+			if err := run(&stdout, args); err != nil {
+				t.Fatalf("run returned error: %v", err)
+			}
+			output := stdout.String()
+			for _, want := range []string{
+				"brevity cmux",
+				"[read-only]",
+				"--limit",
+				"--section",
+				"--task",
+				"--state",
+				"--output",
+				"text",
+				"markdown",
+				"json",
+				"brevity.cmux-report.v1",
+				"Examples:",
+			} {
+				if !strings.Contains(output, want) {
+					t.Errorf("cmux help missing %q;\noutput:\n%s", want, output)
+				}
+			}
+			// Must not show the generic dashboard help.
+			if strings.Contains(output, "--once") {
+				t.Error("cmux help must not contain --once (generic dashboard flag)")
+			}
+		})
+	}
+}
+
 func TestParseOptionsRejectsUnknownFlag(t *testing.T) {
 	_, err := parseOptions([]string{"--unknown"})
 	if err == nil {
@@ -2134,7 +2171,14 @@ func tempRepoWithProviderHealth(t *testing.T, health string) string {
 
 func tempGitRepoForTaskNew(t *testing.T) string {
 	t.Helper()
-	repoRoot := t.TempDir()
+	raw := t.TempDir()
+	// On Windows, t.TempDir returns 8.3 short-name paths (e.g. MORTEN~1),
+	// but git resolves worktree paths to their long-name canonical form.
+	// EvalSymlinks normalises the path so worktreeRegistered comparisons succeed.
+	repoRoot, err := filepath.EvalSymlinks(raw)
+	if err != nil {
+		t.Fatalf("EvalSymlinks on temp dir: %v", err)
+	}
 	runTestCommand(t, repoRoot, "git", "init")
 	runTestCommand(t, repoRoot, "git", "config", "user.email", "brevity@example.test")
 	runTestCommand(t, repoRoot, "git", "config", "user.name", "Brevity Test")

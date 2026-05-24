@@ -16,6 +16,7 @@ import (
 	"github.com/mortenlein/brevity/internal/actions"
 	"github.com/mortenlein/brevity/internal/bubbleteadashboard"
 	nativecleanup "github.com/mortenlein/brevity/internal/cleanup"
+	"github.com/mortenlein/brevity/internal/cmux"
 	"github.com/mortenlein/brevity/internal/commands"
 	"github.com/mortenlein/brevity/internal/contracts"
 	"github.com/mortenlein/brevity/internal/dashboard"
@@ -89,6 +90,7 @@ const (
 	commandCleanupPlan          commandKind = commandKind(commands.CleanupPlanID)
 	commandCleanupExecute       commandKind = commandKind(commands.CleanupExecuteID)
 	commandSupportMatrix        commandKind = "support-matrix"
+	commandCmux                 commandKind = "cmux"
 )
 
 type cliOptions struct {
@@ -115,6 +117,12 @@ type cliOptions struct {
 	repair          bool
 	candidateID     string
 	preflightAction preflight.Action
+	cmuxLimit       int
+	cmuxSection     string
+	cmuxTask        string
+	cmuxState       string
+	cmuxOutput      string
+	cmuxReview      string
 }
 
 type actionCall func() ([]byte, error)
@@ -136,6 +144,11 @@ func parseOptions(args []string) (cliOptions, error) {
 	for _, arg := range args {
 		if arg == "--help" || arg == "-h" {
 			options.help = true
+			// Preserve the subcommand kind so the help dispatcher can show
+			// subcommand-specific text rather than the generic dashboard help.
+			if len(args) > 0 && args[0] == "cmux" {
+				options.kind = commandCmux
+			}
 			return options, nil
 		}
 	}
@@ -172,6 +185,9 @@ func parseOptions(args []string) (cliOptions, error) {
 	}
 	if len(args) > 0 && args[0] == "support" {
 		return parseSupportOptions(args)
+	}
+	if len(args) > 0 && args[0] == "cmux" {
+		return parseCmuxOptions(args)
 	}
 
 	flags := flag.NewFlagSet("brevity", flag.ContinueOnError)
@@ -352,6 +368,60 @@ func parseInitOptions(args []string) (cliOptions, error) {
 		}
 	}
 	return options, nil
+}
+
+func parseCmuxOptions(args []string) (cliOptions, error) {
+	flags := flag.NewFlagSet("brevity cmux", flag.ContinueOnError)
+	flags.SetOutput(io.Discard)
+	limit := flags.Int("limit", cmux.DefaultLimit, "maximum number of tasks to show")
+	section := flags.String("section", cmux.SectionAll, "section to render: all, providers, tasks, queue, actions")
+	task := flags.String("task", "", "filter task list to this exact task slug")
+	state := flags.String("state", "", "filter task list to tasks with this normalised state")
+	output := flags.String("output", string(cmux.OutputText), "output format: text, markdown, or json")
+	review := flags.String("review", "", "generate a focused review packet for this task slug")
+	if err := flags.Parse(args[1:]); err != nil {
+		return cliOptions{}, fmt.Errorf("usage: brevity cmux [--limit <n>] [--section <name>] [--task <slug>] [--state <state>] [--output text|markdown|json] [--review <slug>]")
+	}
+	if flags.NArg() > 0 {
+		return cliOptions{}, fmt.Errorf("usage: brevity cmux [--limit <n>] [--section <name>] [--task <slug>] [--state <state>] [--output text|markdown|json] [--review <slug>]")
+	}
+	switch *section {
+	case cmux.SectionAll, cmux.SectionProviders, cmux.SectionTasks, cmux.SectionQueue, cmux.SectionActions:
+		// valid
+	default:
+		return cliOptions{}, fmt.Errorf("invalid --section %q: allowed values: all, providers, tasks, queue, actions", *section)
+	}
+	if *limit <= 0 {
+		return cliOptions{}, fmt.Errorf("invalid --limit %d: must be greater than zero", *limit)
+	}
+	switch cmux.OutputMode(*output) {
+	case cmux.OutputText, cmux.OutputMarkdown, cmux.OutputJSON:
+		// valid
+	default:
+		return cliOptions{}, fmt.Errorf("invalid --output %q: allowed values: text, markdown, json", *output)
+	}
+	return cliOptions{
+		kind:        commandCmux,
+		cmuxLimit:   *limit,
+		cmuxSection: *section,
+		cmuxTask:    *task,
+		cmuxState:   *state,
+		cmuxOutput:  *output,
+		cmuxReview:  *review,
+	}, nil
+}
+
+func routeCmuxCommand(stdout io.Writer, options cliOptions) error {
+	snap := cmux.Read(cmux.NativeFetcher{})
+	cmux.Render(stdout, snap, cmux.RenderOptions{
+		Limit:       options.cmuxLimit,
+		Section:     options.cmuxSection,
+		TaskSlug:    options.cmuxTask,
+		StateFilter: options.cmuxState,
+		Output:      cmux.OutputMode(options.cmuxOutput),
+		ReviewTask:  options.cmuxReview,
+	})
+	return nil
 }
 
 func parseSupportOptions(args []string) (cliOptions, error) {
@@ -890,7 +960,11 @@ func run(stdout io.Writer, args []string) error {
 		return err
 	}
 	if options.help {
-		writeUsage(stdout)
+		if options.kind == commandCmux {
+			writeCmuxUsage(stdout)
+		} else {
+			writeUsage(stdout)
+		}
 		return nil
 	}
 
@@ -947,6 +1021,8 @@ func runWithContextOptions(ctx context.Context, stdout io.Writer, client runtime
 		return routeCleanupCommand(stdout, options)
 	case commandSupportMatrix:
 		return routeSupportMatrixCommand(stdout, options)
+	case commandCmux:
+		return routeCmuxCommand(stdout, options)
 	default:
 		if options.bubble {
 			if options.refresh <= 0 {
@@ -2617,4 +2693,46 @@ func writeUsage(stdout io.Writer) {
 	fmt.Fprintln(stdout, "  --json-source <source>    Runtime JSON source: powershell or native.")
 	fmt.Fprintln(stdout, "  --no-clear                Do not clear before changed dashboard renders.")
 	fmt.Fprintln(stdout, "  -h, --help                Show this help text.")
+}
+
+// writeCmuxUsage writes the brevity cmux subcommand help to stdout.
+func writeCmuxUsage(stdout io.Writer) {
+	fmt.Fprintln(stdout, "brevity cmux  [read-only]")
+	fmt.Fprintln(stdout)
+	fmt.Fprintln(stdout, "Render a one-shot CMUX operator report from the native Brevity runtime.")
+	fmt.Fprintln(stdout, "Exits after a single render.  No watch mode, no terminal clearing,")
+	fmt.Fprintln(stdout, "no keyboard input.  Safe in remote sessions, CI pipelines, and AI contexts.")
+	fmt.Fprintln(stdout)
+	fmt.Fprintln(stdout, "Usage:")
+	fmt.Fprintln(stdout, "  brevity cmux [flags]")
+	fmt.Fprintln(stdout)
+	fmt.Fprintln(stdout, "Flags:")
+	fmt.Fprintln(stdout, "  --limit <n>               Maximum tasks in the task list (default: 10).")
+	fmt.Fprintln(stdout, "  --section <name>          Section to render (default: all).")
+	fmt.Fprintln(stdout, "                            Allowed: all, providers, tasks, queue, actions.")
+	fmt.Fprintln(stdout, "  --task <slug>             Show only the task with this exact slug.")
+	fmt.Fprintln(stdout, "  --state <state>           Show only tasks with this normalized state")
+	fmt.Fprintln(stdout, "                            (case-insensitive).")
+	fmt.Fprintln(stdout, "  --output <mode>           Output format (default: text).")
+	fmt.Fprintln(stdout, "                            Allowed: text, markdown, json.")
+	fmt.Fprintln(stdout, "  --review <slug>           Generate a focused review packet for this task.")
+	fmt.Fprintln(stdout, "                            Overrides --section and --task; --output applies.")
+	fmt.Fprintln(stdout, "  -h, --help                Show this help.")
+	fmt.Fprintln(stdout)
+	fmt.Fprintln(stdout, "Output modes:")
+	fmt.Fprintln(stdout, "  text       Terminal operator report.  Plain text, no ANSI, pipe-safe.")
+	fmt.Fprintln(stdout, "  markdown   AI/human-readable report.  GitHub-Flavoured Markdown.")
+	fmt.Fprintln(stdout, "  json       Machine-readable report.   Schema: brevity.cmux-report.v1.")
+	fmt.Fprintln(stdout)
+	fmt.Fprintln(stdout, "Examples:")
+	fmt.Fprintln(stdout, "  brevity cmux")
+	fmt.Fprintln(stdout, "  brevity cmux --section tasks")
+	fmt.Fprintln(stdout, "  brevity cmux --section tasks --state reviewing")
+	fmt.Fprintln(stdout, "  brevity cmux --task my-task")
+	fmt.Fprintln(stdout, "  brevity cmux --output markdown")
+	fmt.Fprintln(stdout, "  brevity cmux --output json --section queue")
+	fmt.Fprintln(stdout, "  brevity cmux --limit 20")
+	fmt.Fprintln(stdout, "  brevity cmux --review my-task")
+	fmt.Fprintln(stdout, "  brevity cmux --review my-task --output markdown")
+	fmt.Fprintln(stdout, "  brevity cmux --review my-task --output json")
 }
