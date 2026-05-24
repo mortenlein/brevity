@@ -79,6 +79,13 @@ type RenderOptions struct {
 	// details with checklists, suggested next actions, and a read-only safety
 	// attestation.
 	Handoff bool
+
+	// MergeReport, when true, activates merge-readiness report mode.
+	// MergeReport mode ignores --section, --task, and --state filters;
+	// --limit and --output still apply.  Tasks are grouped into six canonical
+	// merge groups: ready-for-merge, reviewing, needs-run, blocked, merged,
+	// and other.
+	MergeReport bool
 }
 
 // effectiveLimit returns the active task limit, always >= 1.
