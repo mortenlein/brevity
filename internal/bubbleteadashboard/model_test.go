@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"regexp"
 	"strings"
 	"testing"
@@ -1312,7 +1313,12 @@ func TestModelViewRendersOperatorSections(t *testing.T) {
 	output := plainView(model.View())
 	for _, want := range []string{
 		"Brevity | native | read-only | alerts !3 | p:1 t:1 c:1",
-		"Runtime Summary",
+		"Brevity Runtime",
+		"[Runtime",
+		"[Queue",
+		"[Scheduler",
+		"[Executions",
+		"[Next Action]",
 		"Runtime Signals",
 		"> prov  codex    degraded !",
 		"Selected Detail",
@@ -2762,17 +2768,17 @@ func TestSummaryWarningCountsReadableAcrossWidths(t *testing.T) {
 		{
 			name:  "narrow",
 			width: 46,
-			want:  []string{"status", "providers", "!3", "tasks", "!1", "cleanup", "candidates", "!1"},
+			want:  []string{"Brevity Runtime", "[Runtime", "[Queue", "[Scheduler", "[Next Action]"},
 		},
 		{
 			name:  "medium",
 			width: 82,
-			want:  []string{"status    1 providers | 1 degraded | 0 unavailable | 0 runnable", "tasks     1 tracked | 0 runnable | 1 blocked | 0 stale | 0 gated | 0 review !1", "cleanup   1 candidates | 1 inspect !1"},
+			want:  []string{"supervisor [ATTENTION]", "provider health 1 prov", "[Queue", "file health [UNKNOWN]", "command Inspect state."},
 		},
 		{
 			name:  "wide",
 			width: 120,
-			want:  []string{"status    1 providers | 1 degraded | 0 unavailable | 0 runnable | 1 cleanup candidate !3", "tasks     1 tracked | 0 runnable | 1 blocked | 0 stale | 0 gated | 0 review !1", "cleanup   1 candidates | 1 inspect !1"},
+			want:  []string{"supervisor [ATTENTION]", "provider health 1 providers | 1 degraded | 0 unavailable", "reason runtime suggested next action"},
 		},
 	}
 
@@ -2794,8 +2800,8 @@ func TestSummaryWarningCountsReadableAcrossWidths(t *testing.T) {
 					t.Fatalf("%s summary duplicated warning wording %q:\n%s", tt.name, duplicate, summary)
 				}
 			}
-			if !strings.Contains(summary, "!3") || strings.Count(summary, "!1") < 2 {
-				t.Fatalf("%s summary did not keep status/task/cleanup warning counts readable:\n%s", tt.name, summary)
+			if tt.width > 50 && !strings.Contains(summary, "[ATTENTION]") {
+				t.Fatalf("%s summary did not keep warning state readable:\n%s", tt.name, summary)
 			}
 			assertLinesWithinWidth(t, summary, tt.width)
 		})
@@ -2811,12 +2817,15 @@ func TestSummaryRendersOperatorSignals(t *testing.T) {
 
 	summary := plainView(model.renderSummary())
 	for _, want := range []string{
-		"Runtime Summary",
-		"repo      C:\\repo",
-		"generated 2026-05-20T11:18:03Z",
-		"status    1 providers | 1 degraded | 0 unavailable | 0 runnable | 1 cleanup candidate !3",
-		"tasks     1 tracked | 0 runnable | 1 blocked | 0 stale | 0 gated | 0 review !1",
-		"cleanup   1 candidates | 1 inspect !1",
+		"Brevity Runtime",
+		"[Runtime",
+		"source native",
+		"supervisor [ATTENTION]",
+		"provider health 1 providers | 1 degr",
+		"[Queue",
+		"[Scheduler",
+		"[Executions",
+		"[Next Action]",
 	} {
 		if !strings.Contains(summary, want) {
 			t.Fatalf("summary missing operator signal %q:\n%s", want, summary)
@@ -3154,7 +3163,7 @@ func TestQueueVisibilityRendersEmptyMissingValidAndCorruptedStates(t *testing.T)
 				CountsByStatus: map[string]int{},
 				Plan:           &contracts.QueuePlan{State: "missing", Runnable: 0, Skipped: 0, ReadOnly: true},
 			},
-			want: []string{"queue     valid file | 0 items | 0 reserved | 0 statuses | oldest - ok", "plan      0 runnable | 0 skipped | 0 reserved | next - | skip - ok"},
+			want: []string{"[Queue", "file health [VALID] ok", "total 0", "queued 0", "reserved 0", "next runnable -", "[Scheduler", "blocked reason no runnable queue items"},
 		},
 		{
 			name: "valid queue summary",
@@ -3166,7 +3175,7 @@ func TestQueueVisibilityRendersEmptyMissingValidAndCorruptedStates(t *testing.T)
 				OldestQueuedItemAge: "2h0m0s",
 				Plan:                &contracts.QueuePlan{State: "valid", Runnable: 1, Skipped: 1, NextRunnableTask: "task-alpha", FirstSkipReason: "unsupported status: cancelled", ReadOnly: true},
 			},
-			want: []string{"queue     valid file | 3 items | 0 reserved | cancelled:1 queued:2 | oldest 2h0m0s ok", "plan      1 runnable | 1 skipped | 0 reserved | next task-alpha"},
+			want: []string{"[Queue", "file health [VALID] ok", "total 3", "queued 2", "next runnable task-alpha", "[Scheduler", "selected task task-alpha", "reservation yes"},
 		},
 		{
 			name: "corrupted queue warning",
@@ -3178,7 +3187,7 @@ func TestQueueVisibilityRendersEmptyMissingValidAndCorruptedStates(t *testing.T)
 				Error:          "parse runtime-queue.json: invalid character",
 				Plan:           &contracts.QueuePlan{State: "corrupted", Runnable: 0, Skipped: 0, Error: "parse runtime-queue.json: invalid character", ReadOnly: true},
 			},
-			want: []string{"queue     corrupted file | 0 items | 0 reserved | 0 statuses | oldest - | corrupted !", "plan      0 runnable | 0 skipped | 0 reserved | next - | skip - | corrupted !"},
+			want: []string{"[Queue", "file health [CORRUPTED] corrupted !1", "[Scheduler", "blocked reason queue corrupted"},
 		},
 		{
 			name: "missing queue file",
@@ -3189,7 +3198,7 @@ func TestQueueVisibilityRendersEmptyMissingValidAndCorruptedStates(t *testing.T)
 				CountsByStatus: map[string]int{},
 				Plan:           &contracts.QueuePlan{State: "missing", Runnable: 0, Skipped: 0, ReadOnly: true},
 			},
-			want: []string{"queue     missing file | 0 items | 0 reserved | 0 statuses | oldest - ok", "plan      0 runnable | 0 skipped | 0 reserved | next - | skip - ok"},
+			want: []string{"[Queue", "file health [MISSING] ok", "total 0", "next runnable -", "[Scheduler"},
 		},
 	}
 
@@ -3224,8 +3233,12 @@ func TestQueuePlanVisibilityRendersPlanningError(t *testing.T) {
 
 	output := plainView(model.renderSummary())
 	for _, want := range []string{
-		"queue     valid file | 1 items | 0 reserved | queued:1 | oldest - ok",
-		"plan      0 runnable | 0 skipped | 0 reserved | next - | skip - | invalid !",
+		"[Queue",
+		"file health [VALID] ok",
+		"total 1",
+		"queued 1",
+		"[Scheduler",
+		"blocked reason plan invalid",
 	} {
 		if !strings.Contains(output, want) {
 			t.Fatalf("queue plan error output missing %q:\n%s", want, output)
@@ -3250,7 +3263,7 @@ func TestQueueVisibilityWidthSafety(t *testing.T) {
 	model.width = 42
 
 	output := plainView(model.View())
-	if !strings.Contains(output, "queue") {
+	if !strings.Contains(output, "[Queue") {
 		t.Fatalf("narrow queue view missing queue summary:\n%s", output)
 	}
 	assertLinesWithinWidth(t, output, model.width)
@@ -3260,7 +3273,7 @@ func TestExecutionVisibilityRendersMissingEmptyPlannedAndCorruptedStates(t *test
 	tests := []struct {
 		name      string
 		execution *contracts.RuntimeExecution
-		want      string
+		want      []string
 	}{
 		{
 			name: "missing executions file",
@@ -3270,7 +3283,7 @@ func TestExecutionVisibilityRendersMissingEmptyPlannedAndCorruptedStates(t *test
 				TotalExecutions: 0,
 				CountsByStatus:  map[string]int{},
 			},
-			want: "exec      missing file | 0 executions | planned:0 ready:0 launching:0 completed:0 failed:0 cancelled:0 | newest - - ok",
+			want: []string{"[Executions", "file health [MISSING] ok", "newest - / -"},
 		},
 		{
 			name: "empty executions file",
@@ -3280,7 +3293,7 @@ func TestExecutionVisibilityRendersMissingEmptyPlannedAndCorruptedStates(t *test
 				TotalExecutions: 0,
 				CountsByStatus:  map[string]int{},
 			},
-			want: "exec      valid file | 0 executions | planned:0 ready:0 launching:0 completed:0 failed:0 cancelled:0 | newest - - ok",
+			want: []string{"[Executions", "file health [VALID] ok", "newest - / -"},
 		},
 		{
 			name: "execution lifecycle counts and newest execution",
@@ -3292,7 +3305,7 @@ func TestExecutionVisibilityRendersMissingEmptyPlannedAndCorruptedStates(t *test
 				NewestExecutionTask:   "task-alpha",
 				NewestExecutionStatus: "failed",
 			},
-			want: "exec      valid file | 5 executions | planned:1 ready:1 launching:1 completed:1 failed:1 cancelled:0 | newest task-alpha failed ok",
+			want: []string{"[Executions", "file health [VALID] ok", "newest task-alpha / failed", "[Next Action]", "failed execution needs inspection"},
 		},
 		{
 			name: "corrupted executions warning",
@@ -3303,7 +3316,7 @@ func TestExecutionVisibilityRendersMissingEmptyPlannedAndCorruptedStates(t *test
 				CountsByStatus:  map[string]int{},
 				Error:           "parse runtime-executions.json: invalid character",
 			},
-			want: "exec      corrupted file | 0 executions | planned:0 ready:0 launching:0 completed:0 failed:0 cancelled:0 | newest - - | corrupted !",
+			want: []string{"[Executions", "file health [CORRUPTED] corrupted !1", "newest - / -"},
 		},
 	}
 
@@ -3316,8 +3329,10 @@ func TestExecutionVisibilityRendersMissingEmptyPlannedAndCorruptedStates(t *test
 			model.width = 200
 
 			output := plainView(model.renderSummary())
-			if !strings.Contains(output, tt.want) {
-				t.Fatalf("execution summary missing %q:\n%s", tt.want, output)
+			for _, want := range tt.want {
+				if !strings.Contains(output, want) {
+					t.Fatalf("execution summary missing %q:\n%s", want, output)
+				}
 			}
 		})
 	}
@@ -3340,10 +3355,119 @@ func TestExecutionVisibilityWidthSafety(t *testing.T) {
 	model.width = 42
 
 	output := plainView(model.View())
-	if !strings.Contains(output, "exec") {
+	if !strings.Contains(output, "[Executions") {
 		t.Fatalf("narrow execution view missing execution summary:\n%s", output)
 	}
 	assertLinesWithinWidth(t, output, model.width)
+}
+
+func TestOperatorCockpitEmptyStateRendersUsefulDashboard(t *testing.T) {
+	model := NewModelWithSource(&fakeClient{}, time.Second, "native")
+	model.state = emptyBubbleState()
+	model.hasState = true
+	model.width = 96
+
+	output := plainView(model.View())
+	for _, want := range []string{
+		"Brevity Runtime",
+		"[Runtime",
+		"source native",
+		"[Queue",
+		"file health [UNKNOWN] no queue state",
+		"[Scheduler",
+		"blocked reason queue state unavailable",
+		"[Next Action]",
+		"command brevity status",
+		"no queued or ready work",
+	} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("empty cockpit missing %q:\n%s", want, output)
+		}
+	}
+}
+
+func TestOperatorCockpitQueuedReadyFailedAndCorruptedSignals(t *testing.T) {
+	state := emptyBubbleState()
+	state.Queue = &contracts.RuntimeQueue{
+		State:          "valid",
+		TotalItems:     2,
+		CountsByStatus: map[string]int{"queued": 2},
+		Plan:           &contracts.QueuePlan{State: "valid", Runnable: 1, NextRunnableTask: "task-alpha", ReadOnly: true},
+	}
+	state.Executions = &contracts.RuntimeExecution{
+		State:                 "valid",
+		TotalExecutions:       2,
+		CountsByStatus:        map[string]int{"ready": 1, "failed": 1},
+		NewestExecutionTask:   "task-beta",
+		NewestExecutionStatus: "failed",
+	}
+	model := NewModelWithSource(&fakeClient{}, time.Second, "native")
+	model.state = state
+	model.hasState = true
+	model.width = 120
+
+	output := plainView(model.View())
+	for _, want := range []string{
+		"total 2",
+		"queued 2",
+		"next runnable task-alpha",
+		"selected task task-alpha",
+		"reservation yes",
+		"ready:1",
+		"failed:1",
+		"newest task-beta / failed",
+		"command brevity task status task-beta",
+		"failed execution needs inspection",
+	} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("active cockpit missing %q:\n%s", want, output)
+		}
+	}
+
+	state.Queue.State = "corrupted"
+	state.Queue.Error = "invalid character"
+	state.Executions.State = "corrupted"
+	state.Executions.Error = "invalid character"
+	model.state = state
+	output = plainView(model.View())
+	for _, want := range []string{"file health [CORRUPTED] corrupted !1", "blocked reason queue corrupted"} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("corrupted cockpit missing %q:\n%s", want, output)
+		}
+	}
+}
+
+func TestOperatorCockpitNarrowWidthAndReadOnlyRender(t *testing.T) {
+	dir := t.TempDir()
+	queueFile := dir + string(os.PathSeparator) + "runtime-queue.json"
+	execFile := dir + string(os.PathSeparator) + "runtime-executions.json"
+	if err := os.WriteFile(queueFile, []byte("queue-before"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(execFile, []byte("exec-before"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	model := NewModelWithSource(&fakeClient{}, time.Second, "native")
+	model.state = emptyBubbleState()
+	model.state.Queue = &contracts.RuntimeQueue{Path: queueFile, State: "valid", CountsByStatus: map[string]int{"queued": 1}, TotalItems: 1}
+	model.state.Executions = &contracts.RuntimeExecution{Path: execFile, State: "valid", CountsByStatus: map[string]int{"ready": 1}, TotalExecutions: 1, NewestExecutionTask: "task-ready", NewestExecutionStatus: "ready"}
+	model.hasState = true
+	model.width = 42
+
+	output := plainView(model.View())
+	assertLinesWithinWidth(t, output, model.width)
+	for _, want := range []string{"Brevity Runtime", "[Queue", "[Executions", "[Next Action]"} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("narrow cockpit missing %q:\n%s", want, output)
+		}
+	}
+	if got, _ := os.ReadFile(queueFile); string(got) != "queue-before" {
+		t.Fatalf("queue file mutated by render: %q", got)
+	}
+	if got, _ := os.ReadFile(execFile); string(got) != "exec-before" {
+		t.Fatalf("execution file mutated by render: %q", got)
+	}
 }
 
 func bubbleState() contracts.RuntimeState {
