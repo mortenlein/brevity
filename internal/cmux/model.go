@@ -63,6 +63,7 @@ type RenderOptions struct {
 	// Output selects the output format.
 	// Empty string and OutputText both select the plain-text renderer.
 	// OutputMarkdown selects the GitHub-Flavoured Markdown renderer.
+	// OutputJSON selects the structured JSON renderer.
 	Output OutputMode
 }
 

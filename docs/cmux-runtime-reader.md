@@ -13,7 +13,7 @@ phased rollout.
 
 1. Fetches two Brevity runtime contracts.
 2. Parses them into a `Snapshot`.
-3. Renders a compact plain-text dashboard.
+3. Renders a report (text, markdown, or JSON).
 
 Nothing else. No mutations, no watch mode, no keyboard handling, no ANSI,
 no TUI framework, no direct `.brevity` file access.

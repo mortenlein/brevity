@@ -14,7 +14,7 @@ const sectionSep = "---"
 // Render writes a CMUX dashboard to w from a Snapshot.
 //
 // opts controls which sections are rendered, how many tasks are shown,
-// optional task filters, and output format (text or markdown).
+// optional task filters, and output format (text, markdown, or json).
 // Output is deterministic for a given Snapshot and RenderOptions.
 // No ANSI sequences, no TUI framework, no watch mode, no keyboard handling.
 // Every section degrades gracefully when its contract is unavailable.
