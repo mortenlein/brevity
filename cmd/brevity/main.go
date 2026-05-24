@@ -1377,7 +1377,7 @@ func buildExecutionLaunchPayload(execStore runtimeexecution.Store, executionID s
 	result.Prompt = promptPath
 	result.Command = append([]string{command.Command}, command.Arguments...)
 	result.LaunchEligible = true
-	payload := runtimeexecution.PayloadFromWorkerCommand(preflightResult.ExecutionID, preflightResult.Task, worker.Provider, worker.Profile, worktreePath, promptPath, command)
+	payload := runtimeexecution.PayloadFromWorkerCommand(preflightResult.ExecutionID, preflightResult.QueueItemID, preflightResult.Task, worker.Provider, worker.Profile, worktreePath, promptPath, command)
 	payload.Environment = worker.Config.Env
 	return result, payload, nil
 }

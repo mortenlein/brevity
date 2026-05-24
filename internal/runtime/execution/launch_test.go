@@ -10,6 +10,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	bstate "github.com/mortenlein/brevity/internal/state"
 )
 
 func TestLaunchSuccessfulProviderPath(t *testing.T) {
@@ -29,6 +31,7 @@ func TestLaunchSuccessfulProviderPath(t *testing.T) {
 		t.Fatalf("stdout = %q", stdout.String())
 	}
 	assertExecutionStatus(t, store, "exec-1", StatusCompleted)
+	assertLaunchRunHistory(t, store, "exec-1", "queue-1", StatusCompleted, 0, "")
 }
 
 func TestLaunchFailureMarksFailed(t *testing.T) {
@@ -44,6 +47,7 @@ func TestLaunchFailureMarksFailed(t *testing.T) {
 		t.Fatalf("result = %#v", result)
 	}
 	assertExecutionStatus(t, store, "exec-1", StatusFailed)
+	assertLaunchRunHistory(t, store, "exec-1", "queue-1", StatusFailed, 1, "provider binary not found")
 }
 
 func TestLaunchNonzeroExitCodeMarksFailed(t *testing.T) {
@@ -58,6 +62,7 @@ func TestLaunchNonzeroExitCodeMarksFailed(t *testing.T) {
 		t.Fatalf("result = %#v", result)
 	}
 	assertExecutionStatus(t, store, "exec-1", StatusFailed)
+	assertLaunchRunHistory(t, store, "exec-1", "queue-1", StatusFailed, 42, "nonzero")
 }
 
 func TestLaunchTransitionsReadyLaunchingCompleted(t *testing.T) {
@@ -210,6 +215,7 @@ func (runner *fakeRunner) Run(_ context.Context, request ProcessRequest) Process
 func launchPayloadFixture(id string) LaunchPayload {
 	return LaunchPayload{
 		ExecutionID: id,
+		QueueItemID: "queue-1",
 		Task:        "some-task",
 		Provider:    "codex",
 		Profile:     "codex-balanced",
@@ -218,6 +224,39 @@ func launchPayloadFixture(id string) LaunchPayload {
 		Command:     "provider",
 		Arguments:   []string{"exec", "prompt.md"},
 		Argv:        []string{"provider", "exec", "prompt.md"},
+	}
+}
+
+func assertLaunchRunHistory(t *testing.T, store Store, executionID string, queueItemID string, status string, exitCode int, errorContains string) {
+	t.Helper()
+	history, missing, err := bstate.LoadRuns(store.Store, time.Now().UTC())
+	if err != nil {
+		t.Fatalf("LoadRuns returned error: %v", err)
+	}
+	if missing || len(history.Items) != 1 {
+		t.Fatalf("history missing=%v items=%#v, want one run", missing, history.Items)
+	}
+	run := history.Items[0]
+	if run.ExecutionID != executionID || run.RunID != executionID || run.QueueItemID != queueItemID {
+		t.Fatalf("run ids = %#v", run)
+	}
+	if run.Slug != "some-task" || run.Provider != "codex" || run.Profile != "codex-balanced" {
+		t.Fatalf("run metadata = %#v", run)
+	}
+	if !reflect.DeepEqual(run.CommandArgv, []string{"provider", "exec", "prompt.md"}) {
+		t.Fatalf("command argv = %#v", run.CommandArgv)
+	}
+	if run.CompletedAt == "" || run.FinishedAt == "" || run.StartedAt == "" {
+		t.Fatalf("run timestamps = %#v", run)
+	}
+	if run.ExitCode != float64(exitCode) {
+		t.Fatalf("exitCode = %#v, want %d", run.ExitCode, exitCode)
+	}
+	if run.FinalExecutionStatus != status {
+		t.Fatalf("finalExecutionStatus = %q, want %q", run.FinalExecutionStatus, status)
+	}
+	if errorContains != "" && !strings.Contains(run.Summary, errorContains) {
+		t.Fatalf("summary = %q, want containing %q", run.Summary, errorContains)
 	}
 }
 

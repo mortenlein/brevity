@@ -25,6 +25,7 @@ type PreflightCheck struct {
 
 type PreflightResult struct {
 	ExecutionID string           `json:"executionId"`
+	QueueItemID string           `json:"queueItemId,omitempty"`
 	Task        string           `json:"task,omitempty"`
 	Status      string           `json:"status,omitempty"`
 	Passed      bool             `json:"passed"`
@@ -58,6 +59,7 @@ func (store Store) Preflight(executionID string) (PreflightResult, error) {
 		return result, nil
 	}
 	result.Task = record.Task
+	result.QueueItemID = record.QueueItemID
 	result.Status = strings.ToLower(strings.TrimSpace(record.Status))
 	result.addCheck(CheckExecutionExists, true, "")
 

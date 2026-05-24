@@ -10,10 +10,12 @@ import (
 	"time"
 
 	"github.com/mortenlein/brevity/internal/contracts"
+	bstate "github.com/mortenlein/brevity/internal/state"
 )
 
 type LaunchPayload struct {
 	ExecutionID string            `json:"executionId"`
+	QueueItemID string            `json:"queueItemId,omitempty"`
 	Task        string            `json:"task"`
 	Provider    string            `json:"provider"`
 	Profile     string            `json:"profile"`
@@ -27,6 +29,7 @@ type LaunchPayload struct {
 
 type LaunchResult struct {
 	ExecutionID string        `json:"executionId"`
+	QueueItemID string        `json:"queueItemId,omitempty"`
 	Task        string        `json:"task"`
 	Provider    string        `json:"provider"`
 	Profile     string        `json:"profile"`
@@ -116,6 +119,7 @@ func (launcher Launcher) Launch(ctx context.Context, payload LaunchPayload) (Lau
 
 	launchResult := LaunchResult{
 		ExecutionID: payload.ExecutionID,
+		QueueItemID: payload.QueueItemID,
 		Task:        payload.Task,
 		Provider:    payload.Provider,
 		Profile:     payload.Profile,
@@ -130,6 +134,14 @@ func (launcher Launcher) Launch(ctx context.Context, payload LaunchPayload) (Lau
 	}
 	if result.Err != nil {
 		launchResult.Error = result.Err.Error()
+	}
+	if result.Err == nil && result.ExitCode != 0 {
+		launchResult.Error = "provider exited with nonzero exit code"
+	}
+	if err := launcher.appendRunHistory(payload, launchResult); err != nil {
+		return launchResult, err
+	}
+	if result.Err != nil {
 		return launchResult, result.Err
 	}
 	return launchResult, nil
@@ -161,10 +173,11 @@ func (runner ExecRunner) Run(ctx context.Context, request ProcessRequest) Proces
 	return ProcessResult{ExitCode: 1, Err: err}
 }
 
-func PayloadFromWorkerCommand(executionID string, task string, provider string, profile string, worktree string, prompt string, command actionsWorkerCommand) LaunchPayload {
+func PayloadFromWorkerCommand(executionID string, queueItemID string, task string, provider string, profile string, worktree string, prompt string, command actionsWorkerCommand) LaunchPayload {
 	argv := append([]string{command.Command}, command.Arguments...)
 	return LaunchPayload{
 		ExecutionID: executionID,
+		QueueItemID: queueItemID,
 		Task:        task,
 		Provider:    provider,
 		Profile:     profile,
@@ -186,6 +199,41 @@ func (launcher Launcher) now() time.Time {
 		return launcher.Store.Now()
 	}
 	return time.Now()
+}
+
+func (launcher Launcher) appendRunHistory(payload LaunchPayload, result LaunchResult) error {
+	record := bstate.RunRecord{
+		RunID:                result.ExecutionID,
+		ExecutionID:          result.ExecutionID,
+		QueueItemID:          payload.QueueItemID,
+		Slug:                 result.Task,
+		Provider:             result.Provider,
+		Profile:              result.Profile,
+		CommandArgv:          append([]string{}, result.Argv...),
+		StartedAt:            result.StartedAt,
+		CompletedAt:          result.FinishedAt,
+		FinishedAt:           result.FinishedAt,
+		ExitCode:             result.ExitCode,
+		FinalExecutionStatus: result.FinalStatus,
+		WorkerStatus:         executionStatusToRunStatus(result.FinalStatus),
+		Source:               "runtime-execution-launch",
+	}
+	if strings.TrimSpace(result.Error) != "" {
+		record.FailureType = "provider-launch"
+		record.Summary = result.Error
+		record.Message = result.Error
+	}
+	return bstate.AppendRun(launcher.Store.Store, record, bstate.AppendRunOptions{})
+}
+
+func executionStatusToRunStatus(status string) string {
+	if status == StatusCompleted {
+		return "succeeded"
+	}
+	if status == StatusFailed {
+		return "failed"
+	}
+	return status
 }
 
 func cloneEnvironment(values map[string]string) map[string]string {

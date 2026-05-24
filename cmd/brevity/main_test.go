@@ -675,7 +675,8 @@ func TestExecutionLaunchRunsFakeProviderSuccess(t *testing.T) {
 			t.Fatalf("output missing %q:\n%s", want, stdout.String())
 		}
 	}
-	assertLaunchAdjacentStateUnchanged(t, repoRoot, before)
+	assertLaunchQueueAndTasksUnchanged(t, repoRoot, before)
+	assertLaunchRunHistoryAppended(t, repoRoot, before.runs, runtimeexecution.StatusCompleted, 0, "")
 }
 
 func TestExecutionLaunchMissingBinaryMarksFailed(t *testing.T) {
@@ -691,7 +692,8 @@ func TestExecutionLaunchMissingBinaryMarksFailed(t *testing.T) {
 	if got := readMainTestExecutions(t, repoRoot).Records[0].Status; got != runtimeexecution.StatusFailed {
 		t.Fatalf("status = %q, want failed", got)
 	}
-	assertLaunchAdjacentStateUnchanged(t, repoRoot, before)
+	assertLaunchQueueAndTasksUnchanged(t, repoRoot, before)
+	assertLaunchRunHistoryAppended(t, repoRoot, before.runs, runtimeexecution.StatusFailed, 1, "missing-provider")
 }
 
 func TestExecutionLaunchNonzeroExitMarksFailed(t *testing.T) {
@@ -710,7 +712,8 @@ func TestExecutionLaunchNonzeroExitMarksFailed(t *testing.T) {
 	if !strings.Contains(stdout.String(), "fake provider stderr") {
 		t.Fatalf("stderr was not streamed:\n%s", stdout.String())
 	}
-	assertLaunchAdjacentStateUnchanged(t, repoRoot, before)
+	assertLaunchQueueAndTasksUnchanged(t, repoRoot, before)
+	assertLaunchRunHistoryAppended(t, repoRoot, before.runs, runtimeexecution.StatusFailed, 7, "exit status 7")
 }
 
 func TestExecutionLaunchRejectsNonReadyAndRepeatedTerminalExecutions(t *testing.T) {
@@ -2053,7 +2056,7 @@ func tempRepoWithLaunchFixture(t *testing.T, status string, command string, exit
 	writeMainTestFile(t, filepath.Join(repoRoot, ".brevity", state.TasksFile), fmt.Sprintf(`[{"slug":"alpha","status":"ready-for-worker","worktreePath":%q,"promptPath":%q,"provider":"codex","profile":"codex-balanced"}]`+"\n", worktree, promptPath))
 	writeMainTestFile(t, filepath.Join(repoRoot, ".brevity", state.ConfigFile), fmt.Sprintf(`{"defaultProvider":"codex","providers":{"codex":{"command":%q,"mode":"exec","sandbox":"none","env":{"BREVITY_FAKE_PROVIDER_EXIT":%q}}}}`+"\n", command, exitCode))
 	writeMainTestFile(t, filepath.Join(repoRoot, ".brevity", state.ProviderHealthFile), `{"codex":{"status":"healthy","note":"","updatedAt":"2026-05-22T12:00:00Z"}}`+"\n")
-	writeMainTestFile(t, filepath.Join(repoRoot, ".brevity", "runs.jsonl"), "sentinel run history\n")
+	writeMainTestFile(t, filepath.Join(repoRoot, ".brevity", "runs.jsonl"), `{"runId":"sentinel","slug":"sentinel","startedAt":"2026-05-22T12:00:00Z","finishedAt":"2026-05-22T12:00:01Z","exitCode":0,"workerStatus":"succeeded"}`+"\n")
 	return repoRoot
 }
 
@@ -2087,16 +2090,23 @@ type launchDryRunStateSnapshot struct {
 	execution  string
 	tasks      string
 	runsExists bool
+	runs       string
 }
 
 func snapshotLaunchDryRunState(t *testing.T, repoRoot string) launchDryRunStateSnapshot {
 	t.Helper()
-	_, runsErr := os.Stat(filepath.Join(repoRoot, ".brevity", "runs.jsonl"))
+	runsPath := filepath.Join(repoRoot, ".brevity", "runs.jsonl")
+	_, runsErr := os.Stat(runsPath)
+	runs := ""
+	if !os.IsNotExist(runsErr) {
+		runs = readMainTestFile(t, runsPath)
+	}
 	return launchDryRunStateSnapshot{
 		queue:      readMainTestFile(t, filepath.Join(repoRoot, ".brevity", runtimequeue.FileName)),
 		execution:  readMainTestFile(t, filepath.Join(repoRoot, ".brevity", runtimeexecution.FileName)),
 		tasks:      readMainTestFile(t, filepath.Join(repoRoot, ".brevity", state.TasksFile)),
 		runsExists: !os.IsNotExist(runsErr),
+		runs:       runs,
 	}
 }
 
@@ -2115,6 +2125,11 @@ func assertLaunchDryRunStateUnchanged(t *testing.T, repoRoot string, before laun
 	if before.runsExists != !os.IsNotExist(runsErr) {
 		t.Fatalf("run history existence changed")
 	}
+	if before.runsExists {
+		if after := readMainTestFile(t, filepath.Join(repoRoot, ".brevity", "runs.jsonl")); after != before.runs {
+			t.Fatalf("run history mutated\nbefore: %s\nafter: %s", before.runs, after)
+		}
+	}
 }
 
 type launchAdjacentStateSnapshot struct {
@@ -2132,7 +2147,7 @@ func snapshotLaunchAdjacentState(t *testing.T, repoRoot string) launchAdjacentSt
 	}
 }
 
-func assertLaunchAdjacentStateUnchanged(t *testing.T, repoRoot string, before launchAdjacentStateSnapshot) {
+func assertLaunchQueueAndTasksUnchanged(t *testing.T, repoRoot string, before launchAdjacentStateSnapshot) {
 	t.Helper()
 	if after := readMainTestFile(t, filepath.Join(repoRoot, ".brevity", runtimequeue.FileName)); after != before.queue {
 		t.Fatalf("queue mutated\nbefore: %s\nafter: %s", before.queue, after)
@@ -2140,8 +2155,36 @@ func assertLaunchAdjacentStateUnchanged(t *testing.T, repoRoot string, before la
 	if after := readMainTestFile(t, filepath.Join(repoRoot, ".brevity", state.TasksFile)); after != before.tasks {
 		t.Fatalf("tasks mutated\nbefore: %s\nafter: %s", before.tasks, after)
 	}
-	if after := readMainTestFile(t, filepath.Join(repoRoot, ".brevity", "runs.jsonl")); after != before.runs {
-		t.Fatalf("run history mutated\nbefore: %s\nafter: %s", before.runs, after)
+}
+
+func assertLaunchRunHistoryAppended(t *testing.T, repoRoot string, before string, status string, exitCode int, errorContains string) {
+	t.Helper()
+	after := readMainTestFile(t, filepath.Join(repoRoot, ".brevity", "runs.jsonl"))
+	if !strings.HasPrefix(after, before) {
+		t.Fatalf("run history did not preserve existing rows\nbefore: %s\nafter: %s", before, after)
+	}
+	lines := strings.Split(strings.TrimSpace(after), "\n")
+	var record state.RunRecord
+	if err := json.Unmarshal([]byte(lines[len(lines)-1]), &record); err != nil {
+		t.Fatalf("last run history row is invalid: %v\n%s", err, lines[len(lines)-1])
+	}
+	if record.ExecutionID != "exec-1" || record.RunID != "exec-1" || record.QueueItemID != "queue-1" {
+		t.Fatalf("run ids = %#v", record)
+	}
+	if record.Slug != "alpha" || record.Provider != "codex" || record.Profile != "codex-balanced" {
+		t.Fatalf("run metadata = %#v", record)
+	}
+	if len(record.CommandArgv) == 0 {
+		t.Fatalf("command argv missing: %#v", record)
+	}
+	if record.FinalExecutionStatus != status || record.ExitCode != float64(exitCode) {
+		t.Fatalf("status/exit = %#v, want %s/%d", record, status, exitCode)
+	}
+	if record.StartedAt == "" || record.CompletedAt == "" || record.FinishedAt == "" {
+		t.Fatalf("timestamps missing: %#v", record)
+	}
+	if errorContains != "" && !strings.Contains(record.Summary, errorContains) {
+		t.Fatalf("summary = %q, want containing %q", record.Summary, errorContains)
 	}
 }
 

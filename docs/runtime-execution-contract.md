@@ -114,9 +114,17 @@ start scheduler loops, drain the queue, mutate queue status, mutate task
 workflow state, add retries, launch providers in parallel, or create daemon,
 background, or distributed orchestration.
 
-Launch mutates only `.brevity\runtime-executions.json` through the execution
-lock. Queue semantics remain separate. Run history integration is intentionally
-not part of this v1 launch contract.
+Launch mutates `.brevity\runtime-executions.json` through the execution lock and
+appends one observational row to `.brevity\runs.jsonl` after the launch reaches
+a terminal execution status. Queue semantics remain separate.
+
+The launch run-history row is not task workflow state. It records the execution
+id, queue item id, task slug, provider/profile, argv-style command when safely
+available, timestamps, exit code, final execution status, and a short error
+summary for failed launches or nonzero provider exits. It must not mark tasks
+done or failed, clear reservations, dequeue items, or imply scheduler progress.
+If preflight fails before a provider launch begins, no launch history row is
+written.
 
 Human output reports each check clearly:
 
@@ -218,7 +226,7 @@ Execution launch must never:
 - start the supervisor implicitly
 - drain the queue
 - mutate task execution state
-- create run history
+- treat launch history as task workflow state
 - add retries
 - run multiple executions
 - introduce background or daemon orchestration
@@ -227,7 +235,8 @@ Execution launch must never:
 `execution list`, `execution inspect`, `execution preflight`, and
 `execution launch-dry-run` are read-only. `execution plan-from-reservation`,
 `execution mark-ready`, `execution mark-planned`, and `execution launch` write
-only `.brevity\runtime-executions.json` and its advisory lock file.
+only their documented runtime metadata. `execution launch` additionally appends
+observational run history; it does not clear or change queue reservations.
 
 ## Non-Goals
 

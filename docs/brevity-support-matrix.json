@@ -67,14 +67,14 @@
   {
     "id": "runtime-execution-records",
     "capability": "Runtime execution record persistence, inspection, and manual launch",
-    "goSupport": "Native list, inspect, plan-from-reservation, readiness transitions, preflight, launch-dry-run, and single foreground provider launch for runtime-executions.json; native runtime state and Bubble Tea expose compact execution visibility",
+    "goSupport": "Native list, inspect, plan-from-reservation, readiness transitions, preflight, launch-dry-run, and single foreground provider launch for runtime-executions.json with observational run-history append; native runtime state and Bubble Tea expose compact execution visibility",
     "powerShellSupport": "Not PowerShell-owned",
     "currentAuthority": "Go",
     "safetyClass": "execution metadata / manual provider-executing mutation",
     "testCoverage": "unit and fake-provider tests",
     "tuiSupport": "Bubble Tea read-only visibility",
     "migrationStatus": "execution contract migrated",
-    "nextAction": "Keep scheduler loops and queue draining out of execution launch",
+    "nextAction": "Keep scheduler loops, queue draining, and task workflow mutation out of execution launch",
     "powerShellDisposition": "none"
   },
   {
