@@ -136,6 +136,11 @@ func parseOptions(args []string) (cliOptions, error) {
 	for _, arg := range args {
 		if arg == "--help" || arg == "-h" {
 			options.help = true
+			// Preserve the subcommand kind so the help dispatcher can show
+			// subcommand-specific text rather than the generic dashboard help.
+			if len(args) > 0 && args[0] == "cmux" {
+				options.kind = commandCmux
+			}
 			return options, nil
 		}
 	}
@@ -893,7 +898,11 @@ func run(stdout io.Writer, args []string) error {
 		return err
 	}
 	if options.help {
-		writeUsage(stdout)
+		if options.kind == commandCmux {
+			writeCmuxUsage(stdout)
+		} else {
+			writeUsage(stdout)
+		}
 		return nil
 	}
 
@@ -2416,4 +2425,41 @@ func writeUsage(stdout io.Writer) {
 	fmt.Fprintln(stdout, "  --json-source <source>    Runtime JSON source: powershell or native.")
 	fmt.Fprintln(stdout, "  --no-clear                Do not clear before changed dashboard renders.")
 	fmt.Fprintln(stdout, "  -h, --help                Show this help text.")
+}
+
+// writeCmuxUsage writes the brevity cmux subcommand help to stdout.
+func writeCmuxUsage(stdout io.Writer) {
+	fmt.Fprintln(stdout, "brevity cmux  [read-only]")
+	fmt.Fprintln(stdout)
+	fmt.Fprintln(stdout, "Render a one-shot CMUX operator report from the native Brevity runtime.")
+	fmt.Fprintln(stdout, "Exits after a single render.  No watch mode, no terminal clearing,")
+	fmt.Fprintln(stdout, "no keyboard input.  Safe in remote sessions, CI pipelines, and AI contexts.")
+	fmt.Fprintln(stdout)
+	fmt.Fprintln(stdout, "Usage:")
+	fmt.Fprintln(stdout, "  brevity cmux [flags]")
+	fmt.Fprintln(stdout)
+	fmt.Fprintln(stdout, "Flags:")
+	fmt.Fprintln(stdout, "  --limit <n>               Maximum tasks in the task list (default: 10).")
+	fmt.Fprintln(stdout, "  --section <name>          Section to render (default: all).")
+	fmt.Fprintln(stdout, "                            Allowed: all, providers, tasks, queue, actions.")
+	fmt.Fprintln(stdout, "  --task <slug>             Show only the task with this exact slug.")
+	fmt.Fprintln(stdout, "  --state <state>           Show only tasks with this normalized state")
+	fmt.Fprintln(stdout, "                            (case-insensitive).")
+	fmt.Fprintln(stdout, "  --output <mode>           Output format (default: text).")
+	fmt.Fprintln(stdout, "                            Allowed: text, markdown, json.")
+	fmt.Fprintln(stdout, "  -h, --help                Show this help.")
+	fmt.Fprintln(stdout)
+	fmt.Fprintln(stdout, "Output modes:")
+	fmt.Fprintln(stdout, "  text       Terminal operator report.  Plain text, no ANSI, pipe-safe.")
+	fmt.Fprintln(stdout, "  markdown   AI/human-readable report.  GitHub-Flavoured Markdown.")
+	fmt.Fprintln(stdout, "  json       Machine-readable report.   Schema: brevity.cmux-report.v1.")
+	fmt.Fprintln(stdout)
+	fmt.Fprintln(stdout, "Examples:")
+	fmt.Fprintln(stdout, "  brevity cmux")
+	fmt.Fprintln(stdout, "  brevity cmux --section tasks")
+	fmt.Fprintln(stdout, "  brevity cmux --section tasks --state reviewing")
+	fmt.Fprintln(stdout, "  brevity cmux --task my-task")
+	fmt.Fprintln(stdout, "  brevity cmux --output markdown")
+	fmt.Fprintln(stdout, "  brevity cmux --output json --section queue")
+	fmt.Fprintln(stdout, "  brevity cmux --limit 20")
 }

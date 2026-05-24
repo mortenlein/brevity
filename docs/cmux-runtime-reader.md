@@ -43,7 +43,7 @@ cmux.Render(w, snap)                  ← deterministic plain-text output
 | --- | --- | --- |
 | `Fetcher` interface + `NativeFetcher` | `reader.go` | Contract execution — maps to `brevity runtime state --json` and `brevity scheduler plan --json` |
 | `Snapshot` struct | `model.go` | Parsed view of both contracts; carries error state without panicking |
-| `Render` function | `render.go` | Deterministic plain-text rendering from a `Snapshot`; no side effects |
+| `Render` function | `render.go`, `render_markdown.go`, `render_json.go` | Deterministic rendering from a `Snapshot`; dispatches by `OutputMode`; no side effects |
 
 Each unit has a single job. Parsing is separated from rendering. Command
 execution is separated from parsing. This makes every unit independently
@@ -146,11 +146,78 @@ PowerShell-backed runtime state, following the same pattern as
 ## Usage
 
 ```powershell
-go run ./cmd/brevity cmux
+# Show all sections (default)
+brevity cmux
+
+# Show help
+brevity cmux --help
 ```
 
-Renders the CMUX dashboard once from native runtime state. No flags, no
-watch mode, no interaction in v1.
+`brevity cmux` exits after a single render. No watch mode, no terminal
+clearing, no keyboard input. Safe in remote sessions, CI pipelines, and AI
+agent contexts.
+
+### Flags
+
+| Flag | Default | Description |
+| --- | --- | --- |
+| `--limit <n>` | `10` | Maximum tasks shown in the task list. |
+| `--section <name>` | `all` | Restrict output to one section: `all`, `providers`, `tasks`, `queue`, `actions`. |
+| `--task <slug>` | _(none)_ | Show only the task with this exact slug. |
+| `--state <state>` | _(none)_ | Show only tasks whose normalized state matches (case-insensitive). |
+| `--output <mode>` | `text` | Output format: `text`, `markdown`, or `json`. |
+| `-h`, `--help` | — | Show help and exit. |
+
+### Output modes
+
+| Mode | Description |
+| --- | --- |
+| `text` | Plain-text terminal report. No ANSI sequences. Pipe-safe and log-safe. |
+| `markdown` | GitHub-Flavoured Markdown. Suitable for AI context, shared reports, and Markdown renderers. No HTML, no code fences wrapping the document. |
+| `json` | Structured JSON. Schema `brevity.cmux-report.v1`. Respects `--section`, `--task`, `--state`, `--limit`. Empty collections are `[]` not `null`. |
+
+### Examples
+
+```powershell
+# Default: all sections, text output
+brevity cmux
+
+# Show only the task list
+brevity cmux --section tasks
+
+# Show tasks in reviewing state
+brevity cmux --section tasks --state reviewing
+
+# Show one specific task
+brevity cmux --task my-feature
+
+# Show 20 tasks instead of the default 10
+brevity cmux --limit 20
+
+# GitHub-Flavoured Markdown (AI context, shared report)
+brevity cmux --output markdown
+
+# Pipe-friendly JSON (CI, scripting, machine consumers)
+brevity cmux --output json
+
+# JSON for just the queue section
+brevity cmux --output json --section queue
+
+# JSON filtered to a single task
+brevity cmux --output json --task my-feature
+```
+
+### Safe travel and remote usage
+
+`brevity cmux` is safe to run in any context where a one-shot command is
+acceptable:
+
+- **Remote sessions (SSH, WinRM, CI):** exits cleanly after one render; no
+  interactive redraw loop, no terminal control sequences.
+- **AI agent contexts:** output is deterministic for a given runtime state;
+  `--output json` provides a typed schema for programmatic consumption;
+  `--output markdown` provides structured text without ANSI noise.
+- **Pipes and log capture:** all output modes avoid ANSI escape sequences.
 
 ## Contract Dependencies
 
