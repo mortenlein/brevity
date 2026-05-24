@@ -870,10 +870,12 @@ func TestExecutionLaunchEndToEndSmokeSuccess(t *testing.T) {
 	smokeRun(t, "execution", "launch-dry-run", executionID)
 	assertLaunchDryRunStateUnchanged(t, repoRoot, dryRunBefore)
 
-	smokeRun(t, "execution", "launch", executionID)
+	launchOutput := smokeRun(t, "execution", "launch", executionID)
+	assertProviderOutputStreamed(t, launchOutput)
 	if got := readMainTestExecutions(t, repoRoot).Records[0].Status; got != runtimeexecution.StatusCompleted {
 		t.Fatalf("status = %q, want completed", got)
 	}
+	assertFakeProviderExecuted(t, repoRoot, executionID, runtimeexecution.StatusLaunching)
 	assertSmokeRunHistory(t, repoRoot, executionID, "alpha", runtimeexecution.StatusCompleted, 0, "")
 	if queue = readMainTestQueue(t, repoRoot); len(queue.Items) != 0 {
 		t.Fatalf("queue items after completed launch = %#v, want empty", queue.Items)
@@ -899,9 +901,11 @@ func TestExecutionLaunchEndToEndSmokeFailure(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "exit status 7") {
 		t.Fatalf("unexpected launch error: %v\n%s", err, stdout.String())
 	}
+	assertProviderOutputStreamed(t, stdout.String())
 	if got := readMainTestExecutions(t, repoRoot).Records[0].Status; got != runtimeexecution.StatusFailed {
 		t.Fatalf("status = %q, want failed", got)
 	}
+	assertFakeProviderExecuted(t, repoRoot, executionID, runtimeexecution.StatusLaunching)
 	assertSmokeRunHistory(t, repoRoot, executionID, "alpha", runtimeexecution.StatusFailed, 7, "exit status 7")
 	queue := readMainTestQueue(t, repoRoot)
 	if len(queue.Items) != 1 || queue.Items[0].Task != "alpha" || queue.Items[0].Reservation != nil {
@@ -2242,11 +2246,49 @@ func fakeProviderExecutable(t *testing.T, exitCode int) string {
 import (
 	"fmt"
 	"os"
+	"path/filepath"
+	"strings"
 )
 
 func main() {
 	fmt.Fprintln(os.Stdout, "fake provider stdout")
 	fmt.Fprintln(os.Stderr, "fake provider stderr")
+	wd, err := os.Getwd()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+	promptPath := ""
+	for _, arg := range os.Args[1:] {
+		if strings.HasSuffix(arg, ".md") {
+			promptPath = arg
+		}
+	}
+	prompt, err := os.ReadFile(promptPath)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+	repoRoot := filepath.Clean(filepath.Join(wd, "..", "..", ".."))
+	executions, err := os.ReadFile(filepath.Join(repoRoot, ".brevity", "runtime-executions.json"))
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+	observedStatus := "missing"
+	if strings.Contains(string(executions), "\"status\": \"launching\"") || strings.Contains(string(executions), "\"status\":\"launching\"") {
+		observedStatus = "launching"
+	}
+	artifact := strings.Join([]string{
+		"executed=true",
+		"argv=" + strings.Join(os.Args[1:], " "),
+		"prompt=" + strings.TrimSpace(string(prompt)),
+		"observedStatus=" + observedStatus,
+	}, "\n") + "\n"
+	if err := os.WriteFile(filepath.Join(wd, "fake-provider-artifact.txt"), []byte(artifact), 0o644); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
 	os.Exit(%d)
 }
 `, exitCode))
@@ -2414,6 +2456,32 @@ func assertSmokeRunHistory(t *testing.T, repoRoot string, executionID string, ta
 	}
 	if errorContains != "" && !strings.Contains(record.Summary, errorContains) {
 		t.Fatalf("summary = %q, want containing %q", record.Summary, errorContains)
+	}
+}
+
+func assertFakeProviderExecuted(t *testing.T, repoRoot string, executionID string, observedStatus string) {
+	t.Helper()
+	artifactPath := filepath.Join(repoRoot, "worktrees", "active", "alpha", "fake-provider-artifact.txt")
+	artifact := readMainTestFile(t, artifactPath)
+	for _, want := range []string{
+		"executed=true",
+		"exec",
+		filepath.Join(repoRoot, "worktrees", "active", "alpha", "prompt.md"),
+		"prompt=# Alpha",
+		"observedStatus=" + observedStatus,
+	} {
+		if !strings.Contains(artifact, want) {
+			t.Fatalf("fake provider artifact missing %q for execution %s:\n%s", want, executionID, artifact)
+		}
+	}
+}
+
+func assertProviderOutputStreamed(t *testing.T, output string) {
+	t.Helper()
+	for _, want := range []string{"fake provider stdout", "fake provider stderr"} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("launch output missing streamed provider output %q:\n%s", want, output)
+		}
 	}
 }
 
