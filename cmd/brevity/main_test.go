@@ -16,6 +16,7 @@ import (
 	"github.com/mortenlein/brevity/internal/dashboard"
 	runtimeexecution "github.com/mortenlein/brevity/internal/runtime/execution"
 	runtimequeue "github.com/mortenlein/brevity/internal/runtime/queue"
+	runtimescheduler "github.com/mortenlein/brevity/internal/runtime/scheduler"
 	"github.com/mortenlein/brevity/internal/state"
 )
 
@@ -638,11 +639,15 @@ func TestExecutionPreflightJSONFailsForPlannedExecution(t *testing.T) {
 	if !strings.Contains(err.Error(), "execution preflight failed") {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	output := stdout.String()
-	for _, want := range []string{`"executionId":"exec-1"`, `"task":"alpha"`, `"status":"planned"`, `"passed":false`, `"name":"status ready"`} {
-		if !strings.Contains(output, want) {
-			t.Fatalf("json output missing %q:\n%s", want, output)
-		}
+	var result runtimeexecution.PreflightResult
+	if err := json.Unmarshal(bytes.TrimSpace(stdout.Bytes()), &result); err != nil {
+		t.Fatalf("json unmarshal failed after nonzero preflight: %v\n%s", err, stdout.String())
+	}
+	if result.ExecutionID != "exec-1" || result.Task != "alpha" || result.Status != "planned" || result.Passed {
+		t.Fatalf("result = %#v", result)
+	}
+	if len(result.Checks) == 0 || result.Checks[len(result.Checks)-1].Name != "status ready" {
+		t.Fatalf("checks = %#v", result.Checks)
 	}
 }
 
@@ -878,6 +883,69 @@ func TestExecutionLaunchEndToEndSmokeSuccess(t *testing.T) {
 	assertFakeProviderExecuted(t, repoRoot, executionID, runtimeexecution.StatusLaunching)
 	assertSmokeRunHistory(t, repoRoot, executionID, "alpha", runtimeexecution.StatusCompleted, 0, "")
 	if queue = readMainTestQueue(t, repoRoot); len(queue.Items) != 0 {
+		t.Fatalf("queue items after completed launch = %#v, want empty", queue.Items)
+	}
+	if tasksAfter := readMainTestFile(t, filepath.Join(repoRoot, ".brevity", state.TasksFile)); tasksAfter != tasksBefore {
+		t.Fatalf("tasks mutated\nbefore: %s\nafter: %s", tasksBefore, tasksAfter)
+	}
+}
+
+func TestExecutionLaunchJSONSmokeCoversOperatorPipeline(t *testing.T) {
+	repoRoot := tempRepoWithExecutionSmokeFixture(t, 0)
+	t.Chdir(repoRoot)
+	tasksBefore := readMainTestFile(t, filepath.Join(repoRoot, ".brevity", state.TasksFile))
+
+	smokeRun(t, "queue", "add", "alpha")
+
+	var schedulerPlan runtimescheduler.Plan
+	smokeRunJSON(t, &schedulerPlan, "scheduler", "plan", "--json")
+	if schedulerPlan.Schema != runtimescheduler.PlanSchema || schedulerPlan.Selected == nil {
+		t.Fatalf("scheduler plan = %#v", schedulerPlan)
+	}
+	if schedulerPlan.Selected.Task != "alpha" || schedulerPlan.Selected.Status != runtimequeue.StatusQueued || !schedulerPlan.ReservationEligible || !schedulerPlan.ReadOnly {
+		t.Fatalf("scheduler plan selection = %#v", schedulerPlan)
+	}
+
+	smokeRun(t, "scheduler", "reserve-next")
+
+	var planned schedulerPlannedExecution
+	smokeRunJSON(t, &planned, "scheduler", "plan-execution", "--json")
+	if planned.Task != "alpha" || planned.Status != runtimeexecution.StatusPlanned || planned.ExecutionID == "" || planned.QueueItemID == "" || planned.ReservationID == "" {
+		t.Fatalf("planned execution = %#v", planned)
+	}
+
+	var inspection runtimeexecution.Inspection
+	smokeRunJSON(t, &inspection, "execution", "inspect", "--json")
+	if inspection.State != "valid" || inspection.TotalExecutions != 1 || inspection.CountsByStatus[runtimeexecution.StatusPlanned] != 1 || inspection.NewestPlannedTask != "alpha" {
+		t.Fatalf("inspection = %#v", inspection)
+	}
+
+	smokeRun(t, "execution", "mark-ready", planned.ExecutionID)
+
+	var preflight runtimeexecution.PreflightResult
+	smokeRunJSON(t, &preflight, "execution", "preflight", planned.ExecutionID, "--json")
+	if preflight.ExecutionID != planned.ExecutionID || preflight.Task != "alpha" || preflight.Status != runtimeexecution.StatusReady || !preflight.Passed {
+		t.Fatalf("preflight = %#v", preflight)
+	}
+
+	var dryRun executionLaunchDryRunResult
+	smokeRunJSON(t, &dryRun, "execution", "launch-dry-run", planned.ExecutionID, "--json")
+	if dryRun.ExecutionID != planned.ExecutionID || dryRun.Task != "alpha" || dryRun.Status != runtimeexecution.StatusReady || !dryRun.LaunchEligible {
+		t.Fatalf("dry run = %#v", dryRun)
+	}
+	if dryRun.Provider != "codex" || dryRun.Profile != "codex-balanced" || len(dryRun.Command) < 2 {
+		t.Fatalf("dry run command payload = %#v", dryRun)
+	}
+
+	var launch runtimeexecution.LaunchResult
+	smokeRunJSON(t, &launch, "execution", "launch", planned.ExecutionID, "--json")
+	if launch.ExecutionID != planned.ExecutionID || launch.Task != "alpha" || launch.FinalStatus != runtimeexecution.StatusCompleted || launch.ExitCode != 0 {
+		t.Fatalf("launch = %#v", launch)
+	}
+	if len(launch.Argv) < 2 || launch.Argv[0] == "" {
+		t.Fatalf("launch argv = %#v", launch.Argv)
+	}
+	if queue := readMainTestQueue(t, repoRoot); len(queue.Items) != 0 {
 		t.Fatalf("queue items after completed launch = %#v, want empty", queue.Items)
 	}
 	if tasksAfter := readMainTestFile(t, filepath.Join(repoRoot, ".brevity", state.TasksFile)); tasksAfter != tasksBefore {
@@ -2306,6 +2374,15 @@ func smokeRun(t *testing.T, args ...string) string {
 		t.Fatalf("brevity %s failed: %v\n%s", strings.Join(args, " "), err, stdout.String())
 	}
 	return stdout.String()
+}
+
+func smokeRunJSON(t *testing.T, target any, args ...string) string {
+	t.Helper()
+	output := smokeRun(t, args...)
+	if err := json.Unmarshal(bytes.TrimSpace([]byte(output)), target); err != nil {
+		t.Fatalf("brevity %s emitted invalid JSON: %v\n%s", strings.Join(args, " "), err, output)
+	}
+	return output
 }
 
 type launchDryRunStateSnapshot struct {
