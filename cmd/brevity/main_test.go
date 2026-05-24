@@ -144,6 +144,78 @@ func TestRunWithClientRendersRuntimeState(t *testing.T) {
 	}
 }
 
+func TestHelpExposesOrchestrationConcepts(t *testing.T) {
+	var stdout bytes.Buffer
+	if err := run(&stdout, []string{"help"}); err != nil {
+		t.Fatalf("run returned error: %v", err)
+	}
+	output := stdout.String()
+	for _, want := range []string{
+		"queue        Durable orchestration infrastructure state.",
+		"scheduler    Selection and reservation planning layer.",
+		"execution    Execution intent plus provider launch lifecycle.",
+		"Recommended operator flow:",
+		"docs/execution-operator-guide.md",
+	} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("help output missing %q:\n%s", want, output)
+		}
+	}
+}
+
+func TestCommandGroupHelpDocumentsPipelineAndMutationBoundaries(t *testing.T) {
+	tests := []struct {
+		name  string
+		args  []string
+		wants []string
+	}{
+		{
+			name: "queue",
+			args: []string{"queue"},
+			wants: []string{
+				"durable orchestration infrastructure state",
+				"add/reserve/unreserve/remove update queue state.",
+				"inspect and plan report state without provider execution.",
+			},
+		},
+		{
+			name: "scheduler",
+			args: []string{"scheduler"},
+			wants: []string{
+				"selection and reservation planning layer",
+				"plan             Read-only selection preview.",
+				"reserve-next     Mutates queue reservation state for one item.",
+				"plan-execution   Mutates execution intent from an existing reservation.",
+			},
+		},
+		{
+			name: "execution",
+			args: []string{"execution"},
+			wants: []string{
+				"Pipeline order:",
+				"brevity execution launch-dry-run <execution-id>",
+				"performs real provider execution",
+				"not a dry-run",
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var stdout bytes.Buffer
+			if err := run(&stdout, tt.args); err != nil {
+				t.Fatalf("run returned error: %v", err)
+			}
+			output := stdout.String()
+			for _, want := range tt.wants {
+				if !strings.Contains(output, want) {
+					t.Fatalf("%s help missing %q:\n%s", tt.name, want, output)
+				}
+			}
+		})
+	}
+}
+
 func TestTaskPreflightJSONOutput(t *testing.T) {
 	root := taskPreflightFixture(t, "alpha", "planned", state.StatusHealthy)
 	previous, err := os.Getwd()

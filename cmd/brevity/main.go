@@ -95,6 +95,9 @@ const (
 	commandCleanupExecute        commandKind = commandKind(commands.CleanupExecuteID)
 	commandSupportMatrix         commandKind = "support-matrix"
 	commandCmux                  commandKind = "cmux"
+	commandQueueHelp             commandKind = "queue-help"
+	commandSchedulerHelp         commandKind = "scheduler-help"
+	commandExecutionHelp         commandKind = "execution-help"
 )
 
 type cliOptions struct {
@@ -174,6 +177,12 @@ func parseOptions(args []string) (cliOptions, error) {
 		}
 	}
 
+	if len(args) > 0 && args[0] == "help" {
+		if len(args) != 1 {
+			return cliOptions{}, fmt.Errorf("usage: brevity help")
+		}
+		return cliOptions{help: true}, nil
+	}
 	if len(args) > 0 && args[0] == "provider" {
 		return parseProviderOptions(args)
 	}
@@ -253,7 +262,7 @@ func parseOptions(args []string) (cliOptions, error) {
 
 func parseQueueOptions(args []string) (cliOptions, error) {
 	if len(args) < 2 {
-		return cliOptions{}, fmt.Errorf("missing queue command: supported commands: add, list, inspect, plan, remove, reserve, unreserve")
+		return cliOptions{kind: commandQueueHelp}, nil
 	}
 	switch args[1] {
 	case "add":
@@ -306,7 +315,7 @@ func parseQueueOptions(args []string) (cliOptions, error) {
 
 func parseExecutionOptions(args []string) (cliOptions, error) {
 	if len(args) < 2 {
-		return cliOptions{}, fmt.Errorf("missing execution command: supported commands: list, inspect, plan-from-reservation, mark-ready, mark-planned, preflight, launch-dry-run, launch")
+		return cliOptions{kind: commandExecutionHelp}, nil
 	}
 	switch args[1] {
 	case "list":
@@ -393,7 +402,7 @@ func parseExecutionOptions(args []string) (cliOptions, error) {
 
 func parseSchedulerOptions(args []string) (cliOptions, error) {
 	if len(args) < 2 {
-		return cliOptions{}, fmt.Errorf("missing scheduler command: supported commands: plan, reserve-next, plan-execution")
+		return cliOptions{kind: commandSchedulerHelp}, nil
 	}
 	switch args[1] {
 	case "plan":
@@ -1067,6 +1076,15 @@ func runWithOptions(stdout io.Writer, client runtimeclient.Client, options cliOp
 
 func runWithContextOptions(ctx context.Context, stdout io.Writer, client runtimeclient.Client, options cliOptions) error {
 	switch options.kind {
+	case commandQueueHelp:
+		writeQueueUsage(stdout)
+		return nil
+	case commandSchedulerHelp:
+		writeSchedulerUsage(stdout)
+		return nil
+	case commandExecutionHelp:
+		writeExecutionUsage(stdout)
+		return nil
 	case commandRuntimeState:
 		return routeRuntimeStateCommand(stdout)
 	case commandRuntimeStart, commandRuntimeStop, commandRuntimeStatus:
@@ -3056,10 +3074,26 @@ func runTaskContextRefresh(stdout io.Writer, client runtimeclient.Client, option
 func writeUsage(stdout io.Writer) {
 	fmt.Fprintln(stdout, "Brevity Go Dashboard")
 	fmt.Fprintln(stdout)
+	fmt.Fprintln(stdout, "Orchestration concepts:")
+	fmt.Fprintln(stdout, "  queue        Durable orchestration infrastructure state.")
+	fmt.Fprintln(stdout, "  scheduler    Selection and reservation planning layer.")
+	fmt.Fprintln(stdout, "  execution    Execution intent plus provider launch lifecycle.")
+	fmt.Fprintln(stdout)
 	fmt.Fprintln(stdout, "Usage:")
 	for _, command := range commands.UsageCommands {
 		fmt.Fprintf(stdout, "  %s\n", command.Usage)
 	}
+	fmt.Fprintln(stdout)
+	fmt.Fprintln(stdout, "Recommended operator flow:")
+	fmt.Fprintln(stdout, "  brevity queue add <task>")
+	fmt.Fprintln(stdout, "  brevity scheduler reserve-next")
+	fmt.Fprintln(stdout, "  brevity scheduler plan-execution")
+	fmt.Fprintln(stdout, "  brevity execution mark-ready <execution-id>")
+	fmt.Fprintln(stdout, "  brevity execution preflight <execution-id>")
+	fmt.Fprintln(stdout, "  brevity execution launch-dry-run <execution-id>")
+	fmt.Fprintln(stdout, "  brevity execution launch <execution-id>")
+	fmt.Fprintln(stdout)
+	fmt.Fprintln(stdout, "Operator guide: docs/execution-operator-guide.md")
 	fmt.Fprintln(stdout)
 	fmt.Fprintln(stdout, "The dashboard remains read-only. Mutating actions are dispatched")
 	fmt.Fprintln(stdout, "through native Go where implemented; PowerShell remains legacy fallback.")
@@ -3137,4 +3171,83 @@ func writeCmuxUsage(stdout io.Writer) {
 	fmt.Fprintln(stdout, "  brevity cmux --blocked-report")
 	fmt.Fprintln(stdout, "  brevity cmux --blocked-report --output markdown")
 	fmt.Fprintln(stdout, "  brevity cmux --blocked-report --output json")
+}
+
+func writeQueueUsage(stdout io.Writer) {
+	fmt.Fprintln(stdout, "Brevity Queue")
+	fmt.Fprintln(stdout)
+	fmt.Fprintln(stdout, "Queue is durable orchestration infrastructure state stored under .brevity.")
+	fmt.Fprintln(stdout, "It records requested work, reservations, and scheduler-visible status.")
+	fmt.Fprintln(stdout)
+	fmt.Fprintln(stdout, "Usage:")
+	for _, command := range []commands.Command{
+		commands.QueueAdd,
+		commands.QueueList,
+		commands.QueueInspect,
+		commands.QueuePlan,
+		commands.QueueRemove,
+		commands.QueueReserve,
+		commands.QueueUnreserve,
+	} {
+		fmt.Fprintf(stdout, "  %s\n", command.Usage)
+	}
+	fmt.Fprintln(stdout)
+	fmt.Fprintln(stdout, "Notes:")
+	fmt.Fprintln(stdout, "  add/reserve/unreserve/remove update queue state.")
+	fmt.Fprintln(stdout, "  inspect and plan report state without provider execution.")
+	fmt.Fprintln(stdout, "  scheduler commands consume this state when selecting work.")
+}
+
+func writeSchedulerUsage(stdout io.Writer) {
+	fmt.Fprintln(stdout, "Brevity Scheduler")
+	fmt.Fprintln(stdout)
+	fmt.Fprintln(stdout, "Scheduler is the selection and reservation planning layer.")
+	fmt.Fprintln(stdout, "It does not run providers, start daemons, or drain the queue.")
+	fmt.Fprintln(stdout)
+	fmt.Fprintln(stdout, "Usage:")
+	for _, command := range []commands.Command{
+		commands.SchedulerPlan,
+		commands.SchedulerReserveNext,
+		commands.SchedulerPlanExecution,
+	} {
+		fmt.Fprintf(stdout, "  %s\n", command.Usage)
+	}
+	fmt.Fprintln(stdout)
+	fmt.Fprintln(stdout, "Behavior:")
+	fmt.Fprintln(stdout, "  plan             Read-only selection preview.")
+	fmt.Fprintln(stdout, "  reserve-next     Mutates queue reservation state for one item.")
+	fmt.Fprintln(stdout, "  plan-execution   Mutates execution intent from an existing reservation.")
+}
+
+func writeExecutionUsage(stdout io.Writer) {
+	fmt.Fprintln(stdout, "Brevity Execution")
+	fmt.Fprintln(stdout)
+	fmt.Fprintln(stdout, "Execution tracks intent and the foreground/manual provider launch lifecycle.")
+	fmt.Fprintln(stdout)
+	fmt.Fprintln(stdout, "Pipeline order:")
+	fmt.Fprintln(stdout, "  1. brevity scheduler plan-execution")
+	fmt.Fprintln(stdout, "  2. brevity execution mark-ready <execution-id>")
+	fmt.Fprintln(stdout, "  3. brevity execution preflight <execution-id>")
+	fmt.Fprintln(stdout, "  4. brevity execution launch-dry-run <execution-id>")
+	fmt.Fprintln(stdout, "  5. brevity execution launch <execution-id>")
+	fmt.Fprintln(stdout)
+	fmt.Fprintln(stdout, "Usage:")
+	for _, command := range []commands.Command{
+		commands.ExecutionList,
+		commands.ExecutionInspect,
+		commands.ExecutionPlanFromReservation,
+		commands.ExecutionMarkReady,
+		commands.ExecutionMarkPlanned,
+		commands.ExecutionPreflight,
+		commands.ExecutionLaunchDryRun,
+		commands.ExecutionLaunch,
+	} {
+		fmt.Fprintf(stdout, "  %s\n", command.Usage)
+	}
+	fmt.Fprintln(stdout)
+	fmt.Fprintln(stdout, "Warning:")
+	fmt.Fprintln(stdout, "  brevity execution launch <execution-id> performs real provider execution.")
+	fmt.Fprintln(stdout, "  It is foreground/manual execution and is not a dry-run.")
+	fmt.Fprintln(stdout)
+	fmt.Fprintln(stdout, "Operator guide: docs/execution-operator-guide.md")
 }
