@@ -9,6 +9,10 @@
 package cmux
 
 import (
+	"fmt"
+	"sort"
+	"strings"
+
 	"github.com/mortenlein/brevity/internal/contracts"
 	runtimescheduler "github.com/mortenlein/brevity/internal/runtime/scheduler"
 )
@@ -124,4 +128,201 @@ type Snapshot struct {
 	SchedulerPlan    runtimescheduler.Plan
 	HasSchedulerPlan bool
 	SchedulerPlanErr error
+}
+
+const MergeReadinessSchema = "brevity.cmux-merge-readiness-report.v1"
+
+const (
+	GroupReadyForReview  = "ready-for-review"
+	GroupLikelyMergeable = "likely-mergeable"
+	GroupNeedsInspection = "needs-inspection"
+	GroupNotReady        = "not-ready"
+	InspectNext          = "brevity task status / git diff / task merge dry-run"
+	SafetyNote           = "This report is read-only guidance. It does not merge, approve, mutate task state, or replace human review."
+)
+
+type MergeReadinessReport struct {
+	Schema          string               `json:"schema"`
+	ReadyForReview  []MergeReadinessItem `json:"ready-for-review"`
+	LikelyMergeable []MergeReadinessItem `json:"likely-mergeable"`
+	NeedsInspection []MergeReadinessItem `json:"needs-inspection"`
+	NotReady        []MergeReadinessItem `json:"not-ready"`
+	SafetyNote      string               `json:"safetyNote"`
+}
+
+type MergeReadinessItem struct {
+	Task        string `json:"task"`
+	Group       string `json:"group"`
+	Reason      string `json:"reason"`
+	InspectNext string `json:"inspectNext"`
+	Source      string `json:"source,omitempty"`
+}
+
+func BuildMergeReadinessReport(state contracts.RuntimeState) MergeReadinessReport {
+	report := MergeReadinessReport{
+		Schema:          MergeReadinessSchema,
+		ReadyForReview:  []MergeReadinessItem{},
+		LikelyMergeable: []MergeReadinessItem{},
+		NeedsInspection: []MergeReadinessItem{},
+		NotReady:        []MergeReadinessItem{},
+		SafetyNote:      SafetyNote,
+	}
+	tasks := append([]contracts.TaskSummary{}, state.Tasks...)
+	sort.SliceStable(tasks, func(i, j int) bool {
+		return tasks[i].Slug < tasks[j].Slug
+	})
+	for _, task := range tasks {
+		item := classifyTask(task)
+		switch item.Group {
+		case GroupReadyForReview:
+			report.ReadyForReview = append(report.ReadyForReview, item)
+		case GroupLikelyMergeable:
+			report.LikelyMergeable = append(report.LikelyMergeable, item)
+		case GroupNeedsInspection:
+			report.NeedsInspection = append(report.NeedsInspection, item)
+		default:
+			report.NotReady = append(report.NotReady, item)
+		}
+	}
+	return report
+}
+
+func classifyTask(task contracts.TaskSummary) MergeReadinessItem {
+	state := normalizedState(task)
+	item := MergeReadinessItem{
+		Task:        firstNonEmpty(task.Slug, "(unknown-task)"),
+		Group:       GroupNeedsInspection,
+		Reason:      "reason unavailable from current contract",
+		InspectNext: InspectNext,
+		Source:      "task",
+	}
+	if isNotReadyState(state) || task.ProviderGated {
+		item.Group = GroupNotReady
+		item.Reason = notReadyReason(task, state)
+		return item
+	}
+	if state == "merged" {
+		item.Group = GroupNotReady
+		item.Reason = "task already marked merged"
+		return item
+	}
+	if state == "review" || state == "needs-review" {
+		item.Group = GroupReadyForReview
+		item.Reason = successfulSignalReason(task, "task state indicates review")
+		item.Source = successfulSignalSource(task, "task")
+		return item
+	}
+	if latestRunCompleted(task) {
+		item.Group = GroupReadyForReview
+		item.Reason = "latest run completed"
+		item.Source = "latestRun"
+		if state == "" || state == "unknown" {
+			item.Group = GroupNeedsInspection
+			item.Reason = "latest run completed but task state unclear"
+		}
+		return item
+	}
+	if latestExecutionCompleted(task) {
+		item.Group = GroupReadyForReview
+		item.Reason = "latest execution completed"
+		item.Source = "execution"
+		if state == "" || state == "unknown" {
+			item.Group = GroupNeedsInspection
+			item.Reason = "execution completed but task state unclear"
+		}
+		return item
+	}
+	if task.RunCount > 0 || strings.TrimSpace(task.LatestRunID) != "" || strings.TrimSpace(task.LastRunID) != "" {
+		item.Group = GroupNeedsInspection
+		item.Reason = "run history exists but latest task state not clearly reviewable"
+		item.Source = "runHistory"
+	}
+	return item
+}
+
+func normalizedState(task contracts.TaskSummary) string {
+	return strings.ToLower(strings.TrimSpace(firstNonEmpty(task.NormalizedState, task.Status)))
+}
+
+func isNotReadyState(state string) bool {
+	switch state {
+	case "blocked", "provider-gated", "failed", "reserved", "queued", "launching", "running", "starting", "planned", "ready", "ready-for-worker", "runnable", "stale":
+		return true
+	default:
+		return false
+	}
+}
+
+func notReadyReason(task contracts.TaskSummary, state string) string {
+	if task.ProviderGated || state == "provider-gated" {
+		return "provider gated"
+	}
+	if task.LatestRunIncomplete {
+		return "latest run incomplete"
+	}
+	if isActiveState(state) {
+		return "queue item still active"
+	}
+	if state == "" {
+		return "reason unavailable from current contract"
+	}
+	return state
+}
+
+func isActiveState(state string) bool {
+	switch state {
+	case "queued", "reserved", "ready", "ready-for-worker", "runnable", "planned", "launching", "running", "starting":
+		return true
+	default:
+		return false
+	}
+}
+
+func latestRunCompleted(task contracts.TaskSummary) bool {
+	status := strings.ToLower(strings.TrimSpace(task.LatestRunWorkerStatus))
+	return !task.LatestRunIncomplete && strings.TrimSpace(task.LatestRunID) != "" && (status == "succeeded" || status == "completed") && exitCodeOK(task.LatestRunExitCode)
+}
+
+func latestExecutionCompleted(task contracts.TaskSummary) bool {
+	status := strings.ToLower(strings.TrimSpace(task.WorkerStatus))
+	if task.Execution != nil && strings.TrimSpace(task.Execution.Status) != "" {
+		status = strings.ToLower(strings.TrimSpace(task.Execution.Status))
+	}
+	return status == "succeeded" || status == "completed"
+}
+
+func exitCodeOK(value any) bool {
+	if value == nil {
+		return true
+	}
+	return strings.Trim(strings.ToLower(strings.TrimSpace(fmt.Sprint(value))), `"`) == "0"
+}
+
+func successfulSignalReason(task contracts.TaskSummary, fallback string) string {
+	if latestRunCompleted(task) {
+		return "latest run completed"
+	}
+	if latestExecutionCompleted(task) {
+		return "latest execution completed"
+	}
+	return fallback
+}
+
+func successfulSignalSource(task contracts.TaskSummary, fallback string) string {
+	if latestRunCompleted(task) {
+		return "latestRun"
+	}
+	if latestExecutionCompleted(task) {
+		return "execution"
+	}
+	return fallback
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return strings.TrimSpace(value)
+		}
+	}
+	return ""
 }

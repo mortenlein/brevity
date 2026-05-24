@@ -67,6 +67,7 @@ const (
 	commandExecutionPreflight    commandKind = commandKind(commands.ExecutionPreflightID)
 	commandExecutionLaunchDryRun commandKind = commandKind(commands.ExecutionLaunchDryRunID)
 	commandExecutionLaunch       commandKind = commandKind(commands.ExecutionLaunchID)
+	commandExecutionFlow         commandKind = commandKind(commands.ExecutionFlowID)
 	commandProviderStatus        commandKind = commandKind(commands.ProviderStatusID)
 	commandProviderSet           commandKind = commandKind(commands.ProviderSetID)
 	commandProviderReset         commandKind = commandKind(commands.ProviderResetID)
@@ -213,11 +214,11 @@ func parseOptions(args []string) (cliOptions, error) {
 	if len(args) > 0 && args[0] == "cleanup" {
 		return parseCleanupOptions(args)
 	}
-	if len(args) > 0 && args[0] == "support" {
-		return parseSupportOptions(args)
-	}
 	if len(args) > 0 && args[0] == "cmux" {
 		return parseCmuxOptions(args)
+	}
+	if len(args) > 0 && args[0] == "support" {
+		return parseSupportOptions(args)
 	}
 
 	flags := flag.NewFlagSet("brevity", flag.ContinueOnError)
@@ -395,8 +396,17 @@ func parseExecutionOptions(args []string) (cliOptions, error) {
 			return cliOptions{}, usageError(commands.ExecutionLaunch)
 		}
 		return options, nil
+	case "flow":
+		options := cliOptions{kind: commandExecutionFlow}
+		for _, arg := range args[2:] {
+			if arg != "--json" {
+				return cliOptions{}, usageError(commands.ExecutionFlow)
+			}
+			options.json = true
+		}
+		return options, nil
 	default:
-		return cliOptions{}, fmt.Errorf("unsupported execution command %q: supported commands: list, inspect, plan-from-reservation, mark-ready, mark-planned, preflight, launch-dry-run, launch", args[1])
+		return cliOptions{}, fmt.Errorf("unsupported execution command %q: supported commands: list, inspect, plan-from-reservation, mark-ready, mark-planned, preflight, launch-dry-run, launch, flow", args[1])
 	}
 }
 
@@ -459,6 +469,7 @@ func parseCmuxOptions(args []string) (cliOptions, error) {
 	review := flags.String("review", "", "generate a focused review packet for this task slug")
 	handoff := flags.Bool("handoff", false, "generate an AI/operator handoff packet")
 	mergeReport := flags.Bool("merge-report", false, "generate a merge readiness report grouped by state")
+	mergeReadinessReport := flags.Bool("merge-readiness-report", false, "alias for --merge-report")
 	blockedReport := flags.Bool("blocked-report", false, "generate a blocked task report grouped by block reason")
 	if err := flags.Parse(args[1:]); err != nil {
 		return cliOptions{}, fmt.Errorf("usage: brevity cmux [--limit <n>] [--section <name>] [--task <slug>] [--state <state>] [--output text|markdown|json] [--review <slug>] [--handoff] [--merge-report] [--blocked-report]")
@@ -490,7 +501,7 @@ func parseCmuxOptions(args []string) (cliOptions, error) {
 		cmuxOutput:        *output,
 		cmuxReview:        *review,
 		cmuxHandoff:       *handoff,
-		cmuxMergeReport:   *mergeReport,
+		cmuxMergeReport:   *mergeReport || *mergeReadinessReport,
 		cmuxBlockedReport: *blockedReport,
 	}, nil
 }
@@ -1093,7 +1104,7 @@ func runWithContextOptions(ctx context.Context, stdout io.Writer, client runtime
 		return routeQueueCommand(stdout, options)
 	case commandSchedulerPlan, commandSchedulerReserveNext, commandSchedulerPlanExec:
 		return routeSchedulerCommand(stdout, options)
-	case commandExecutionList, commandExecutionInspect, commandExecutionPlan, commandExecutionMarkReady, commandExecutionMarkPlanned, commandExecutionPreflight, commandExecutionLaunchDryRun, commandExecutionLaunch:
+	case commandExecutionList, commandExecutionInspect, commandExecutionPlan, commandExecutionMarkReady, commandExecutionMarkPlanned, commandExecutionPreflight, commandExecutionLaunchDryRun, commandExecutionLaunch, commandExecutionFlow:
 		return routeExecutionCommand(ctx, stdout, options)
 	case commandProviderStatus, commandProviderSet, commandProviderReset:
 		return routeProviderCommand(stdout, options)
@@ -1146,6 +1157,18 @@ func routeExecutionCommand(ctx context.Context, stdout io.Writer, options cliOpt
 		return err
 	}
 	switch options.kind {
+	case commandExecutionFlow:
+		plan := runtimeexecution.FlowPlanner{Queue: store.Queue, Execution: store}.Plan()
+		if options.json {
+			output, err := json.Marshal(plan)
+			if err != nil {
+				return err
+			}
+			_, err = stdout.Write(append(output, '\n'))
+			return err
+		}
+		renderExecutionFlow(stdout, plan)
+		return nil
 	case commandExecutionList:
 		executions, missing, err := store.Load()
 		fmt.Fprintln(stdout, "Runtime executions")
@@ -1469,6 +1492,42 @@ func renderExecutionLaunchResult(stdout io.Writer, result runtimeexecution.Launc
 	if strings.TrimSpace(result.Error) != "" {
 		fmt.Fprintf(stdout, "- error: %s\n", result.Error)
 	}
+}
+
+func renderExecutionFlow(stdout io.Writer, plan runtimeexecution.FlowPlan) {
+	fmt.Fprintln(stdout, "Execution flow")
+	fmt.Fprintf(stdout, "Queue: %s (%s)\n", plan.QueuePath, plan.QueueState)
+	fmt.Fprintf(stdout, "Executions: %s (%s)\n", plan.ExecutionsPath, plan.ExecutionState)
+	fmt.Fprintf(stdout, "Read-only: %t\n", plan.ReadOnly)
+	fmt.Fprintln(stdout)
+	fmt.Fprintf(stdout, "Next state: %s\n", plan.NextState)
+	fmt.Fprintf(stdout, "Guidance: %s\n", plan.Message)
+	if plan.QueueItem != nil {
+		fmt.Fprintf(stdout, "Queue item: %s\t%s\t%s\n", plan.QueueItem.ID, plan.QueueItem.Task, plan.QueueItem.Reason)
+	}
+	if plan.Execution != nil {
+		fmt.Fprintf(stdout, "Execution: %s\t%s\t%s\n", plan.Execution.ID, plan.Execution.Task, plan.Execution.Status)
+	}
+	if plan.Completed != nil {
+		fmt.Fprintf(stdout, "Completed: %s\t%s\t%s\n", plan.Completed.ID, plan.Completed.Task, plan.Completed.Status)
+	}
+	fmt.Fprintf(stdout, "Queue summary: runnable=%d skipped=%d reserved=%d\n", plan.QueueSummary.Runnable, plan.QueueSummary.Skipped, plan.QueueSummary.Reserved)
+	if len(plan.Errors) > 0 {
+		fmt.Fprintln(stdout)
+		fmt.Fprintln(stdout, "State warnings:")
+		for _, err := range plan.Errors {
+			fmt.Fprintf(stdout, "- %s\n", err)
+		}
+	}
+	if len(plan.Commands) > 0 {
+		fmt.Fprintln(stdout)
+		fmt.Fprintln(stdout, "Suggested manual step:")
+		for _, command := range plan.Commands {
+			fmt.Fprintf(stdout, "  %s\n", command)
+		}
+	}
+	fmt.Fprintln(stdout)
+	fmt.Fprintln(stdout, "Guidance only: no queue, execution, provider, worker, supervisor, or run-history state was changed.")
 }
 
 func findLaunchDryRunTask(tasks state.Tasks, slug string) (state.Task, bool) {
@@ -3243,6 +3302,7 @@ func writeExecutionUsage(stdout io.Writer) {
 		commands.ExecutionPreflight,
 		commands.ExecutionLaunchDryRun,
 		commands.ExecutionLaunch,
+		commands.ExecutionFlow,
 	} {
 		fmt.Fprintf(stdout, "  %s\n", command.Usage)
 	}

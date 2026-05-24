@@ -506,6 +506,60 @@ func TestExecutionMarkReadyTransitionsPlannedExecution(t *testing.T) {
 	}
 }
 
+func TestExecutionFlowRendersGuidanceWithoutMutation(t *testing.T) {
+	repoRoot := tempRepoWithQueue(t, runtimequeue.Queue{Version: runtimequeue.Version, Items: []runtimequeue.Item{
+		mainTestReservedQueueItem("queue-1", "alpha", "res-alpha"),
+	}})
+	writeMainTestExecutions(t, repoRoot, runtimeexecution.Executions{Version: runtimeexecution.Version, Records: []runtimeexecution.Record{
+		mainTestExecutionRecord("exec-1", "queue-1", "alpha", "res-alpha", runtimeexecution.StatusReady),
+	}})
+	t.Chdir(repoRoot)
+	queuePath := filepath.Join(repoRoot, ".brevity", runtimequeue.FileName)
+	executionsPath := filepath.Join(repoRoot, ".brevity", runtimeexecution.FileName)
+	beforeQueue := readMainTestFile(t, queuePath)
+	beforeExecutions := readMainTestFile(t, executionsPath)
+
+	var stdout bytes.Buffer
+	if err := runWithOptions(&stdout, &fakeRuntimeClient{}, cliOptions{kind: commandExecutionFlow}); err != nil {
+		t.Fatalf("runWithOptions returned error: %v", err)
+	}
+	output := stdout.String()
+	for _, want := range []string{
+		"Execution flow",
+		"brevity execution preflight exec-1",
+		"brevity execution launch-dry-run exec-1",
+		"brevity execution launch exec-1",
+		"Guidance only",
+	} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("output missing %q:\n%s", want, output)
+		}
+	}
+	if after := readMainTestFile(t, queuePath); after != beforeQueue {
+		t.Fatalf("queue mutated\nbefore: %s\nafter: %s", beforeQueue, after)
+	}
+	if after := readMainTestFile(t, executionsPath); after != beforeExecutions {
+		t.Fatalf("executions mutated\nbefore: %s\nafter: %s", beforeExecutions, after)
+	}
+}
+
+func TestExecutionFlowJSON(t *testing.T) {
+	repoRoot := tempRepoWithQueue(t, runtimequeue.Queue{Version: runtimequeue.Version, Items: []runtimequeue.Item{}})
+	t.Chdir(repoRoot)
+
+	var stdout bytes.Buffer
+	if err := runWithOptions(&stdout, &fakeRuntimeClient{}, cliOptions{kind: commandExecutionFlow, json: true}); err != nil {
+		t.Fatalf("runWithOptions returned error: %v", err)
+	}
+	var plan runtimeexecution.FlowPlan
+	if err := json.Unmarshal(stdout.Bytes(), &plan); err != nil {
+		t.Fatalf("json output did not parse: %v\n%s", err, stdout.String())
+	}
+	if plan.Schema != runtimeexecution.FlowSchema || !plan.ReadOnly {
+		t.Fatalf("plan = %#v", plan)
+	}
+}
+
 func TestExecutionMarkReadyRejectsMissingExecutionID(t *testing.T) {
 	if _, err := parseOptions([]string{"execution", "mark-ready"}); err == nil {
 		t.Fatal("parseOptions returned nil error")
@@ -1431,6 +1485,23 @@ func TestParseOptionsAcceptsRuntimeStateJSON(t *testing.T) {
 	}
 	if options.kind != commandRuntimeState || !options.json {
 		t.Fatalf("options = %#v, want runtime state json", options)
+	}
+}
+
+func TestParseOptionsAcceptsCMUXMergeReadinessReport(t *testing.T) {
+	options, err := parseOptions([]string{"cmux", "--merge-readiness-report", "--output", "markdown"})
+	if err != nil {
+		t.Fatalf("parseOptions returned error: %v", err)
+	}
+	if options.kind != commandCMUXMergeReadiness || options.output != "markdown" {
+		t.Fatalf("options = %#v, want cmux merge readiness markdown", options)
+	}
+}
+
+func TestParseOptionsRejectsUnsupportedCMUXOutput(t *testing.T) {
+	_, err := parseOptions([]string{"cmux", "--merge-readiness-report", "--output", "yaml"})
+	if err == nil || !strings.Contains(err.Error(), "unsupported cmux output") {
+		t.Fatalf("err = %v, want unsupported cmux output", err)
 	}
 }
 
