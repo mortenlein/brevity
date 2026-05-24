@@ -80,6 +80,8 @@ type RuntimeExecution struct {
 	SupportedVersion         int            `json:"supportedVersion"`
 	TotalExecutions          int            `json:"totalExecutions"`
 	CountsByStatus           map[string]int `json:"countsByStatus"`
+	NewestExecutionTask      string         `json:"newestExecutionTask,omitempty"`
+	NewestExecutionStatus    string         `json:"newestExecutionStatus,omitempty"`
 	NewestPlannedTask        string         `json:"newestPlannedTask,omitempty"`
 	DuplicateIDs             []string       `json:"duplicateIds,omitempty"`
 	InvalidRecords           []string       `json:"invalidRecords,omitempty"`

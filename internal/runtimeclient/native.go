@@ -153,6 +153,8 @@ func executionInspectionToContract(inspection runtimeexecution.Inspection) *cont
 		SupportedVersion:         inspection.SupportedVersion,
 		TotalExecutions:          inspection.TotalExecutions,
 		CountsByStatus:           counts,
+		NewestExecutionTask:      inspection.NewestExecutionTask,
+		NewestExecutionStatus:    inspection.NewestExecutionStatus,
 		NewestPlannedTask:        inspection.NewestPlannedTask,
 		DuplicateIDs:             append([]string{}, inspection.DuplicateIDs...),
 		InvalidRecords:           append([]string{}, inspection.InvalidRecords...),

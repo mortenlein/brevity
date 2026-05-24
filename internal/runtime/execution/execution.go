@@ -70,6 +70,8 @@ type Inspection struct {
 	SupportedVersion         int            `json:"supportedVersion"`
 	TotalExecutions          int            `json:"totalExecutions"`
 	CountsByStatus           map[string]int `json:"countsByStatus"`
+	NewestExecutionTask      string         `json:"newestExecutionTask,omitempty"`
+	NewestExecutionStatus    string         `json:"newestExecutionStatus,omitempty"`
 	NewestPlannedTask        string         `json:"newestPlannedTask,omitempty"`
 	DuplicateIDs             []string       `json:"duplicateIds,omitempty"`
 	InvalidRecords           []string       `json:"invalidRecords,omitempty"`
@@ -158,6 +160,7 @@ func (store Store) Inspect() Inspection {
 
 	seen := map[string]struct{}{}
 	duplicates := map[string]struct{}{}
+	var newestExecutionAt time.Time
 	var newestPlannedAt time.Time
 	for index, record := range executions.Records {
 		status := strings.ToLower(strings.TrimSpace(record.Status))
@@ -165,6 +168,13 @@ func (store Store) Inspect() Inspection {
 			status = "(missing)"
 		}
 		result.CountsByStatus[status]++
+		if createdAt, err := parseTime(record.CreatedAt); err == nil {
+			if newestExecutionAt.IsZero() || createdAt.After(newestExecutionAt) {
+				newestExecutionAt = createdAt
+				result.NewestExecutionTask = record.Task
+				result.NewestExecutionStatus = status
+			}
+		}
 		if status == StatusPlanned {
 			if createdAt, err := parseTime(record.CreatedAt); err == nil && (newestPlannedAt.IsZero() || createdAt.After(newestPlannedAt)) {
 				newestPlannedAt = createdAt

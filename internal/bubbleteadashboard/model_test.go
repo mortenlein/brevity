@@ -3270,7 +3270,7 @@ func TestExecutionVisibilityRendersMissingEmptyPlannedAndCorruptedStates(t *test
 				TotalExecutions: 0,
 				CountsByStatus:  map[string]int{},
 			},
-			want: "exec      missing file | 0 planned | 0 statuses | newest - ok",
+			want: "exec      missing file | 0 executions | planned:0 ready:0 launching:0 completed:0 failed:0 cancelled:0 | newest - - ok",
 		},
 		{
 			name: "empty executions file",
@@ -3280,18 +3280,19 @@ func TestExecutionVisibilityRendersMissingEmptyPlannedAndCorruptedStates(t *test
 				TotalExecutions: 0,
 				CountsByStatus:  map[string]int{},
 			},
-			want: "exec      valid file | 0 planned | 0 statuses | newest - ok",
+			want: "exec      valid file | 0 executions | planned:0 ready:0 launching:0 completed:0 failed:0 cancelled:0 | newest - - ok",
 		},
 		{
-			name: "planned executions",
+			name: "execution lifecycle counts and newest execution",
 			execution: &contracts.RuntimeExecution{
-				State:             "valid",
-				Version:           1,
-				TotalExecutions:   2,
-				CountsByStatus:    map[string]int{"planned": 2},
-				NewestPlannedTask: "task-alpha",
+				State:                 "valid",
+				Version:               1,
+				TotalExecutions:       5,
+				CountsByStatus:        map[string]int{"planned": 1, "ready": 1, "launching": 1, "completed": 1, "failed": 1},
+				NewestExecutionTask:   "task-alpha",
+				NewestExecutionStatus: "failed",
 			},
-			want: "exec      valid file | 2 planned | planned:2 | newest task-alpha ok",
+			want: "exec      valid file | 5 executions | planned:1 ready:1 launching:1 completed:1 failed:1 cancelled:0 | newest task-alpha failed ok",
 		},
 		{
 			name: "corrupted executions warning",
@@ -3302,7 +3303,7 @@ func TestExecutionVisibilityRendersMissingEmptyPlannedAndCorruptedStates(t *test
 				CountsByStatus:  map[string]int{},
 				Error:           "parse runtime-executions.json: invalid character",
 			},
-			want: "exec      corrupted file | 0 planned | 0 statuses | newest - | corrupted !",
+			want: "exec      corrupted file | 0 executions | planned:0 ready:0 launching:0 completed:0 failed:0 cancelled:0 | newest - - | corrupted !",
 		},
 	}
 
@@ -3312,6 +3313,7 @@ func TestExecutionVisibilityRendersMissingEmptyPlannedAndCorruptedStates(t *test
 			model.state = emptyBubbleState()
 			model.state.Executions = tt.execution
 			model.hasState = true
+			model.width = 200
 
 			output := plainView(model.renderSummary())
 			if !strings.Contains(output, tt.want) {
@@ -3325,13 +3327,14 @@ func TestExecutionVisibilityWidthSafety(t *testing.T) {
 	model := NewModelWithSource(&fakeClient{}, time.Second, "native")
 	model.state = emptyBubbleState()
 	model.state.Executions = &contracts.RuntimeExecution{
-		State:             "invalid",
-		Version:           99,
-		SupportedVersion:  1,
-		TotalExecutions:   12345,
-		CountsByStatus:    map[string]int{"planned-with-a-very-long-future-status": 12345},
-		NewestPlannedTask: strings.Repeat("long-task-", 12),
-		Error:             strings.Repeat("future version ", 20),
+		State:                 "invalid",
+		Version:               99,
+		SupportedVersion:      1,
+		TotalExecutions:       12345,
+		CountsByStatus:        map[string]int{"planned-with-a-very-long-future-status": 12345},
+		NewestExecutionTask:   strings.Repeat("long-task-", 12),
+		NewestExecutionStatus: "planned-with-a-very-long-future-status",
+		Error:                 strings.Repeat("future version ", 20),
 	}
 	model.hasState = true
 	model.width = 42

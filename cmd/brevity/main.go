@@ -1561,6 +1561,8 @@ func renderExecutionInspection(stdout io.Writer, inspection runtimeexecution.Ins
 	}
 	fmt.Fprintf(stdout, "Version: %d (supported %d)\n", inspection.Version, inspection.SupportedVersion)
 	fmt.Fprintf(stdout, "Executions: %d\n", inspection.TotalExecutions)
+	fmt.Fprintf(stdout, "Newest execution task: %s\n", fallbackDash(inspection.NewestExecutionTask))
+	fmt.Fprintf(stdout, "Newest execution status: %s\n", fallbackDash(inspection.NewestExecutionStatus))
 	fmt.Fprintln(stdout)
 	if len(inspection.CountsByStatus) == 0 {
 		fmt.Fprintln(stdout, "Status counts: none")

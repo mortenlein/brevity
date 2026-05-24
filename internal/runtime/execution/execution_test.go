@@ -223,6 +223,22 @@ func TestInspectCountsReadyStatus(t *testing.T) {
 	}
 }
 
+func TestInspectReportsNewestExecutionTaskAndStatus(t *testing.T) {
+	store := testStore(t)
+	oldRecord := recordFixture("exec-1", StatusPlanned)
+	oldRecord.Task = "old-task"
+	oldRecord.CreatedAt = "2026-05-22T12:00:00Z"
+	newRecord := recordFixture("exec-2", StatusFailed)
+	newRecord.Task = "new-task"
+	newRecord.CreatedAt = "2026-05-22T13:00:00Z"
+	writeExecutions(t, store, Executions{Version: Version, Records: []Record{oldRecord, newRecord}})
+
+	inspection := store.Inspect()
+	if inspection.NewestExecutionTask != "new-task" || inspection.NewestExecutionStatus != StatusFailed {
+		t.Fatalf("newest execution = %q/%q, want new-task/failed", inspection.NewestExecutionTask, inspection.NewestExecutionStatus)
+	}
+}
+
 func TestMarkPlannedRollsReadyBackToPlanned(t *testing.T) {
 	store := testStore(t)
 	writeExecutions(t, store, Executions{Version: Version, Records: []Record{recordFixture("exec-1", StatusReady)}})
