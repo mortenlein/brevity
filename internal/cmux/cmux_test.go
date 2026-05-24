@@ -2015,3 +2015,379 @@ func TestJSON_RuntimeStateError_ReflectedInErrors(t *testing.T) {
 		t.Errorf("JSON errors must be non-empty when runtime state fails; output:\n%s", out)
 	}
 }
+
+// --- review-packet mode tests -----------------------------------------------
+
+// reviewOpts returns RenderOptions for text review mode.
+func reviewOpts(slug string) cmux.RenderOptions {
+	return cmux.RenderOptions{ReviewTask: slug}
+}
+
+// reviewMarkdownOpts returns RenderOptions for markdown review mode.
+func reviewMarkdownOpts(slug string) cmux.RenderOptions {
+	return cmux.RenderOptions{ReviewTask: slug, Output: cmux.OutputMarkdown}
+}
+
+// reviewJSONOpts returns RenderOptions for JSON review mode.
+func reviewJSONOpts(slug string) cmux.RenderOptions {
+	return cmux.RenderOptions{ReviewTask: slug, Output: cmux.OutputJSON}
+}
+
+func TestReview_Text_TaskNotFound(t *testing.T) {
+	snap := cmux.Read(stubFetcher{
+		stateJSON:     minimalStateJSON(t),
+		schedulerJSON: minimalSchedulerJSON(),
+	})
+	out := renderSnapshotOpts(snap, reviewOpts("no-such-task"))
+	if !strings.Contains(out, `"no-such-task" not found`) {
+		t.Errorf("review text missing not-found message; output:\n%s", out)
+	}
+	// Must not show any unrelated task detail.
+	if strings.Contains(out, "alpha-task") || strings.Contains(out, "beta-task") {
+		t.Error("review text must not show unrelated tasks when target not found")
+	}
+}
+
+func TestReview_Markdown_TaskNotFound(t *testing.T) {
+	snap := cmux.Read(stubFetcher{
+		stateJSON:     minimalStateJSON(t),
+		schedulerJSON: minimalSchedulerJSON(),
+	})
+	out := renderSnapshotOpts(snap, reviewMarkdownOpts("no-such-task"))
+	if !strings.Contains(out, `"no-such-task" not found`) {
+		t.Errorf("review markdown missing not-found message; output:\n%s", out)
+	}
+}
+
+func TestReview_JSON_TaskNotFound(t *testing.T) {
+	snap := cmux.Read(stubFetcher{
+		stateJSON:     minimalStateJSON(t),
+		schedulerJSON: minimalSchedulerJSON(),
+	})
+	out := renderSnapshotOpts(snap, reviewJSONOpts("no-such-task"))
+	var result map[string]any
+	if err := json.Unmarshal([]byte(out), &result); err != nil {
+		t.Fatalf("review JSON task-not-found produced invalid JSON: %v\noutput:\n%s", err, out)
+	}
+	// errors list must mention the slug.
+	if !strings.Contains(out, "no-such-task") {
+		t.Errorf("review JSON errors missing task slug; output:\n%s", out)
+	}
+	// task key must be absent when not found.
+	if _, ok := result["task"]; ok {
+		t.Error("review JSON must not have task key when task not found")
+	}
+}
+
+func TestReview_Text_TaskFound_ContainsTaskInfo(t *testing.T) {
+	snap := cmux.Read(stubFetcher{
+		stateJSON:     richTaskStateJSON(),
+		schedulerJSON: minimalSchedulerJSON(),
+	})
+	out := renderSnapshotOpts(snap, reviewOpts("rich-task"))
+	if !strings.Contains(out, "CMUX REVIEW PACKET") {
+		t.Error("review text missing CMUX REVIEW PACKET header")
+	}
+	if !strings.Contains(out, "review-task: rich-task") {
+		t.Errorf("review text missing review-task slug line; output:\n%s", out)
+	}
+	if !strings.Contains(out, "rich-task") {
+		t.Error("review text missing task slug")
+	}
+	if !strings.Contains(out, "ready-for-worker") {
+		t.Error("review text missing task state")
+	}
+	if !strings.Contains(out, "[read-only]") {
+		t.Error("review text missing [read-only] marker")
+	}
+}
+
+func TestReview_Text_TaskFound_NoUnrelatedTasks(t *testing.T) {
+	// minimalStateJSON has alpha-task and beta-task; review for alpha-task must
+	// not show beta-task detail rows.
+	snap := cmux.Read(stubFetcher{
+		stateJSON:     minimalStateJSON(t),
+		schedulerJSON: minimalSchedulerJSON(),
+	})
+	out := renderSnapshotOpts(snap, reviewOpts("alpha-task"))
+	if !strings.Contains(out, "alpha-task") {
+		t.Error("review text missing alpha-task (the review target)")
+	}
+	// beta-task must not appear in task-detail rows.
+	// It may appear in queue/scheduler context, so check only task rows.
+	if strings.Contains(out, "Task: beta-task") {
+		t.Error("review text must not show beta-task as a task row")
+	}
+}
+
+func TestReview_Text_ChecklistPresent(t *testing.T) {
+	snap := cmux.Read(stubFetcher{
+		stateJSON:     richTaskStateJSON(),
+		schedulerJSON: minimalSchedulerJSON(),
+	})
+	out := renderSnapshotOpts(snap, reviewOpts("rich-task"))
+	if !strings.Contains(out, "Review Checklist") {
+		t.Error("review text missing Review Checklist heading")
+	}
+	// Checklist items must have checkbox format.
+	if !strings.Contains(out, "[x]") && !strings.Contains(out, "[ ]") {
+		t.Errorf("review text missing checklist checkbox markers; output:\n%s", out)
+	}
+}
+
+func TestReview_Text_ReadinessNotesPresent(t *testing.T) {
+	snap := cmux.Read(stubFetcher{
+		stateJSON:     richTaskStateJSON(),
+		schedulerJSON: minimalSchedulerJSON(),
+	})
+	out := renderSnapshotOpts(snap, reviewOpts("rich-task"))
+	if !strings.Contains(out, "Readiness") {
+		t.Error("review text missing Readiness section")
+	}
+	if !strings.Contains(out, "merge:") {
+		t.Error("review text missing merge: readiness line")
+	}
+	if !strings.Contains(out, "cleanup:") {
+		t.Error("review text missing cleanup: readiness line")
+	}
+}
+
+func TestReview_Text_SuggestedActionsPresent(t *testing.T) {
+	snap := cmux.Read(stubFetcher{
+		stateJSON:     richTaskStateJSON(),
+		schedulerJSON: minimalSchedulerJSON(),
+	})
+	out := renderSnapshotOpts(snap, reviewOpts("rich-task"))
+	if !strings.Contains(out, "Suggested Next Actions") {
+		t.Error("review text missing Suggested Next Actions section")
+	}
+}
+
+func TestReview_Markdown_HeadingsPresent(t *testing.T) {
+	snap := cmux.Read(stubFetcher{
+		stateJSON:     richTaskStateJSON(),
+		schedulerJSON: minimalSchedulerJSON(),
+	})
+	out := renderSnapshotOpts(snap, reviewMarkdownOpts("rich-task"))
+	for _, want := range []string{
+		"# CMUX Review Packet:",
+		"## Task:",
+		"## Queue / Scheduler",
+		"## Review Checklist",
+		"## Merge Readiness",
+		"## Cleanup Readiness",
+		"## Suggested Follow-up",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("review markdown missing heading %q; output:\n%s", want, out)
+		}
+	}
+}
+
+func TestReview_Markdown_ChecklistPresent(t *testing.T) {
+	snap := cmux.Read(stubFetcher{
+		stateJSON:     richTaskStateJSON(),
+		schedulerJSON: minimalSchedulerJSON(),
+	})
+	out := renderSnapshotOpts(snap, reviewMarkdownOpts("rich-task"))
+	// Markdown checklist uses GFM-style "- [x]" or "- [ ]" format.
+	if !strings.Contains(out, "- [x]") && !strings.Contains(out, "- [ ]") {
+		t.Errorf("review markdown missing GFM checklist markers; output:\n%s", out)
+	}
+}
+
+func TestReview_Markdown_NoUnrelatedTaskH3(t *testing.T) {
+	// When reviewing alpha-task, beta-task must not appear as a ### heading.
+	snap := cmux.Read(stubFetcher{
+		stateJSON:     minimalStateJSON(t),
+		schedulerJSON: minimalSchedulerJSON(),
+	})
+	out := renderSnapshotOpts(snap, reviewMarkdownOpts("alpha-task"))
+	if strings.Contains(out, "### beta-task") {
+		t.Error("review markdown must not contain ### beta-task heading")
+	}
+}
+
+func TestReview_JSON_Structure(t *testing.T) {
+	snap := cmux.Read(stubFetcher{
+		stateJSON:     richTaskStateJSON(),
+		schedulerJSON: minimalSchedulerJSON(),
+	})
+	out := renderSnapshotOpts(snap, reviewJSONOpts("rich-task"))
+	var result map[string]any
+	if err := json.Unmarshal([]byte(out), &result); err != nil {
+		t.Fatalf("review JSON produced invalid JSON: %v\noutput:\n%s", err, out)
+	}
+	// Schema must be the review schema.
+	if !strings.Contains(out, `"brevity.cmux-review-report.v1"`) {
+		t.Errorf("review JSON missing review schema; output:\n%s", out)
+	}
+	// reviewMode must be true.
+	if result["reviewMode"] != true {
+		t.Errorf("review JSON reviewMode must be true; got %v", result["reviewMode"])
+	}
+	// section must be "review".
+	if result["section"] != "review" {
+		t.Errorf("review JSON section must be \"review\"; got %v", result["section"])
+	}
+	// reviewTask must match the slug.
+	if result["reviewTask"] != "rich-task" {
+		t.Errorf("review JSON reviewTask must be \"rich-task\"; got %v", result["reviewTask"])
+	}
+	// task, queue, reviewChecklist, suggestedActions must be present.
+	for _, key := range []string{"task", "queue", "reviewChecklist", "suggestedActions"} {
+		if _, ok := result[key]; !ok {
+			t.Errorf("review JSON missing key %q; output:\n%s", key, out)
+		}
+	}
+}
+
+func TestReview_JSON_ChecklistNotEmpty(t *testing.T) {
+	snap := cmux.Read(stubFetcher{
+		stateJSON:     richTaskStateJSON(),
+		schedulerJSON: minimalSchedulerJSON(),
+	})
+	out := renderSnapshotOpts(snap, reviewJSONOpts("rich-task"))
+	var result map[string]any
+	if err := json.Unmarshal([]byte(out), &result); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+	checklist, _ := result["reviewChecklist"].([]any)
+	if len(checklist) == 0 {
+		t.Errorf("review JSON reviewChecklist must not be empty when task is found; output:\n%s", out)
+	}
+}
+
+func TestReview_JSON_ReadinessPresent(t *testing.T) {
+	snap := cmux.Read(stubFetcher{
+		stateJSON:     richTaskStateJSON(),
+		schedulerJSON: minimalSchedulerJSON(),
+	})
+	out := renderSnapshotOpts(snap, reviewJSONOpts("rich-task"))
+	if !strings.Contains(out, `"mergeReadiness"`) {
+		t.Errorf("review JSON missing mergeReadiness; output:\n%s", out)
+	}
+	if !strings.Contains(out, `"cleanupReadiness"`) {
+		t.Errorf("review JSON missing cleanupReadiness; output:\n%s", out)
+	}
+}
+
+func TestReview_Text_Deterministic(t *testing.T) {
+	snap := cmux.Read(stubFetcher{
+		stateJSON:     richTaskStateJSON(),
+		schedulerJSON: minimalSchedulerJSON(),
+	})
+	opts := reviewOpts("rich-task")
+	out1 := renderSnapshotOpts(snap, opts)
+	out2 := renderSnapshotOpts(snap, opts)
+	if out1 != out2 {
+		t.Error("review text Render is not deterministic")
+	}
+}
+
+func TestReview_Markdown_Deterministic(t *testing.T) {
+	snap := cmux.Read(stubFetcher{
+		stateJSON:     richTaskStateJSON(),
+		schedulerJSON: minimalSchedulerJSON(),
+	})
+	opts := reviewMarkdownOpts("rich-task")
+	out1 := renderSnapshotOpts(snap, opts)
+	out2 := renderSnapshotOpts(snap, opts)
+	if out1 != out2 {
+		t.Error("review markdown Render is not deterministic")
+	}
+}
+
+func TestReview_JSON_Deterministic(t *testing.T) {
+	snap := cmux.Read(stubFetcher{
+		stateJSON:     richTaskStateJSON(),
+		schedulerJSON: minimalSchedulerJSON(),
+	})
+	opts := reviewJSONOpts("rich-task")
+	out1 := renderSnapshotOpts(snap, opts)
+	out2 := renderSnapshotOpts(snap, opts)
+	if out1 != out2 {
+		t.Error("review JSON Render is not deterministic")
+	}
+}
+
+func TestReview_NoANSI(t *testing.T) {
+	snap := cmux.Read(stubFetcher{
+		stateJSON:     richTaskStateJSON(),
+		schedulerJSON: minimalSchedulerJSON(),
+	})
+	for _, name := range []string{"text", "markdown", "json"} {
+		var opts cmux.RenderOptions
+		switch name {
+		case "text":
+			opts = reviewOpts("rich-task")
+		case "markdown":
+			opts = reviewMarkdownOpts("rich-task")
+		case "json":
+			opts = reviewJSONOpts("rich-task")
+		}
+		out := renderSnapshotOpts(snap, opts)
+		if strings.Contains(out, "\x1b[") {
+			t.Errorf("review %s output contains ANSI escape sequences", name)
+		}
+	}
+}
+
+func TestReview_Checklist_LastRunSucceeded_IsMarked(t *testing.T) {
+	// richTaskStateJSON has latestRunWorkerStatus="succeeded".
+	snap := cmux.Read(stubFetcher{
+		stateJSON:     richTaskStateJSON(),
+		schedulerJSON: minimalSchedulerJSON(),
+	})
+	out := renderSnapshotOpts(snap, reviewOpts("rich-task"))
+	// The "Last run succeeded" checklist item must be checked.
+	if !strings.Contains(out, "[x] Last run succeeded") {
+		t.Errorf("review text 'Last run succeeded' must be [x] when last run succeeded; output:\n%s", out)
+	}
+}
+
+func TestReview_Checklist_LastRunNotSucceeded_IsUnchecked(t *testing.T) {
+	// alpha-task in minimalStateJSON has no latestRunWorkerStatus.
+	snap := cmux.Read(stubFetcher{
+		stateJSON:     minimalStateJSON(t),
+		schedulerJSON: minimalSchedulerJSON(),
+	})
+	out := renderSnapshotOpts(snap, reviewOpts("alpha-task"))
+	// The "Last run succeeded" checklist item must be unchecked.
+	if !strings.Contains(out, "[ ] Last run succeeded") {
+		t.Errorf("review text 'Last run succeeded' must be [ ] when no successful run; output:\n%s", out)
+	}
+}
+
+func TestReview_RuntimeStateError_GracefulDegradation(t *testing.T) {
+	snap := cmux.Read(stubFetcher{
+		stateErr:      errors.New("runtime unavailable"),
+		schedulerJSON: minimalSchedulerJSON(),
+	})
+	out := renderSnapshotOpts(snap, reviewOpts("any-task"))
+	if !strings.Contains(out, "CMUX REVIEW PACKET") {
+		t.Error("review text missing header even on error")
+	}
+	if !strings.Contains(out, "runtime-state: error:") {
+		t.Errorf("review text missing runtime-state error; output:\n%s", out)
+	}
+}
+
+func TestReview_OverridesSection(t *testing.T) {
+	// --review overrides --section; section=providers is ignored.
+	snap := cmux.Read(stubFetcher{
+		stateJSON:     richTaskStateJSON(),
+		schedulerJSON: minimalSchedulerJSON(),
+	})
+	out := renderSnapshotOpts(snap, cmux.RenderOptions{
+		ReviewTask: "rich-task",
+		Section:    cmux.SectionProviders, // should be ignored
+	})
+	// Should still produce review packet, not providers-only output.
+	if !strings.Contains(out, "CMUX REVIEW PACKET") {
+		t.Error("review mode must override --section and produce review packet header")
+	}
+	if !strings.Contains(out, "Review Checklist") {
+		t.Error("review mode with section override must still show Review Checklist")
+	}
+}

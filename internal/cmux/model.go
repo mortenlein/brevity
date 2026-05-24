@@ -65,6 +65,12 @@ type RenderOptions struct {
 	// OutputMarkdown selects the GitHub-Flavoured Markdown renderer.
 	// OutputJSON selects the structured JSON renderer.
 	Output OutputMode
+
+	// ReviewTask, when non-empty, activates review-packet mode for this task
+	// slug.  Review mode overrides --section and --task; --output still applies.
+	// The rendered packet includes task detail, queue/scheduler context, a
+	// review checklist, and merge/cleanup readiness notes.
+	ReviewTask string
 }
 
 // effectiveLimit returns the active task limit, always >= 1.

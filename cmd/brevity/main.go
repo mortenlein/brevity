@@ -115,6 +115,7 @@ type cliOptions struct {
 	cmuxTask        string
 	cmuxState       string
 	cmuxOutput      string
+	cmuxReview      string
 }
 
 type actionCall func() ([]byte, error)
@@ -319,11 +320,12 @@ func parseCmuxOptions(args []string) (cliOptions, error) {
 	task := flags.String("task", "", "filter task list to this exact task slug")
 	state := flags.String("state", "", "filter task list to tasks with this normalised state")
 	output := flags.String("output", string(cmux.OutputText), "output format: text, markdown, or json")
+	review := flags.String("review", "", "generate a focused review packet for this task slug")
 	if err := flags.Parse(args[1:]); err != nil {
-		return cliOptions{}, fmt.Errorf("usage: brevity cmux [--limit <n>] [--section <name>] [--task <slug>] [--state <state>] [--output text|markdown|json]")
+		return cliOptions{}, fmt.Errorf("usage: brevity cmux [--limit <n>] [--section <name>] [--task <slug>] [--state <state>] [--output text|markdown|json] [--review <slug>]")
 	}
 	if flags.NArg() > 0 {
-		return cliOptions{}, fmt.Errorf("usage: brevity cmux [--limit <n>] [--section <name>] [--task <slug>] [--state <state>] [--output text|markdown|json]")
+		return cliOptions{}, fmt.Errorf("usage: brevity cmux [--limit <n>] [--section <name>] [--task <slug>] [--state <state>] [--output text|markdown|json] [--review <slug>]")
 	}
 	switch *section {
 	case cmux.SectionAll, cmux.SectionProviders, cmux.SectionTasks, cmux.SectionQueue, cmux.SectionActions:
@@ -347,6 +349,7 @@ func parseCmuxOptions(args []string) (cliOptions, error) {
 		cmuxTask:    *task,
 		cmuxState:   *state,
 		cmuxOutput:  *output,
+		cmuxReview:  *review,
 	}, nil
 }
 
@@ -358,6 +361,7 @@ func routeCmuxCommand(stdout io.Writer, options cliOptions) error {
 		TaskSlug:    options.cmuxTask,
 		StateFilter: options.cmuxState,
 		Output:      cmux.OutputMode(options.cmuxOutput),
+		ReviewTask:  options.cmuxReview,
 	})
 	return nil
 }
@@ -2447,6 +2451,8 @@ func writeCmuxUsage(stdout io.Writer) {
 	fmt.Fprintln(stdout, "                            (case-insensitive).")
 	fmt.Fprintln(stdout, "  --output <mode>           Output format (default: text).")
 	fmt.Fprintln(stdout, "                            Allowed: text, markdown, json.")
+	fmt.Fprintln(stdout, "  --review <slug>           Generate a focused review packet for this task.")
+	fmt.Fprintln(stdout, "                            Overrides --section and --task; --output applies.")
 	fmt.Fprintln(stdout, "  -h, --help                Show this help.")
 	fmt.Fprintln(stdout)
 	fmt.Fprintln(stdout, "Output modes:")
@@ -2462,4 +2468,7 @@ func writeCmuxUsage(stdout io.Writer) {
 	fmt.Fprintln(stdout, "  brevity cmux --output markdown")
 	fmt.Fprintln(stdout, "  brevity cmux --output json --section queue")
 	fmt.Fprintln(stdout, "  brevity cmux --limit 20")
+	fmt.Fprintln(stdout, "  brevity cmux --review my-task")
+	fmt.Fprintln(stdout, "  brevity cmux --review my-task --output markdown")
+	fmt.Fprintln(stdout, "  brevity cmux --review my-task --output json")
 }

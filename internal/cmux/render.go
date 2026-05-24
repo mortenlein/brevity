@@ -11,14 +11,20 @@ import (
 
 const sectionSep = "---"
 
-// Render writes a CMUX dashboard to w from a Snapshot.
+// Render writes a CMUX report to w from a Snapshot.
 //
 // opts controls which sections are rendered, how many tasks are shown,
 // optional task filters, and output format (text, markdown, or json).
+// When opts.ReviewTask is non-empty, review-packet mode is activated and
+// section/task filters are overridden; --output still applies.
 // Output is deterministic for a given Snapshot and RenderOptions.
 // No ANSI sequences, no TUI framework, no watch mode, no keyboard handling.
 // Every section degrades gracefully when its contract is unavailable.
 func Render(w io.Writer, snap Snapshot, opts RenderOptions) {
+	if opts.ReviewTask != "" {
+		renderReview(w, snap, opts)
+		return
+	}
 	if opts.Output == OutputMarkdown {
 		renderMarkdown(w, snap, opts)
 		return
