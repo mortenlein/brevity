@@ -2700,6 +2700,343 @@ func TestHandoff_Markdown_ReviewCandidatesHaveChecklist(t *testing.T) {
 	}
 }
 
+// --- merge-readiness report tests ------------------------------------------
+
+// mergeReportStateJSON returns a runtime-state fixture covering all six merge
+// groups: ready-for-merge, reviewing, needs-run (ready-for-worker), blocked,
+// merged, and a task in an unrecognised state that lands in "other".
+func mergeReportStateJSON() []byte {
+	return []byte(`{
+		"schema": "brevity.runtime-state.v1",
+		"repoRoot": "/dev/test",
+		"generatedAt": "2026-01-01T00:00:00Z",
+		"providers": {
+			"summary": {"total": 1, "degraded": 0, "unavailable": 0},
+			"health": {"codex": {"status": "healthy", "updatedAt": "", "note": ""}}
+		},
+		"taskCounts": {"tracked": 6, "runnable": 1, "blocked": 1, "stale": 0, "providerGated": 0, "review": 2},
+		"tasks": [
+			{"slug": "mrg-rfm",     "status": "ready-for-merge", "normalizedState": "ready-for-merge", "workerStatus": "succeeded", "branch": "task/mrg-rfm",     "worktreePath": ""},
+			{"slug": "mrg-review",  "status": "reviewing",       "normalizedState": "reviewing",       "workerStatus": "succeeded", "branch": "task/mrg-review",  "worktreePath": ""},
+			{"slug": "mrg-run",     "status": "ready-for-worker","normalizedState": "ready-for-worker","workerStatus": "",          "branch": "task/mrg-run",     "worktreePath": ""},
+			{"slug": "mrg-blocked", "status": "blocked",         "normalizedState": "blocked",         "workerStatus": "",          "branch": "task/mrg-blocked", "worktreePath": ""},
+			{"slug": "mrg-merged",  "status": "merged",          "normalizedState": "merged",          "workerStatus": "succeeded", "branch": "task/mrg-merged",  "worktreePath": ""},
+			{"slug": "mrg-other",   "status": "queued",          "normalizedState": "queued",          "workerStatus": "",          "branch": "task/mrg-other",   "worktreePath": ""}
+		],
+		"suggestedNextActions": ["Check merge candidates."],
+		"orphanedTaskWorktrees": [],
+		"activeWorktrees": [],
+		"activeWorktreeCount": 0,
+		"groups": {}
+	}`)
+}
+
+// mergeOpts is a shorthand for merge-report text options.
+func mergeOpts() cmux.RenderOptions {
+	return cmux.RenderOptions{MergeReport: true}
+}
+
+// mergeMarkdownOpts is a shorthand for merge-report markdown options.
+func mergeMarkdownOpts() cmux.RenderOptions {
+	return cmux.RenderOptions{MergeReport: true, Output: cmux.OutputMarkdown}
+}
+
+// mergeJSONOpts is a shorthand for merge-report JSON options.
+func mergeJSONOpts() cmux.RenderOptions {
+	return cmux.RenderOptions{MergeReport: true, Output: cmux.OutputJSON}
+}
+
+func TestMerge_DispatchActivated(t *testing.T) {
+	// MergeReport:true must produce the merge header, not the normal CMUX OPERATOR header.
+	snap := cmux.Read(stubFetcher{stateJSON: minimalStateJSON(t), schedulerJSON: minimalSchedulerJSON()})
+	out := renderSnapshotOpts(snap, mergeOpts())
+	if !strings.Contains(out, "CMUX MERGE READINESS") {
+		t.Errorf("merge dispatch missing CMUX MERGE READINESS header; output:\n%s", out)
+	}
+	if strings.Contains(out, "CMUX OPERATOR") {
+		t.Error("merge output must not contain CMUX OPERATOR (normal report) header")
+	}
+}
+
+func TestMerge_Text_Structure(t *testing.T) {
+	snap := cmux.Read(stubFetcher{stateJSON: mergeReportStateJSON(), schedulerJSON: minimalSchedulerJSON()})
+	out := renderSnapshotOpts(snap, mergeOpts())
+	for _, want := range []string{
+		"CMUX MERGE READINESS",
+		"[read-only]",
+		"source: native",
+		"ready-for-merge",
+		"reviewing",
+		"needs-run",
+		"blocked",
+		"merged",
+		"other",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("merge text missing %q; output:\n%s", want, out)
+		}
+	}
+}
+
+func TestMerge_Text_GroupingByState(t *testing.T) {
+	snap := cmux.Read(stubFetcher{stateJSON: mergeReportStateJSON(), schedulerJSON: minimalSchedulerJSON()})
+	out := renderSnapshotOpts(snap, mergeOpts())
+
+	// Each task must appear in its correct group.
+	// We verify positional ordering: the group header appears before the task slug.
+	rfmIdx := strings.Index(out, "ready-for-merge")
+	rfmTaskIdx := strings.Index(out, "mrg-rfm")
+	reviewIdx := strings.Index(out, "\nreviewing")
+	reviewTaskIdx := strings.Index(out, "mrg-review")
+	needsRunIdx := strings.Index(out, "needs-run")
+	needsRunTaskIdx := strings.Index(out, "mrg-run")
+	blockedIdx := strings.Index(out, "\nblocked")
+	blockedTaskIdx := strings.Index(out, "mrg-blocked")
+	mergedIdx := strings.Index(out, "\nmerged")
+	mergedTaskIdx := strings.Index(out, "mrg-merged")
+	otherIdx := strings.Index(out, "\nother")
+	otherTaskIdx := strings.Index(out, "mrg-other")
+
+	if rfmIdx < 0 || rfmTaskIdx < rfmIdx {
+		t.Errorf("mrg-rfm must appear after ready-for-merge group header")
+	}
+	if reviewIdx < 0 || reviewTaskIdx < reviewIdx {
+		t.Errorf("mrg-review must appear after reviewing group header")
+	}
+	if needsRunIdx < 0 || needsRunTaskIdx < needsRunIdx {
+		t.Errorf("mrg-run must appear after needs-run group header")
+	}
+	if blockedIdx < 0 || blockedTaskIdx < blockedIdx {
+		t.Errorf("mrg-blocked must appear after blocked group header")
+	}
+	if mergedIdx < 0 || mergedTaskIdx < mergedIdx {
+		t.Errorf("mrg-merged must appear after merged group header")
+	}
+	if otherIdx < 0 || otherTaskIdx < otherIdx {
+		t.Errorf("mrg-other must appear after other group header")
+	}
+}
+
+func TestMerge_Markdown_Structure(t *testing.T) {
+	snap := cmux.Read(stubFetcher{stateJSON: mergeReportStateJSON(), schedulerJSON: minimalSchedulerJSON()})
+	out := renderSnapshotOpts(snap, mergeMarkdownOpts())
+	for _, want := range []string{
+		"# CMUX Merge Readiness [read-only]",
+		"## ready-for-merge",
+		"## reviewing",
+		"## needs-run",
+		"## blocked",
+		"## merged",
+		"## other",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("merge markdown missing %q; output:\n%s", want, out)
+		}
+	}
+}
+
+func TestMerge_Markdown_StartsWithH1(t *testing.T) {
+	snap := cmux.Read(stubFetcher{stateJSON: minimalStateJSON(t), schedulerJSON: minimalSchedulerJSON()})
+	out := renderSnapshotOpts(snap, mergeMarkdownOpts())
+	if !strings.HasPrefix(out, "# CMUX Merge Readiness") {
+		t.Errorf("merge markdown must start with # CMUX Merge Readiness; prefix: %q", out[:min(len(out), 40)])
+	}
+}
+
+func TestMerge_JSON_Schema(t *testing.T) {
+	snap := cmux.Read(stubFetcher{stateJSON: minimalStateJSON(t), schedulerJSON: minimalSchedulerJSON()})
+	out := renderSnapshotOpts(snap, mergeJSONOpts())
+	var result map[string]any
+	if err := json.Unmarshal([]byte(out), &result); err != nil {
+		t.Fatalf("merge JSON invalid: %v\noutput:\n%s", err, out)
+	}
+	if result["schema"] != "brevity.cmux-merge-report.v1" {
+		t.Errorf("merge JSON schema = %v, want brevity.cmux-merge-report.v1", result["schema"])
+	}
+}
+
+func TestMerge_JSON_GroupsPresent(t *testing.T) {
+	snap := cmux.Read(stubFetcher{stateJSON: mergeReportStateJSON(), schedulerJSON: minimalSchedulerJSON()})
+	out := renderSnapshotOpts(snap, mergeJSONOpts())
+	var result map[string]any
+	if err := json.Unmarshal([]byte(out), &result); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+	groups, ok := result["groups"].([]any)
+	if !ok {
+		t.Fatalf("merge JSON missing groups array; output:\n%s", out)
+	}
+	if len(groups) != 6 {
+		t.Errorf("merge JSON groups len = %d, want 6", len(groups))
+	}
+	// Verify order: first group must be ready-for-merge.
+	first, ok := groups[0].(map[string]any)
+	if !ok {
+		t.Fatal("merge JSON groups[0] is not an object")
+	}
+	if first["group"] != "ready-for-merge" {
+		t.Errorf("merge JSON groups[0].group = %v, want ready-for-merge", first["group"])
+	}
+}
+
+func TestMerge_JSON_EmptyArraysNotNull(t *testing.T) {
+	// With no tasks, every group's tasks field must be [] not null.
+	snap := cmux.Read(stubFetcher{stateJSON: manyTaskStateJSON(0), schedulerJSON: minimalSchedulerJSON()})
+	out := renderSnapshotOpts(snap, mergeJSONOpts())
+	// A null tasks field would appear as `"tasks":null`; [] never does.
+	if strings.Contains(out, `"tasks":null`) {
+		t.Errorf("merge JSON must not contain null tasks array; output:\n%s", out)
+	}
+	if strings.Contains(out, `"errors":null`) {
+		t.Errorf("merge JSON must not contain null errors array; output:\n%s", out)
+	}
+}
+
+func TestMerge_Limit_Applied(t *testing.T) {
+	// mergeReportStateJSON has 1 task per group; all groups with 1 task should
+	// show it; groups with 0 tasks show (none).
+	// Now give needs-run 3 tasks and set limit=1 to trigger truncation.
+	multiRunStateJSON := []byte(`{
+		"schema": "brevity.runtime-state.v1",
+		"repoRoot": "/dev/test",
+		"generatedAt": "2026-01-01T00:00:00Z",
+		"providers": {"summary": {"total": 0, "degraded": 0, "unavailable": 0}, "health": {}},
+		"taskCounts": {"tracked": 3, "runnable": 3, "blocked": 0, "stale": 0, "providerGated": 0, "review": 0},
+		"tasks": [
+			{"slug": "run-a", "status": "ready-for-worker", "normalizedState": "ready-for-worker", "workerStatus": "", "branch": "task/run-a", "worktreePath": ""},
+			{"slug": "run-b", "status": "ready-for-worker", "normalizedState": "ready-for-worker", "workerStatus": "", "branch": "task/run-b", "worktreePath": ""},
+			{"slug": "run-c", "status": "ready-for-worker", "normalizedState": "ready-for-worker", "workerStatus": "", "branch": "task/run-c", "worktreePath": ""}
+		],
+		"suggestedNextActions": [],
+		"orphanedTaskWorktrees": [],
+		"activeWorktrees": [],
+		"activeWorktreeCount": 0,
+		"groups": {}
+	}`)
+	snap := cmux.Read(stubFetcher{stateJSON: multiRunStateJSON, schedulerJSON: minimalSchedulerJSON()})
+	out := renderSnapshotOpts(snap, cmux.RenderOptions{MergeReport: true, Limit: 1})
+	if !strings.Contains(out, "showing 1 of 3") {
+		t.Errorf("merge limit=1 with 3 needs-run tasks must show truncation header; output:\n%s", out)
+	}
+	if strings.Contains(out, "run-b") {
+		t.Errorf("merge limit=1 must not show run-b (second task); output:\n%s", out)
+	}
+}
+
+func TestMerge_EmptyState_NoTasks(t *testing.T) {
+	snap := cmux.Read(stubFetcher{stateJSON: manyTaskStateJSON(0), schedulerJSON: minimalSchedulerJSON()})
+	out := renderSnapshotOpts(snap, mergeOpts())
+	// All groups should show (none).
+	if !strings.Contains(out, "(none)") {
+		t.Errorf("merge empty state must show (none) for groups; output:\n%s", out)
+	}
+}
+
+func TestMerge_EmptyState_Markdown(t *testing.T) {
+	snap := cmux.Read(stubFetcher{stateJSON: manyTaskStateJSON(0), schedulerJSON: minimalSchedulerJSON()})
+	out := renderSnapshotOpts(snap, mergeMarkdownOpts())
+	if !strings.Contains(out, "_None._") {
+		t.Errorf("merge markdown empty state must show _None._; output:\n%s", out)
+	}
+}
+
+func TestMerge_RuntimeStateError_GracefulDegradation(t *testing.T) {
+	snap := cmux.Read(stubFetcher{
+		stateErr:      fmt.Errorf("runtime unreachable"),
+		schedulerJSON: minimalSchedulerJSON(),
+	})
+	out := renderSnapshotOpts(snap, mergeOpts())
+	if !strings.Contains(out, "CMUX MERGE READINESS") {
+		t.Error("merge header must still appear on runtime error")
+	}
+	if !strings.Contains(out, "runtime-state: error") {
+		t.Errorf("merge error degradation must show runtime-state error; output:\n%s", out)
+	}
+}
+
+func TestMerge_NoANSI(t *testing.T) {
+	snap := cmux.Read(stubFetcher{stateJSON: mergeReportStateJSON(), schedulerJSON: minimalSchedulerJSON()})
+	for _, opts := range []cmux.RenderOptions{mergeOpts(), mergeMarkdownOpts(), mergeJSONOpts()} {
+		out := renderSnapshotOpts(snap, opts)
+		if strings.Contains(out, "\x1b[") {
+			t.Errorf("merge output must not contain ANSI escape sequences (mode=%v); output:\n%s", opts.Output, out)
+		}
+	}
+}
+
+func TestMerge_Text_Deterministic(t *testing.T) {
+	snap := cmux.Read(stubFetcher{stateJSON: mergeReportStateJSON(), schedulerJSON: minimalSchedulerJSON()})
+	out1 := renderSnapshotOpts(snap, mergeOpts())
+	out2 := renderSnapshotOpts(snap, mergeOpts())
+	if out1 != out2 {
+		t.Error("merge text output is not deterministic")
+	}
+}
+
+func TestMerge_Markdown_Deterministic(t *testing.T) {
+	snap := cmux.Read(stubFetcher{stateJSON: mergeReportStateJSON(), schedulerJSON: minimalSchedulerJSON()})
+	out1 := renderSnapshotOpts(snap, mergeMarkdownOpts())
+	out2 := renderSnapshotOpts(snap, mergeMarkdownOpts())
+	if out1 != out2 {
+		t.Error("merge markdown output is not deterministic")
+	}
+}
+
+func TestMerge_JSON_Deterministic(t *testing.T) {
+	snap := cmux.Read(stubFetcher{stateJSON: mergeReportStateJSON(), schedulerJSON: minimalSchedulerJSON()})
+	out1 := renderSnapshotOpts(snap, mergeJSONOpts())
+	out2 := renderSnapshotOpts(snap, mergeJSONOpts())
+	if out1 != out2 {
+		t.Error("merge JSON output is not deterministic")
+	}
+}
+
+func TestMerge_NormalOutput_Unchanged(t *testing.T) {
+	// Without MergeReport:true the normal text render must not produce merge output.
+	snap := cmux.Read(stubFetcher{stateJSON: minimalStateJSON(t), schedulerJSON: minimalSchedulerJSON()})
+	out := renderSnapshotOpts(snap, cmux.RenderOptions{})
+	if strings.Contains(out, "CMUX MERGE READINESS") {
+		t.Error("normal output must not contain CMUX MERGE READINESS header")
+	}
+}
+
+func TestMerge_JSON_OptionsBlock(t *testing.T) {
+	snap := cmux.Read(stubFetcher{stateJSON: mergeReportStateJSON(), schedulerJSON: minimalSchedulerJSON()})
+	out := renderSnapshotOpts(snap, cmux.RenderOptions{MergeReport: true, Output: cmux.OutputJSON, Limit: 5})
+	var result map[string]any
+	if err := json.Unmarshal([]byte(out), &result); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+	options, ok := result["options"].(map[string]any)
+	if !ok {
+		t.Fatalf("merge JSON missing options object; output:\n%s", out)
+	}
+	if options["limit"] != float64(5) {
+		t.Errorf("merge JSON options.limit must be 5; got %v", options["limit"])
+	}
+	if options["output"] != "json" {
+		t.Errorf("merge JSON options.output must be \"json\"; got %v", options["output"])
+	}
+}
+
+func TestMerge_GroupOrder_ReadyForMergeFirst(t *testing.T) {
+	// The groups slice must follow mergeGroupOrder: ready-for-merge is index 0.
+	snap := cmux.Read(stubFetcher{stateJSON: mergeReportStateJSON(), schedulerJSON: minimalSchedulerJSON()})
+	out := renderSnapshotOpts(snap, mergeJSONOpts())
+	var result map[string]any
+	if err := json.Unmarshal([]byte(out), &result); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+	groups := result["groups"].([]any)
+	wantOrder := []string{"ready-for-merge", "reviewing", "needs-run", "blocked", "merged", "other"}
+	for i, wantGroup := range wantOrder {
+		g := groups[i].(map[string]any)
+		if g["group"] != wantGroup {
+			t.Errorf("merge JSON groups[%d].group = %v, want %s", i, g["group"], wantGroup)
+		}
+	}
+}
+
 func TestReview_OverridesSection(t *testing.T) {
 	// --review overrides --section; section=providers is ignored.
 	snap := cmux.Read(stubFetcher{

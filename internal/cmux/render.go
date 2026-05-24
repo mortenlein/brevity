@@ -17,6 +17,8 @@ const sectionSep = "---"
 // optional task filters, and output format (text, markdown, or json).
 // When opts.Handoff is true, handoff-packet mode is activated and all section,
 // task, and state filters are overridden; --limit and --output still apply.
+// When opts.MergeReport is true, merge-readiness report mode is activated and
+// section/task/state filters are overridden; --limit and --output still apply.
 // When opts.ReviewTask is non-empty, review-packet mode is activated and
 // section/task filters are overridden; --output still applies.
 // Output is deterministic for a given Snapshot and RenderOptions.
@@ -25,6 +27,10 @@ const sectionSep = "---"
 func Render(w io.Writer, snap Snapshot, opts RenderOptions) {
 	if opts.Handoff {
 		renderHandoff(w, snap, opts)
+		return
+	}
+	if opts.MergeReport {
+		renderMerge(w, snap, opts)
 		return
 	}
 	if opts.ReviewTask != "" {
