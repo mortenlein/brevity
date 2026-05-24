@@ -23,12 +23,17 @@ type RunHistory struct {
 
 type RunRecord struct {
 	RunID                string          `json:"runId,omitempty"`
+	ExecutionID          string          `json:"executionId,omitempty"`
+	QueueItemID          string          `json:"queueItemId,omitempty"`
 	Slug                 string          `json:"slug,omitempty"`
 	Provider             string          `json:"provider,omitempty"`
 	Profile              string          `json:"profile,omitempty"`
+	CommandArgv          []string        `json:"commandArgv,omitempty"`
 	StartedAt            string          `json:"startedAt,omitempty"`
+	CompletedAt          string          `json:"completedAt,omitempty"`
 	FinishedAt           string          `json:"finishedAt,omitempty"`
 	ExitCode             any             `json:"exitCode,omitempty"`
+	FinalExecutionStatus string          `json:"finalExecutionStatus,omitempty"`
 	WorkerStatus         string          `json:"workerStatus,omitempty"`
 	FailureType          string          `json:"failureType,omitempty"`
 	LogPath              string          `json:"logPath,omitempty"`

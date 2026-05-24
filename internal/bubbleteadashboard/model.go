@@ -854,25 +854,32 @@ func executionSummary(executions *contracts.RuntimeExecution) string {
 	}
 	parts := []string{
 		fmt.Sprintf("%s file", fallback(executions.State, "unknown")),
-		fmt.Sprintf("%d planned", executions.TotalExecutions),
+		fmt.Sprintf("%d executions", executions.TotalExecutions),
 	}
-	statuses := sortedExecutionStatuses(executions.CountsByStatus)
-	if len(statuses) == 0 {
-		parts = append(parts, "0 statuses")
-	} else {
-		counts := make([]string, 0, len(statuses))
-		for _, status := range statuses {
-			counts = append(counts, fmt.Sprintf("%s:%d", status, executions.CountsByStatus[status]))
-		}
-		parts = append(parts, strings.Join(counts, " "))
-	}
-	parts = append(parts, "newest "+fallback(executions.NewestPlannedTask, "-"))
+	parts = append(parts, executionStatusSummary(executions.CountsByStatus))
+	parts = append(parts, "newest "+fallback(executions.NewestExecutionTask, "-")+" "+fallback(executions.NewestExecutionStatus, "-"))
 	if warning := executionWarningText(executions); warning != "" {
 		parts = append(parts, warning+renderWarningCount(1))
 	} else {
 		parts[len(parts)-1] += renderWarningCount(0)
 	}
 	return strings.Join(parts, " | ")
+}
+
+func executionStatusSummary(counts map[string]int) string {
+	ordered := []string{"planned", "ready", "launching", "completed", "failed", "cancelled"}
+	parts := make([]string, 0, len(ordered)+len(counts))
+	seen := map[string]bool{}
+	for _, status := range ordered {
+		parts = append(parts, fmt.Sprintf("%s:%d", status, counts[status]))
+		seen[status] = true
+	}
+	for _, status := range sortedExecutionStatuses(counts) {
+		if !seen[status] {
+			parts = append(parts, fmt.Sprintf("%s:%d", status, counts[status]))
+		}
+	}
+	return strings.Join(parts, " ")
 }
 
 func sortedExecutionStatuses(counts map[string]int) []string {

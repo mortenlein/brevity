@@ -275,7 +275,7 @@ func TestNativeRuntimeStateIncludesEmptyExecutionsVisibility(t *testing.T) {
 	if state.Executions == nil || state.Executions.State != "valid" || state.Executions.TotalExecutions != 0 {
 		t.Fatalf("executions = %#v, want valid empty execution visibility", state.Executions)
 	}
-	if len(state.Executions.CountsByStatus) != 0 || state.Executions.NewestPlannedTask != "" {
+	if len(state.Executions.CountsByStatus) != 0 || state.Executions.NewestPlannedTask != "" || state.Executions.NewestExecutionTask != "" || state.Executions.NewestExecutionStatus != "" {
 		t.Fatalf("executions = %#v, want empty counts and newest task", state.Executions)
 	}
 }
@@ -288,7 +288,7 @@ func TestNativeRuntimeStateIncludesPlannedExecutionSummaryWithoutMutation(t *tes
 		"version":1,
 		"executions":[
 			{"id":"exec-old","queueItemId":"queue-old","task":"old-task","reservationId":"res-old","status":"planned","createdAt":"2026-05-19T08:00:00Z","updatedAt":"2026-05-19T08:00:00Z"},
-			{"id":"exec-new","queueItemId":"queue-new","task":"new-task","reservationId":"res-new","status":"planned","createdAt":"2026-05-19T09:00:00Z","updatedAt":"2026-05-19T09:00:00Z"}
+			{"id":"exec-new","queueItemId":"queue-new","task":"new-task","reservationId":"res-new","status":"failed","createdAt":"2026-05-19T09:00:00Z","updatedAt":"2026-05-19T09:00:00Z"}
 		]
 	}`)
 	executionsPath := filepath.Join(repoRoot, ".brevity", "runtime-executions.json")
@@ -308,8 +308,11 @@ func TestNativeRuntimeStateIncludesPlannedExecutionSummaryWithoutMutation(t *tes
 	if state.Executions == nil || state.Executions.State != "valid" || state.Executions.TotalExecutions != 2 {
 		t.Fatalf("executions = %#v, want valid two-record summary", state.Executions)
 	}
-	if state.Executions.CountsByStatus["planned"] != 2 || state.Executions.NewestPlannedTask != "new-task" {
-		t.Fatalf("executions = %#v, want planned count and newest task", state.Executions)
+	if state.Executions.CountsByStatus["planned"] != 1 || state.Executions.CountsByStatus["failed"] != 1 || state.Executions.NewestPlannedTask != "old-task" {
+		t.Fatalf("executions = %#v, want planned/failed counts and newest planned task", state.Executions)
+	}
+	if state.Executions.NewestExecutionTask != "new-task" || state.Executions.NewestExecutionStatus != "failed" {
+		t.Fatalf("executions = %#v, want newest execution task/status", state.Executions)
 	}
 }
 

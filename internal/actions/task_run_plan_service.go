@@ -99,7 +99,7 @@ func (service TaskRunPlanService) Plan(slug string, profile string) (contracts.C
 	if promptFreshness == "stale" {
 		payload.Warnings = append(payload.Warnings, contracts.ResultMessage{Code: "prompt-stale", Message: "Task prompt appears stale compared with promptRefreshedAt."})
 	}
-	command, commandBlocker := planWorkerCommand(worker, worktreePath, promptPath)
+	command, commandBlocker := PlanWorkerCommand(worker, worktreePath, promptPath)
 	payload.WorkerCommand = command
 	if commandBlocker != nil {
 		payload.Blockers = append(payload.Blockers, *commandBlocker)
@@ -130,7 +130,7 @@ func (service TaskRunPlanService) Plan(slug string, profile string) (contracts.C
 	}, nil
 }
 
-func planWorkerCommand(worker providers.Resolved, worktreePath string, promptPath string) (contracts.TaskRunWorkerCommand, *contracts.ResultMessage) {
+func PlanWorkerCommand(worker providers.Resolved, worktreePath string, promptPath string) (contracts.TaskRunWorkerCommand, *contracts.ResultMessage) {
 	command := contracts.TaskRunWorkerCommand{Provider: worker.Provider, Command: worker.Config.Command, WorkingDirectory: worktreePath, ExecutionPolicy: worker.Config.ExecutionPolicy}
 	for name := range worker.Config.Env {
 		command.EnvironmentNames = append(command.EnvironmentNames, name)

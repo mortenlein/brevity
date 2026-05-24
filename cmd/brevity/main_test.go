@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -15,6 +16,7 @@ import (
 	"github.com/mortenlein/brevity/internal/dashboard"
 	runtimeexecution "github.com/mortenlein/brevity/internal/runtime/execution"
 	runtimequeue "github.com/mortenlein/brevity/internal/runtime/queue"
+	runtimescheduler "github.com/mortenlein/brevity/internal/runtime/scheduler"
 	"github.com/mortenlein/brevity/internal/state"
 )
 
@@ -140,6 +142,78 @@ func TestRunWithClientRendersRuntimeState(t *testing.T) {
 	}
 	if !strings.Contains(output, "tracked: 7") {
 		t.Fatalf("output missing task count:\n%s", output)
+	}
+}
+
+func TestHelpExposesOrchestrationConcepts(t *testing.T) {
+	var stdout bytes.Buffer
+	if err := run(&stdout, []string{"help"}); err != nil {
+		t.Fatalf("run returned error: %v", err)
+	}
+	output := stdout.String()
+	for _, want := range []string{
+		"queue        Durable orchestration infrastructure state.",
+		"scheduler    Selection and reservation planning layer.",
+		"execution    Execution intent plus provider launch lifecycle.",
+		"Recommended operator flow:",
+		"docs/execution-operator-guide.md",
+	} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("help output missing %q:\n%s", want, output)
+		}
+	}
+}
+
+func TestCommandGroupHelpDocumentsPipelineAndMutationBoundaries(t *testing.T) {
+	tests := []struct {
+		name  string
+		args  []string
+		wants []string
+	}{
+		{
+			name: "queue",
+			args: []string{"queue"},
+			wants: []string{
+				"durable orchestration infrastructure state",
+				"add/reserve/unreserve/remove update queue state.",
+				"inspect and plan report state without provider execution.",
+			},
+		},
+		{
+			name: "scheduler",
+			args: []string{"scheduler"},
+			wants: []string{
+				"selection and reservation planning layer",
+				"plan             Read-only selection preview.",
+				"reserve-next     Mutates queue reservation state for one item.",
+				"plan-execution   Mutates execution intent from an existing reservation.",
+			},
+		},
+		{
+			name: "execution",
+			args: []string{"execution"},
+			wants: []string{
+				"Pipeline order:",
+				"brevity execution launch-dry-run <execution-id>",
+				"performs real provider execution",
+				"not a dry-run",
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var stdout bytes.Buffer
+			if err := run(&stdout, tt.args); err != nil {
+				t.Fatalf("run returned error: %v", err)
+			}
+			output := stdout.String()
+			for _, want := range tt.wants {
+				if !strings.Contains(output, want) {
+					t.Fatalf("%s help missing %q:\n%s", tt.name, want, output)
+				}
+			}
+		})
 	}
 }
 
@@ -432,6 +506,60 @@ func TestExecutionMarkReadyTransitionsPlannedExecution(t *testing.T) {
 	}
 }
 
+func TestExecutionFlowRendersGuidanceWithoutMutation(t *testing.T) {
+	repoRoot := tempRepoWithQueue(t, runtimequeue.Queue{Version: runtimequeue.Version, Items: []runtimequeue.Item{
+		mainTestReservedQueueItem("queue-1", "alpha", "res-alpha"),
+	}})
+	writeMainTestExecutions(t, repoRoot, runtimeexecution.Executions{Version: runtimeexecution.Version, Records: []runtimeexecution.Record{
+		mainTestExecutionRecord("exec-1", "queue-1", "alpha", "res-alpha", runtimeexecution.StatusReady),
+	}})
+	t.Chdir(repoRoot)
+	queuePath := filepath.Join(repoRoot, ".brevity", runtimequeue.FileName)
+	executionsPath := filepath.Join(repoRoot, ".brevity", runtimeexecution.FileName)
+	beforeQueue := readMainTestFile(t, queuePath)
+	beforeExecutions := readMainTestFile(t, executionsPath)
+
+	var stdout bytes.Buffer
+	if err := runWithOptions(&stdout, &fakeRuntimeClient{}, cliOptions{kind: commandExecutionFlow}); err != nil {
+		t.Fatalf("runWithOptions returned error: %v", err)
+	}
+	output := stdout.String()
+	for _, want := range []string{
+		"Execution flow",
+		"brevity execution preflight exec-1",
+		"brevity execution launch-dry-run exec-1",
+		"brevity execution launch exec-1",
+		"Guidance only",
+	} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("output missing %q:\n%s", want, output)
+		}
+	}
+	if after := readMainTestFile(t, queuePath); after != beforeQueue {
+		t.Fatalf("queue mutated\nbefore: %s\nafter: %s", beforeQueue, after)
+	}
+	if after := readMainTestFile(t, executionsPath); after != beforeExecutions {
+		t.Fatalf("executions mutated\nbefore: %s\nafter: %s", beforeExecutions, after)
+	}
+}
+
+func TestExecutionFlowJSON(t *testing.T) {
+	repoRoot := tempRepoWithQueue(t, runtimequeue.Queue{Version: runtimequeue.Version, Items: []runtimequeue.Item{}})
+	t.Chdir(repoRoot)
+
+	var stdout bytes.Buffer
+	if err := runWithOptions(&stdout, &fakeRuntimeClient{}, cliOptions{kind: commandExecutionFlow, json: true}); err != nil {
+		t.Fatalf("runWithOptions returned error: %v", err)
+	}
+	var plan runtimeexecution.FlowPlan
+	if err := json.Unmarshal(stdout.Bytes(), &plan); err != nil {
+		t.Fatalf("json output did not parse: %v\n%s", err, stdout.String())
+	}
+	if plan.Schema != runtimeexecution.FlowSchema || !plan.ReadOnly {
+		t.Fatalf("plan = %#v", plan)
+	}
+}
+
 func TestExecutionMarkReadyRejectsMissingExecutionID(t *testing.T) {
 	if _, err := parseOptions([]string{"execution", "mark-ready"}); err == nil {
 		t.Fatal("parseOptions returned nil error")
@@ -514,6 +642,399 @@ func TestExecutionListAndInspectShowReadyStatus(t *testing.T) {
 	}
 	if !strings.Contains(stdout.String(), "- ready: 1") {
 		t.Fatalf("inspect output missing ready count:\n%s", stdout.String())
+	}
+}
+
+func TestExecutionPreflightReportsReadyReservedExecution(t *testing.T) {
+	repoRoot := tempRepoWithQueue(t, runtimequeue.Queue{Version: runtimequeue.Version, Items: []runtimequeue.Item{
+		mainTestReservedQueueItem("queue-1", "alpha", "res-alpha"),
+	}})
+	writeMainTestExecutions(t, repoRoot, runtimeexecution.Executions{Version: runtimeexecution.Version, Records: []runtimeexecution.Record{
+		mainTestExecutionRecord("exec-1", "queue-1", "alpha", "res-alpha", runtimeexecution.StatusReady),
+	}})
+	t.Chdir(repoRoot)
+	queuePath := filepath.Join(repoRoot, ".brevity", runtimequeue.FileName)
+	executionsPath := filepath.Join(repoRoot, ".brevity", runtimeexecution.FileName)
+	beforeQueue := readMainTestFile(t, queuePath)
+	beforeExecutions := readMainTestFile(t, executionsPath)
+
+	var stdout bytes.Buffer
+	if err := runWithOptions(&stdout, &fakeRuntimeClient{}, cliOptions{kind: commandExecutionPreflight, candidateID: "exec-1"}); err != nil {
+		t.Fatalf("runWithOptions returned error: %v", err)
+	}
+	output := stdout.String()
+	for _, want := range []string{"EXECUTION PREFLIGHT", "Execution: exec-1", "Task: alpha", "Status: ready", "- execution exists: ok", "- reservation matches: ok", "- task matches: ok", "Result: passed", "no provider, worker, supervisor, task state, run history, or queue drain"} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("output missing %q:\n%s", want, output)
+		}
+	}
+	if afterQueue := readMainTestFile(t, queuePath); afterQueue != beforeQueue {
+		t.Fatalf("queue mutated\nbefore: %s\nafter: %s", beforeQueue, afterQueue)
+	}
+	if afterExecutions := readMainTestFile(t, executionsPath); afterExecutions != beforeExecutions {
+		t.Fatalf("executions mutated\nbefore: %s\nafter: %s", beforeExecutions, afterExecutions)
+	}
+}
+
+func TestExecutionPreflightJSONFailsForPlannedExecution(t *testing.T) {
+	repoRoot := tempRepoWithQueue(t, runtimequeue.Queue{Version: runtimequeue.Version, Items: []runtimequeue.Item{
+		mainTestReservedQueueItem("queue-1", "alpha", "res-alpha"),
+	}})
+	writeMainTestExecutions(t, repoRoot, runtimeexecution.Executions{Version: runtimeexecution.Version, Records: []runtimeexecution.Record{
+		mainTestExecutionRecord("exec-1", "queue-1", "alpha", "res-alpha", runtimeexecution.StatusPlanned),
+	}})
+	t.Chdir(repoRoot)
+
+	var stdout bytes.Buffer
+	err := runWithOptions(&stdout, &fakeRuntimeClient{}, cliOptions{kind: commandExecutionPreflight, candidateID: "exec-1", json: true})
+	if err == nil {
+		t.Fatal("runWithOptions returned nil error")
+	}
+	if !strings.Contains(err.Error(), "execution preflight failed") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	var result runtimeexecution.PreflightResult
+	if err := json.Unmarshal(bytes.TrimSpace(stdout.Bytes()), &result); err != nil {
+		t.Fatalf("json unmarshal failed after nonzero preflight: %v\n%s", err, stdout.String())
+	}
+	if result.ExecutionID != "exec-1" || result.Task != "alpha" || result.Status != "planned" || result.Passed {
+		t.Fatalf("result = %#v", result)
+	}
+	if len(result.Checks) == 0 || result.Checks[len(result.Checks)-1].Name != "status ready" {
+		t.Fatalf("checks = %#v", result.Checks)
+	}
+}
+
+func TestExecutionLaunchDryRunPassesForReadyExecution(t *testing.T) {
+	repoRoot := tempRepoWithLaunchDryRunFixture(t, runtimeexecution.StatusReady, "gemini", "default")
+	t.Chdir(repoRoot)
+	before := snapshotLaunchDryRunState(t, repoRoot)
+
+	var stdout bytes.Buffer
+	client := &fakeRuntimeClient{}
+	if err := runWithOptions(&stdout, client, cliOptions{kind: commandExecutionLaunchDryRun, candidateID: "exec-1"}); err != nil {
+		t.Fatalf("runWithOptions returned error: %v", err)
+	}
+	if len(client.calls) != 0 {
+		t.Fatalf("calls = %#v, want no PowerShell/provider execution calls", client.calls)
+	}
+
+	output := stdout.String()
+	for _, want := range []string{"EXECUTION LAUNCH DRY RUN", "Execution: exec-1", "Task: alpha", "Status: ready", "- provider: gemini", "- profile: default", "- command: gemini", "launch eligible", "NO PROVIDER WAS STARTED."} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("output missing %q:\n%s", want, output)
+		}
+	}
+	assertLaunchDryRunStateUnchanged(t, repoRoot, before)
+}
+
+func TestExecutionLaunchDryRunJSONResolvesProviderAndArgvPayload(t *testing.T) {
+	repoRoot := tempRepoWithLaunchDryRunFixture(t, runtimeexecution.StatusReady, "gemini", "gemini-flash")
+	t.Chdir(repoRoot)
+
+	var stdout bytes.Buffer
+	if err := runWithOptions(&stdout, &fakeRuntimeClient{}, cliOptions{kind: commandExecutionLaunchDryRun, candidateID: "exec-1", json: true}); err != nil {
+		t.Fatalf("runWithOptions returned error: %v", err)
+	}
+
+	var result executionLaunchDryRunResult
+	if err := json.Unmarshal(bytes.TrimSpace(stdout.Bytes()), &result); err != nil {
+		t.Fatalf("json unmarshal failed: %v\n%s", err, stdout.String())
+	}
+	if !result.LaunchEligible || result.Provider != "gemini" || result.Profile != "gemini-flash" {
+		t.Fatalf("result = %#v", result)
+	}
+	if len(result.Command) < 2 || result.Command[0] != "gemini" || result.Command[len(result.Command)-2] != "-p" || !strings.HasSuffix(result.Command[len(result.Command)-1], "prompt.md") {
+		t.Fatalf("command = %#v", result.Command)
+	}
+}
+
+func TestExecutionLaunchDryRunFailsForNonReadyExecution(t *testing.T) {
+	repoRoot := tempRepoWithLaunchDryRunFixture(t, runtimeexecution.StatusPlanned, "gemini", "default")
+	t.Chdir(repoRoot)
+	before := snapshotLaunchDryRunState(t, repoRoot)
+
+	var stdout bytes.Buffer
+	err := runWithOptions(&stdout, &fakeRuntimeClient{}, cliOptions{kind: commandExecutionLaunchDryRun, candidateID: "exec-1"})
+	if err == nil {
+		t.Fatal("runWithOptions returned nil error")
+	}
+	if !strings.Contains(err.Error(), "execution launch dry run failed") || !strings.Contains(stdout.String(), "launch blocked") {
+		t.Fatalf("unexpected err/output:\nerr=%v\n%s", err, stdout.String())
+	}
+	assertLaunchDryRunStateUnchanged(t, repoRoot, before)
+}
+
+func TestExecutionLaunchDryRunFailsFailedPreflight(t *testing.T) {
+	repoRoot := tempRepoWithLaunchDryRunFixture(t, runtimeexecution.StatusReady, "gemini", "default")
+	t.Chdir(repoRoot)
+	queue := readMainTestQueue(t, repoRoot)
+	queue.Items[0].Reservation.ReservationID = "res-other"
+	store, err := state.NewStore(repoRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.WriteJSON(runtimequeue.FileName, queue); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout bytes.Buffer
+	err = runWithOptions(&stdout, &fakeRuntimeClient{}, cliOptions{kind: commandExecutionLaunchDryRun, candidateID: "exec-1"})
+	if err == nil {
+		t.Fatal("runWithOptions returned nil error")
+	}
+	if !strings.Contains(stdout.String(), "- reservation matches: failed") {
+		t.Fatalf("output missing failed preflight:\n%s", stdout.String())
+	}
+}
+
+func TestExecutionLaunchRunsFakeProviderSuccess(t *testing.T) {
+	repoRoot := tempRepoWithLaunchFixture(t, runtimeexecution.StatusReady, fakeProviderExecutable(t, 0), "0")
+	t.Chdir(repoRoot)
+	before := snapshotLaunchAdjacentState(t, repoRoot)
+
+	var stdout bytes.Buffer
+	err := runWithOptions(&stdout, &fakeRuntimeClient{}, cliOptions{kind: commandExecutionLaunch, candidateID: "exec-1"})
+	if err != nil {
+		t.Fatalf("runWithOptions returned error: %v\n%s", err, stdout.String())
+	}
+	if got := readMainTestExecutions(t, repoRoot).Records[0].Status; got != runtimeexecution.StatusCompleted {
+		t.Fatalf("status = %q, want completed", got)
+	}
+	for _, want := range []string{"fake provider stdout", "fake provider stderr", "final state: completed", "exit code: 0"} {
+		if !strings.Contains(stdout.String(), want) {
+			t.Fatalf("output missing %q:\n%s", want, stdout.String())
+		}
+	}
+	assertLaunchCompletedQueueFinalizedAndTasksUnchanged(t, repoRoot, before)
+	assertLaunchRunHistoryAppended(t, repoRoot, before.runs, runtimeexecution.StatusCompleted, 0, "")
+}
+
+func TestExecutionLaunchMissingBinaryMarksFailed(t *testing.T) {
+	repoRoot := tempRepoWithLaunchFixture(t, runtimeexecution.StatusReady, filepath.Join(t.TempDir(), "missing-provider"), "0")
+	t.Chdir(repoRoot)
+	before := snapshotLaunchAdjacentState(t, repoRoot)
+
+	var stdout bytes.Buffer
+	err := runWithOptions(&stdout, &fakeRuntimeClient{}, cliOptions{kind: commandExecutionLaunch, candidateID: "exec-1"})
+	if err == nil {
+		t.Fatalf("runWithOptions returned nil error\n%s", stdout.String())
+	}
+	if got := readMainTestExecutions(t, repoRoot).Records[0].Status; got != runtimeexecution.StatusFailed {
+		t.Fatalf("status = %q, want failed", got)
+	}
+	assertLaunchFailedQueueFinalizedAndTasksUnchanged(t, repoRoot, before)
+	assertLaunchRunHistoryAppended(t, repoRoot, before.runs, runtimeexecution.StatusFailed, 1, "missing-provider")
+}
+
+func TestExecutionLaunchNonzeroExitMarksFailed(t *testing.T) {
+	repoRoot := tempRepoWithLaunchFixture(t, runtimeexecution.StatusReady, fakeProviderExecutable(t, 7), "7")
+	t.Chdir(repoRoot)
+	before := snapshotLaunchAdjacentState(t, repoRoot)
+
+	var stdout bytes.Buffer
+	err := runWithOptions(&stdout, &fakeRuntimeClient{}, cliOptions{kind: commandExecutionLaunch, candidateID: "exec-1"})
+	if err == nil || !strings.Contains(err.Error(), "exit status 7") {
+		t.Fatalf("unexpected error: %v\n%s", err, stdout.String())
+	}
+	if got := readMainTestExecutions(t, repoRoot).Records[0].Status; got != runtimeexecution.StatusFailed {
+		t.Fatalf("status = %q, want failed", got)
+	}
+	if !strings.Contains(stdout.String(), "fake provider stderr") {
+		t.Fatalf("stderr was not streamed:\n%s", stdout.String())
+	}
+	assertLaunchFailedQueueFinalizedAndTasksUnchanged(t, repoRoot, before)
+	assertLaunchRunHistoryAppended(t, repoRoot, before.runs, runtimeexecution.StatusFailed, 7, "exit status 7")
+}
+
+func TestExecutionLaunchRejectsNonReadyAndRepeatedTerminalExecutions(t *testing.T) {
+	for _, status := range []string{runtimeexecution.StatusPlanned, runtimeexecution.StatusCompleted, runtimeexecution.StatusFailed} {
+		t.Run(status, func(t *testing.T) {
+			repoRoot := tempRepoWithLaunchFixture(t, status, fakeProviderExecutable(t, 0), "0")
+			t.Chdir(repoRoot)
+			before := snapshotLaunchDryRunState(t, repoRoot)
+
+			var stdout bytes.Buffer
+			err := runWithOptions(&stdout, &fakeRuntimeClient{}, cliOptions{kind: commandExecutionLaunch, candidateID: "exec-1"})
+			if err == nil || !strings.Contains(err.Error(), "execution launch blocked") {
+				t.Fatalf("unexpected error: %v\n%s", err, stdout.String())
+			}
+			assertLaunchDryRunStateUnchanged(t, repoRoot, before)
+		})
+	}
+}
+
+func TestExecutionLaunchRejectsFailedPreflightBeforeProviderStarts(t *testing.T) {
+	repoRoot := tempRepoWithLaunchFixture(t, runtimeexecution.StatusReady, fakeProviderExecutable(t, 0), "0")
+	t.Chdir(repoRoot)
+	queue := readMainTestQueue(t, repoRoot)
+	queue.Items[0].Reservation.ReservationID = "res-other"
+	store, err := state.NewStore(repoRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.WriteJSON(runtimequeue.FileName, queue); err != nil {
+		t.Fatal(err)
+	}
+	before := snapshotLaunchDryRunState(t, repoRoot)
+
+	var stdout bytes.Buffer
+	err = runWithOptions(&stdout, &fakeRuntimeClient{}, cliOptions{kind: commandExecutionLaunch, candidateID: "exec-1"})
+	if err == nil || !strings.Contains(err.Error(), "execution launch blocked") {
+		t.Fatalf("unexpected error: %v\n%s", err, stdout.String())
+	}
+	if strings.Contains(stdout.String(), "fake provider stdout") || strings.Contains(stdout.String(), "fake provider stderr") {
+		t.Fatalf("provider appears to have started despite failed preflight:\n%s", stdout.String())
+	}
+	assertLaunchDryRunStateUnchanged(t, repoRoot, before)
+}
+
+func TestExecutionLaunchEndToEndSmokeSuccess(t *testing.T) {
+	repoRoot := tempRepoWithExecutionSmokeFixture(t, 0)
+	t.Chdir(repoRoot)
+	tasksBefore := readMainTestFile(t, filepath.Join(repoRoot, ".brevity", state.TasksFile))
+
+	smokeRun(t, "queue", "add", "alpha")
+	if _, err := os.Stat(filepath.Join(repoRoot, ".brevity", runtimequeue.FileName)); err != nil {
+		t.Fatalf("queue file was not created: %v", err)
+	}
+	queue := readMainTestQueue(t, repoRoot)
+	if len(queue.Items) != 1 || queue.Items[0].Task != "alpha" || queue.Items[0].Reservation != nil {
+		t.Fatalf("queue after add = %#v", queue.Items)
+	}
+
+	smokeRun(t, "scheduler", "reserve-next")
+	queue = readMainTestQueue(t, repoRoot)
+	if queue.Items[0].Reservation == nil {
+		t.Fatalf("queue item was not reserved: %#v", queue.Items[0])
+	}
+
+	smokeRun(t, "scheduler", "plan-execution")
+	executions := readMainTestExecutions(t, repoRoot)
+	if len(executions.Records) != 1 {
+		t.Fatalf("executions = %#v, want one planned execution", executions.Records)
+	}
+	executionID := executions.Records[0].ID
+	if executions.Records[0].Status != runtimeexecution.StatusPlanned || executions.Records[0].Task != "alpha" {
+		t.Fatalf("planned execution = %#v", executions.Records[0])
+	}
+
+	smokeRun(t, "execution", "mark-ready", executionID)
+	if got := readMainTestExecutions(t, repoRoot).Records[0].Status; got != runtimeexecution.StatusReady {
+		t.Fatalf("status = %q, want ready", got)
+	}
+
+	smokeRun(t, "execution", "preflight", executionID)
+	dryRunBefore := snapshotLaunchDryRunState(t, repoRoot)
+	smokeRun(t, "execution", "launch-dry-run", executionID)
+	assertLaunchDryRunStateUnchanged(t, repoRoot, dryRunBefore)
+
+	launchOutput := smokeRun(t, "execution", "launch", executionID)
+	assertProviderOutputStreamed(t, launchOutput)
+	if got := readMainTestExecutions(t, repoRoot).Records[0].Status; got != runtimeexecution.StatusCompleted {
+		t.Fatalf("status = %q, want completed", got)
+	}
+	assertFakeProviderExecuted(t, repoRoot, executionID, runtimeexecution.StatusLaunching)
+	assertSmokeRunHistory(t, repoRoot, executionID, "alpha", runtimeexecution.StatusCompleted, 0, "")
+	if queue = readMainTestQueue(t, repoRoot); len(queue.Items) != 0 {
+		t.Fatalf("queue items after completed launch = %#v, want empty", queue.Items)
+	}
+	if tasksAfter := readMainTestFile(t, filepath.Join(repoRoot, ".brevity", state.TasksFile)); tasksAfter != tasksBefore {
+		t.Fatalf("tasks mutated\nbefore: %s\nafter: %s", tasksBefore, tasksAfter)
+	}
+}
+
+func TestExecutionLaunchJSONSmokeCoversOperatorPipeline(t *testing.T) {
+	repoRoot := tempRepoWithExecutionSmokeFixture(t, 0)
+	t.Chdir(repoRoot)
+	tasksBefore := readMainTestFile(t, filepath.Join(repoRoot, ".brevity", state.TasksFile))
+
+	smokeRun(t, "queue", "add", "alpha")
+
+	var schedulerPlan runtimescheduler.Plan
+	smokeRunJSON(t, &schedulerPlan, "scheduler", "plan", "--json")
+	if schedulerPlan.Schema != runtimescheduler.PlanSchema || schedulerPlan.Selected == nil {
+		t.Fatalf("scheduler plan = %#v", schedulerPlan)
+	}
+	if schedulerPlan.Selected.Task != "alpha" || schedulerPlan.Selected.Status != runtimequeue.StatusQueued || !schedulerPlan.ReservationEligible || !schedulerPlan.ReadOnly {
+		t.Fatalf("scheduler plan selection = %#v", schedulerPlan)
+	}
+
+	smokeRun(t, "scheduler", "reserve-next")
+
+	var planned schedulerPlannedExecution
+	smokeRunJSON(t, &planned, "scheduler", "plan-execution", "--json")
+	if planned.Task != "alpha" || planned.Status != runtimeexecution.StatusPlanned || planned.ExecutionID == "" || planned.QueueItemID == "" || planned.ReservationID == "" {
+		t.Fatalf("planned execution = %#v", planned)
+	}
+
+	var inspection runtimeexecution.Inspection
+	smokeRunJSON(t, &inspection, "execution", "inspect", "--json")
+	if inspection.State != "valid" || inspection.TotalExecutions != 1 || inspection.CountsByStatus[runtimeexecution.StatusPlanned] != 1 || inspection.NewestPlannedTask != "alpha" {
+		t.Fatalf("inspection = %#v", inspection)
+	}
+
+	smokeRun(t, "execution", "mark-ready", planned.ExecutionID)
+
+	var preflight runtimeexecution.PreflightResult
+	smokeRunJSON(t, &preflight, "execution", "preflight", planned.ExecutionID, "--json")
+	if preflight.ExecutionID != planned.ExecutionID || preflight.Task != "alpha" || preflight.Status != runtimeexecution.StatusReady || !preflight.Passed {
+		t.Fatalf("preflight = %#v", preflight)
+	}
+
+	var dryRun executionLaunchDryRunResult
+	smokeRunJSON(t, &dryRun, "execution", "launch-dry-run", planned.ExecutionID, "--json")
+	if dryRun.ExecutionID != planned.ExecutionID || dryRun.Task != "alpha" || dryRun.Status != runtimeexecution.StatusReady || !dryRun.LaunchEligible {
+		t.Fatalf("dry run = %#v", dryRun)
+	}
+	if dryRun.Provider != "codex" || dryRun.Profile != "codex-balanced" || len(dryRun.Command) < 2 {
+		t.Fatalf("dry run command payload = %#v", dryRun)
+	}
+
+	var launch runtimeexecution.LaunchResult
+	smokeRunJSON(t, &launch, "execution", "launch", planned.ExecutionID, "--json")
+	if launch.ExecutionID != planned.ExecutionID || launch.Task != "alpha" || launch.FinalStatus != runtimeexecution.StatusCompleted || launch.ExitCode != 0 {
+		t.Fatalf("launch = %#v", launch)
+	}
+	if len(launch.Argv) < 2 || launch.Argv[0] == "" {
+		t.Fatalf("launch argv = %#v", launch.Argv)
+	}
+	if queue := readMainTestQueue(t, repoRoot); len(queue.Items) != 0 {
+		t.Fatalf("queue items after completed launch = %#v, want empty", queue.Items)
+	}
+	if tasksAfter := readMainTestFile(t, filepath.Join(repoRoot, ".brevity", state.TasksFile)); tasksAfter != tasksBefore {
+		t.Fatalf("tasks mutated\nbefore: %s\nafter: %s", tasksBefore, tasksAfter)
+	}
+}
+
+func TestExecutionLaunchEndToEndSmokeFailure(t *testing.T) {
+	repoRoot := tempRepoWithExecutionSmokeFixture(t, 7)
+	t.Chdir(repoRoot)
+	tasksBefore := readMainTestFile(t, filepath.Join(repoRoot, ".brevity", state.TasksFile))
+
+	smokeRun(t, "queue", "add", "alpha")
+	smokeRun(t, "scheduler", "reserve-next")
+	smokeRun(t, "scheduler", "plan-execution")
+	executionID := readMainTestExecutions(t, repoRoot).Records[0].ID
+	smokeRun(t, "execution", "mark-ready", executionID)
+
+	var stdout bytes.Buffer
+	err := run(&stdout, []string{"execution", "launch", executionID})
+	if err == nil || !strings.Contains(err.Error(), "exit status 7") {
+		t.Fatalf("unexpected launch error: %v\n%s", err, stdout.String())
+	}
+	assertProviderOutputStreamed(t, stdout.String())
+	if got := readMainTestExecutions(t, repoRoot).Records[0].Status; got != runtimeexecution.StatusFailed {
+		t.Fatalf("status = %q, want failed", got)
+	}
+	assertFakeProviderExecuted(t, repoRoot, executionID, runtimeexecution.StatusLaunching)
+	assertSmokeRunHistory(t, repoRoot, executionID, "alpha", runtimeexecution.StatusFailed, 7, "exit status 7")
+	queue := readMainTestQueue(t, repoRoot)
+	if len(queue.Items) != 1 || queue.Items[0].Task != "alpha" || queue.Items[0].Reservation != nil {
+		t.Fatalf("queue after failed launch = %#v, want queued and unreserved", queue.Items)
+	}
+	if tasksAfter := readMainTestFile(t, filepath.Join(repoRoot, ".brevity", state.TasksFile)); tasksAfter != tasksBefore {
+		t.Fatalf("tasks mutated\nbefore: %s\nafter: %s", tasksBefore, tasksAfter)
 	}
 }
 
@@ -964,6 +1485,23 @@ func TestParseOptionsAcceptsRuntimeStateJSON(t *testing.T) {
 	}
 	if options.kind != commandRuntimeState || !options.json {
 		t.Fatalf("options = %#v, want runtime state json", options)
+	}
+}
+
+func TestParseOptionsAcceptsCMUXMergeReadinessReport(t *testing.T) {
+	options, err := parseOptions([]string{"cmux", "--merge-readiness-report", "--output", "markdown"})
+	if err != nil {
+		t.Fatalf("parseOptions returned error: %v", err)
+	}
+	if options.kind != commandCmux || !options.cmuxMergeReport || options.cmuxOutput != "markdown" {
+		t.Fatalf("options = %#v, want cmux merge readiness markdown", options)
+	}
+}
+
+func TestParseOptionsRejectsUnsupportedCMUXOutput(t *testing.T) {
+	_, err := parseOptions([]string{"cmux", "--merge-readiness-report", "--output", "yaml"})
+	if err == nil || !strings.Contains(err.Error(), "invalid --output") {
+		t.Fatalf("err = %v, want unsupported cmux output", err)
 	}
 }
 
@@ -1786,6 +2324,312 @@ func mainTestExecutionRecord(id string, queueItemID string, task string, reserva
 		Status:        status,
 		CreatedAt:     "2026-05-22T12:00:00Z",
 		UpdatedAt:     "2026-05-22T12:00:00Z",
+	}
+}
+
+func tempRepoWithLaunchDryRunFixture(t *testing.T, status string, provider string, profile string) string {
+	t.Helper()
+	repoRoot := tempRepoWithQueue(t, runtimequeue.Queue{Version: runtimequeue.Version, Items: []runtimequeue.Item{mainTestReservedQueueItem("queue-1", "alpha", "res-alpha")}})
+	worktree := filepath.Join(repoRoot, "worktrees", "active", "alpha")
+	if err := os.MkdirAll(worktree, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	promptPath := filepath.Join(worktree, "prompt.md")
+	writeMainTestFile(t, promptPath, "# Alpha\n")
+	writeMainTestExecutions(t, repoRoot, runtimeexecution.Executions{Version: runtimeexecution.Version, Records: []runtimeexecution.Record{
+		mainTestExecutionRecord("exec-1", "queue-1", "alpha", "res-alpha", status),
+	}})
+	writeMainTestFile(t, filepath.Join(repoRoot, ".brevity", state.TasksFile), fmt.Sprintf(`[{"slug":"alpha","status":"ready-for-worker","worktreePath":%q,"promptPath":%q,"provider":%q,"profile":%q}]`+"\n", worktree, promptPath, provider, profile))
+	writeMainTestFile(t, filepath.Join(repoRoot, ".brevity", state.ConfigFile), `{"defaultProvider":"codex","providers":{"gemini":{"command":"gemini","approvalMode":"yolo","skipTrust":true}}}`+"\n")
+	writeMainTestFile(t, filepath.Join(repoRoot, ".brevity", state.ProviderHealthFile), `{"gemini":{"status":"healthy","note":"","updatedAt":"2026-05-22T12:00:00Z"}}`+"\n")
+	return repoRoot
+}
+
+func tempRepoWithLaunchFixture(t *testing.T, status string, command string, exitCode string) string {
+	t.Helper()
+	repoRoot := tempRepoWithLaunchDryRunFixture(t, status, "codex", "codex-balanced")
+	worktree := filepath.Join(repoRoot, "worktrees", "active", "alpha")
+	promptPath := filepath.Join(worktree, "prompt.md")
+	writeMainTestFile(t, filepath.Join(repoRoot, ".brevity", state.TasksFile), fmt.Sprintf(`[{"slug":"alpha","status":"ready-for-worker","worktreePath":%q,"promptPath":%q,"provider":"codex","profile":"codex-balanced"}]`+"\n", worktree, promptPath))
+	writeMainTestFile(t, filepath.Join(repoRoot, ".brevity", state.ConfigFile), fmt.Sprintf(`{"defaultProvider":"codex","providers":{"codex":{"command":%q,"mode":"exec","sandbox":"none","env":{"BREVITY_FAKE_PROVIDER_EXIT":%q}}}}`+"\n", command, exitCode))
+	writeMainTestFile(t, filepath.Join(repoRoot, ".brevity", state.ProviderHealthFile), `{"codex":{"status":"healthy","note":"","updatedAt":"2026-05-22T12:00:00Z"}}`+"\n")
+	writeMainTestFile(t, filepath.Join(repoRoot, ".brevity", "runs.jsonl"), `{"runId":"sentinel","slug":"sentinel","startedAt":"2026-05-22T12:00:00Z","finishedAt":"2026-05-22T12:00:01Z","exitCode":0,"workerStatus":"succeeded"}`+"\n")
+	return repoRoot
+}
+
+func tempRepoWithExecutionSmokeFixture(t *testing.T, exitCode int) string {
+	t.Helper()
+	repoRoot := t.TempDir()
+	worktree := filepath.Join(repoRoot, "worktrees", "active", "alpha")
+	promptPath := filepath.Join(worktree, "prompt.md")
+	if err := os.MkdirAll(worktree, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(repoRoot, ".brevity"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeMainTestFile(t, promptPath, "# Alpha\n")
+	writeMainTestFile(t, filepath.Join(repoRoot, ".brevity", state.TasksFile), fmt.Sprintf(`[{"slug":"alpha","status":"ready-for-worker","normalizedState":"ready-for-worker","worktreePath":%q,"promptPath":%q,"provider":"codex","profile":"codex-balanced"}]`+"\n", worktree, promptPath))
+	writeMainTestFile(t, filepath.Join(repoRoot, ".brevity", state.ConfigFile), fmt.Sprintf(`{"defaultProvider":"codex","providers":{"codex":{"command":%q,"mode":"exec","sandbox":"none","env":{"BREVITY_FAKE_PROVIDER_EXIT":%q}}}}`+"\n", fakeProviderExecutable(t, exitCode), fmt.Sprint(exitCode)))
+	writeMainTestFile(t, filepath.Join(repoRoot, ".brevity", state.ProviderHealthFile), `{"codex":{"status":"healthy","note":"","updatedAt":"2026-05-22T12:00:00Z"}}`+"\n")
+	return repoRoot
+}
+
+func fakeProviderExecutable(t *testing.T, exitCode int) string {
+	t.Helper()
+	dir := t.TempDir()
+	sourcePath := filepath.Join(dir, "fake_provider.go")
+	exePath := filepath.Join(dir, "fake-provider.exe")
+	writeMainTestFile(t, sourcePath, fmt.Sprintf(`package main
+
+import (
+	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
+)
+
+func main() {
+	fmt.Fprintln(os.Stdout, "fake provider stdout")
+	fmt.Fprintln(os.Stderr, "fake provider stderr")
+	wd, err := os.Getwd()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+	promptPath := ""
+	for _, arg := range os.Args[1:] {
+		if strings.HasSuffix(arg, ".md") {
+			promptPath = arg
+		}
+	}
+	prompt, err := os.ReadFile(promptPath)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+	repoRoot := filepath.Clean(filepath.Join(wd, "..", "..", ".."))
+	executions, err := os.ReadFile(filepath.Join(repoRoot, ".brevity", "runtime-executions.json"))
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+	observedStatus := "missing"
+	if strings.Contains(string(executions), "\"status\": \"launching\"") || strings.Contains(string(executions), "\"status\":\"launching\"") {
+		observedStatus = "launching"
+	}
+	artifact := strings.Join([]string{
+		"executed=true",
+		"argv=" + strings.Join(os.Args[1:], " "),
+		"prompt=" + strings.TrimSpace(string(prompt)),
+		"observedStatus=" + observedStatus,
+	}, "\n") + "\n"
+	if err := os.WriteFile(filepath.Join(wd, "fake-provider-artifact.txt"), []byte(artifact), 0o644); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+	os.Exit(%d)
+}
+`, exitCode))
+	command := exec.Command("go", "build", "-o", exePath, sourcePath)
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("go build fake provider failed: %v\n%s", err, string(output))
+	}
+	return exePath
+}
+
+func smokeRun(t *testing.T, args ...string) string {
+	t.Helper()
+	var stdout bytes.Buffer
+	if err := run(&stdout, args); err != nil {
+		t.Fatalf("brevity %s failed: %v\n%s", strings.Join(args, " "), err, stdout.String())
+	}
+	return stdout.String()
+}
+
+func smokeRunJSON(t *testing.T, target any, args ...string) string {
+	t.Helper()
+	output := smokeRun(t, args...)
+	if err := json.Unmarshal(bytes.TrimSpace([]byte(output)), target); err != nil {
+		t.Fatalf("brevity %s emitted invalid JSON: %v\n%s", strings.Join(args, " "), err, output)
+	}
+	return output
+}
+
+type launchDryRunStateSnapshot struct {
+	queue      string
+	execution  string
+	tasks      string
+	runsExists bool
+	runs       string
+}
+
+func snapshotLaunchDryRunState(t *testing.T, repoRoot string) launchDryRunStateSnapshot {
+	t.Helper()
+	runsPath := filepath.Join(repoRoot, ".brevity", "runs.jsonl")
+	_, runsErr := os.Stat(runsPath)
+	runs := ""
+	if !os.IsNotExist(runsErr) {
+		runs = readMainTestFile(t, runsPath)
+	}
+	return launchDryRunStateSnapshot{
+		queue:      readMainTestFile(t, filepath.Join(repoRoot, ".brevity", runtimequeue.FileName)),
+		execution:  readMainTestFile(t, filepath.Join(repoRoot, ".brevity", runtimeexecution.FileName)),
+		tasks:      readMainTestFile(t, filepath.Join(repoRoot, ".brevity", state.TasksFile)),
+		runsExists: !os.IsNotExist(runsErr),
+		runs:       runs,
+	}
+}
+
+func assertLaunchDryRunStateUnchanged(t *testing.T, repoRoot string, before launchDryRunStateSnapshot) {
+	t.Helper()
+	if after := readMainTestFile(t, filepath.Join(repoRoot, ".brevity", runtimequeue.FileName)); after != before.queue {
+		t.Fatalf("queue mutated\nbefore: %s\nafter: %s", before.queue, after)
+	}
+	if after := readMainTestFile(t, filepath.Join(repoRoot, ".brevity", runtimeexecution.FileName)); after != before.execution {
+		t.Fatalf("executions mutated\nbefore: %s\nafter: %s", before.execution, after)
+	}
+	if after := readMainTestFile(t, filepath.Join(repoRoot, ".brevity", state.TasksFile)); after != before.tasks {
+		t.Fatalf("tasks mutated\nbefore: %s\nafter: %s", before.tasks, after)
+	}
+	_, runsErr := os.Stat(filepath.Join(repoRoot, ".brevity", "runs.jsonl"))
+	if before.runsExists != !os.IsNotExist(runsErr) {
+		t.Fatalf("run history existence changed")
+	}
+	if before.runsExists {
+		if after := readMainTestFile(t, filepath.Join(repoRoot, ".brevity", "runs.jsonl")); after != before.runs {
+			t.Fatalf("run history mutated\nbefore: %s\nafter: %s", before.runs, after)
+		}
+	}
+}
+
+type launchAdjacentStateSnapshot struct {
+	queue string
+	tasks string
+	runs  string
+}
+
+func snapshotLaunchAdjacentState(t *testing.T, repoRoot string) launchAdjacentStateSnapshot {
+	t.Helper()
+	return launchAdjacentStateSnapshot{
+		queue: readMainTestFile(t, filepath.Join(repoRoot, ".brevity", runtimequeue.FileName)),
+		tasks: readMainTestFile(t, filepath.Join(repoRoot, ".brevity", state.TasksFile)),
+		runs:  readMainTestFile(t, filepath.Join(repoRoot, ".brevity", "runs.jsonl")),
+	}
+}
+
+func assertLaunchCompletedQueueFinalizedAndTasksUnchanged(t *testing.T, repoRoot string, before launchAdjacentStateSnapshot) {
+	t.Helper()
+	queue := readMainTestQueue(t, repoRoot)
+	for _, item := range queue.Items {
+		if item.ID == "queue-1" {
+			t.Fatalf("completed launch left queue item present: %#v", item)
+		}
+	}
+	if after := readMainTestFile(t, filepath.Join(repoRoot, ".brevity", state.TasksFile)); after != before.tasks {
+		t.Fatalf("tasks mutated\nbefore: %s\nafter: %s", before.tasks, after)
+	}
+}
+
+func assertLaunchFailedQueueFinalizedAndTasksUnchanged(t *testing.T, repoRoot string, before launchAdjacentStateSnapshot) {
+	t.Helper()
+	queue := readMainTestQueue(t, repoRoot)
+	if len(queue.Items) != 1 || queue.Items[0].ID != "queue-1" {
+		t.Fatalf("failed launch queue items = %#v, want original item present", queue.Items)
+	}
+	if queue.Items[0].Status != runtimequeue.StatusQueued {
+		t.Fatalf("failed launch queue status = %q, want queued", queue.Items[0].Status)
+	}
+	if queue.Items[0].Reservation != nil {
+		t.Fatalf("failed launch reservation = %#v, want nil", queue.Items[0].Reservation)
+	}
+	if after := readMainTestFile(t, filepath.Join(repoRoot, ".brevity", state.TasksFile)); after != before.tasks {
+		t.Fatalf("tasks mutated\nbefore: %s\nafter: %s", before.tasks, after)
+	}
+}
+
+func assertLaunchRunHistoryAppended(t *testing.T, repoRoot string, before string, status string, exitCode int, errorContains string) {
+	t.Helper()
+	after := readMainTestFile(t, filepath.Join(repoRoot, ".brevity", "runs.jsonl"))
+	if !strings.HasPrefix(after, before) {
+		t.Fatalf("run history did not preserve existing rows\nbefore: %s\nafter: %s", before, after)
+	}
+	lines := strings.Split(strings.TrimSpace(after), "\n")
+	var record state.RunRecord
+	if err := json.Unmarshal([]byte(lines[len(lines)-1]), &record); err != nil {
+		t.Fatalf("last run history row is invalid: %v\n%s", err, lines[len(lines)-1])
+	}
+	if record.ExecutionID != "exec-1" || record.RunID != "exec-1" || record.QueueItemID != "queue-1" {
+		t.Fatalf("run ids = %#v", record)
+	}
+	if record.Slug != "alpha" || record.Provider != "codex" || record.Profile != "codex-balanced" {
+		t.Fatalf("run metadata = %#v", record)
+	}
+	if len(record.CommandArgv) == 0 {
+		t.Fatalf("command argv missing: %#v", record)
+	}
+	if record.FinalExecutionStatus != status || record.ExitCode != float64(exitCode) {
+		t.Fatalf("status/exit = %#v, want %s/%d", record, status, exitCode)
+	}
+	if record.StartedAt == "" || record.CompletedAt == "" || record.FinishedAt == "" {
+		t.Fatalf("timestamps missing: %#v", record)
+	}
+	if errorContains != "" && !strings.Contains(record.Summary, errorContains) {
+		t.Fatalf("summary = %q, want containing %q", record.Summary, errorContains)
+	}
+}
+
+func assertSmokeRunHistory(t *testing.T, repoRoot string, executionID string, task string, status string, exitCode int, errorContains string) {
+	t.Helper()
+	history := strings.TrimSpace(readMainTestFile(t, filepath.Join(repoRoot, ".brevity", "runs.jsonl")))
+	lines := strings.Split(history, "\n")
+	if len(lines) != 1 {
+		t.Fatalf("run history lines = %d, want one\n%s", len(lines), history)
+	}
+	var record state.RunRecord
+	if err := json.Unmarshal([]byte(lines[0]), &record); err != nil {
+		t.Fatalf("run history row is invalid: %v\n%s", err, lines[0])
+	}
+	if record.ExecutionID != executionID || record.RunID != executionID {
+		t.Fatalf("run ids = %#v, want execution %s", record, executionID)
+	}
+	if record.Slug != task || record.Provider != "codex" || record.Profile != "codex-balanced" {
+		t.Fatalf("run metadata = %#v", record)
+	}
+	if record.FinalExecutionStatus != status || record.ExitCode != float64(exitCode) {
+		t.Fatalf("status/exit = %#v, want %s/%d", record, status, exitCode)
+	}
+	if record.QueueItemID == "" || record.StartedAt == "" || record.CompletedAt == "" || record.FinishedAt == "" {
+		t.Fatalf("required run fields missing: %#v", record)
+	}
+	if errorContains != "" && !strings.Contains(record.Summary, errorContains) {
+		t.Fatalf("summary = %q, want containing %q", record.Summary, errorContains)
+	}
+}
+
+func assertFakeProviderExecuted(t *testing.T, repoRoot string, executionID string, observedStatus string) {
+	t.Helper()
+	artifactPath := filepath.Join(repoRoot, "worktrees", "active", "alpha", "fake-provider-artifact.txt")
+	artifact := readMainTestFile(t, artifactPath)
+	for _, want := range []string{
+		"executed=true",
+		"exec",
+		filepath.Join(repoRoot, "worktrees", "active", "alpha", "prompt.md"),
+		"prompt=# Alpha",
+		"observedStatus=" + observedStatus,
+	} {
+		if !strings.Contains(artifact, want) {
+			t.Fatalf("fake provider artifact missing %q for execution %s:\n%s", want, executionID, artifact)
+		}
+	}
+}
+
+func assertProviderOutputStreamed(t *testing.T, output string) {
+	t.Helper()
+	for _, want := range []string{"fake provider stdout", "fake provider stderr"} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("launch output missing streamed provider output %q:\n%s", want, output)
+		}
 	}
 }
 

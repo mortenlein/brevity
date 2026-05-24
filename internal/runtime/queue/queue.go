@@ -358,6 +358,61 @@ func (store Store) Remove(id string) (Item, error) {
 	return removed, nil
 }
 
+func (store Store) FinalizeExecution(id string, completed bool) (Item, bool, error) {
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return Item{}, false, nil
+	}
+	lock, err := store.acquireLock()
+	if err != nil {
+		return Item{}, false, err
+	}
+	defer func() { _ = lock.Release() }()
+
+	queue, missing, err := store.Load()
+	if err != nil {
+		return Item{}, false, err
+	}
+	if missing {
+		return Item{}, false, nil
+	}
+
+	now := store.now().UTC().Format(time.RFC3339)
+	next := make([]Item, 0, len(queue.Items))
+	var finalized Item
+	found := false
+	changed := false
+	for _, item := range queue.Items {
+		if item.ID != id {
+			next = append(next, item)
+			continue
+		}
+		found = true
+		finalized = item
+		if completed {
+			changed = true
+			continue
+		}
+		if item.Reservation != nil || item.Status != StatusQueued {
+			item.Reservation = nil
+			item.Status = StatusQueued
+			item.UpdatedAt = now
+			finalized = item
+			changed = true
+		}
+		next = append(next, item)
+	}
+	if !found || !changed {
+		return finalized, found, nil
+	}
+	queue.Items = next
+	queue.Version = Version
+	if err := store.Store.WriteJSON(FileName, queue); err != nil {
+		return Item{}, false, err
+	}
+	return finalized, true, nil
+}
+
 func NormalizeTaskSlug(task string) (string, error) {
 	task = strings.TrimSpace(task)
 	if task == "" {

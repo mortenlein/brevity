@@ -23,6 +23,9 @@ const (
 	Version         = 1
 	StatusPlanned   = "planned"
 	StatusReady     = "ready"
+	StatusLaunching = "launching"
+	StatusCompleted = "completed"
+	StatusFailed    = "failed"
 	StatusCancelled = "cancelled"
 )
 
@@ -67,6 +70,8 @@ type Inspection struct {
 	SupportedVersion         int            `json:"supportedVersion"`
 	TotalExecutions          int            `json:"totalExecutions"`
 	CountsByStatus           map[string]int `json:"countsByStatus"`
+	NewestExecutionTask      string         `json:"newestExecutionTask,omitempty"`
+	NewestExecutionStatus    string         `json:"newestExecutionStatus,omitempty"`
 	NewestPlannedTask        string         `json:"newestPlannedTask,omitempty"`
 	DuplicateIDs             []string       `json:"duplicateIds,omitempty"`
 	InvalidRecords           []string       `json:"invalidRecords,omitempty"`
@@ -155,6 +160,7 @@ func (store Store) Inspect() Inspection {
 
 	seen := map[string]struct{}{}
 	duplicates := map[string]struct{}{}
+	var newestExecutionAt time.Time
 	var newestPlannedAt time.Time
 	for index, record := range executions.Records {
 		status := strings.ToLower(strings.TrimSpace(record.Status))
@@ -162,6 +168,13 @@ func (store Store) Inspect() Inspection {
 			status = "(missing)"
 		}
 		result.CountsByStatus[status]++
+		if createdAt, err := parseTime(record.CreatedAt); err == nil {
+			if newestExecutionAt.IsZero() || createdAt.After(newestExecutionAt) {
+				newestExecutionAt = createdAt
+				result.NewestExecutionTask = record.Task
+				result.NewestExecutionStatus = status
+			}
+		}
 		if status == StatusPlanned {
 			if createdAt, err := parseTime(record.CreatedAt); err == nil && (newestPlannedAt.IsZero() || createdAt.After(newestPlannedAt)) {
 				newestPlannedAt = createdAt
@@ -252,6 +265,18 @@ func (store Store) MarkReady(executionID string) (TransitionResult, error) {
 
 func (store Store) MarkPlanned(executionID string) (TransitionResult, error) {
 	return store.transitionStatus(executionID, StatusReady, StatusPlanned)
+}
+
+func (store Store) MarkLaunching(executionID string) (TransitionResult, error) {
+	return store.transitionStatus(executionID, StatusReady, StatusLaunching)
+}
+
+func (store Store) MarkCompleted(executionID string) (TransitionResult, error) {
+	return store.transitionStatus(executionID, StatusLaunching, StatusCompleted)
+}
+
+func (store Store) MarkFailed(executionID string) (TransitionResult, error) {
+	return store.transitionStatus(executionID, StatusLaunching, StatusFailed)
 }
 
 func (store Store) transitionStatus(executionID string, fromStatus string, toStatus string) (TransitionResult, error) {
@@ -371,7 +396,7 @@ func validateRecord(record Record) error {
 		return errors.New("reservationId is required")
 	}
 	status := strings.ToLower(strings.TrimSpace(record.Status))
-	if status != StatusPlanned && status != StatusReady && status != StatusCancelled {
+	if status != StatusPlanned && status != StatusReady && status != StatusLaunching && status != StatusCompleted && status != StatusFailed && status != StatusCancelled {
 		return fmt.Errorf("status %q is not recognized", record.Status)
 	}
 	if _, err := parseTime(record.CreatedAt); err != nil {
