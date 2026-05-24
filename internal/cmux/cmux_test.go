@@ -2373,6 +2373,333 @@ func TestReview_RuntimeStateError_GracefulDegradation(t *testing.T) {
 	}
 }
 
+// --- handoff packet mode tests ---------------------------------------------
+
+// handoffOpts is a shorthand for default text handoff options.
+func handoffOpts() cmux.RenderOptions {
+	return cmux.RenderOptions{Handoff: true}
+}
+
+// handoffMarkdownOpts is a shorthand for markdown handoff options.
+func handoffMarkdownOpts() cmux.RenderOptions {
+	return cmux.RenderOptions{Handoff: true, Output: cmux.OutputMarkdown}
+}
+
+// handoffJSONOpts is a shorthand for JSON handoff options.
+func handoffJSONOpts() cmux.RenderOptions {
+	return cmux.RenderOptions{Handoff: true, Output: cmux.OutputJSON}
+}
+
+func TestHandoff_DispatchActivated(t *testing.T) {
+	// With Handoff:true the output must start with the handoff header, not the
+	// normal CMUX OPERATOR header.
+	snap := cmux.Read(stubFetcher{stateJSON: minimalStateJSON(t), schedulerJSON: minimalSchedulerJSON()})
+	out := renderSnapshotOpts(snap, handoffOpts())
+	if !strings.Contains(out, "CMUX HANDOFF PACKET") {
+		t.Errorf("handoff dispatch missing CMUX HANDOFF PACKET header; output:\n%s", out)
+	}
+	if strings.Contains(out, "CMUX OPERATOR") {
+		t.Error("handoff output must not contain CMUX OPERATOR (normal report) header")
+	}
+}
+
+func TestHandoff_Text_Structure(t *testing.T) {
+	snap := cmux.Read(stubFetcher{stateJSON: minimalStateJSON(t), schedulerJSON: minimalSchedulerJSON()})
+	out := renderSnapshotOpts(snap, handoffOpts())
+	for _, want := range []string{
+		"CMUX HANDOFF PACKET",
+		"[read-only]",
+		"source: native",
+		"Runtime Summary",
+		"Providers",
+		"Queue / Scheduler",
+		"Important Tasks",
+		"Review Candidates",
+		"Suggested Next Actions",
+		"[read-only]", // safety attestation
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("handoff text missing section %q; output:\n%s", want, out)
+		}
+	}
+}
+
+func TestHandoff_Markdown_Structure(t *testing.T) {
+	snap := cmux.Read(stubFetcher{stateJSON: minimalStateJSON(t), schedulerJSON: minimalSchedulerJSON()})
+	out := renderSnapshotOpts(snap, handoffMarkdownOpts())
+	for _, want := range []string{
+		"# CMUX Handoff Packet [read-only]",
+		"## Runtime Summary",
+		"## Providers",
+		"## Queue / Scheduler",
+		"## Important Tasks",
+		"## Review Candidates",
+		"## Suggested Next Actions",
+		"Safety note:",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("handoff markdown missing heading %q; output:\n%s", want, out)
+		}
+	}
+}
+
+func TestHandoff_Markdown_StartsWithH1(t *testing.T) {
+	snap := cmux.Read(stubFetcher{stateJSON: minimalStateJSON(t), schedulerJSON: minimalSchedulerJSON()})
+	out := renderSnapshotOpts(snap, handoffMarkdownOpts())
+	if !strings.HasPrefix(out, "# CMUX Handoff Packet") {
+		t.Errorf("handoff markdown must start with # CMUX Handoff Packet; prefix: %q", out[:min(len(out), 40)])
+	}
+}
+
+func TestHandoff_JSON_Schema(t *testing.T) {
+	snap := cmux.Read(stubFetcher{stateJSON: minimalStateJSON(t), schedulerJSON: minimalSchedulerJSON()})
+	out := renderSnapshotOpts(snap, handoffJSONOpts())
+	var result map[string]any
+	if err := json.Unmarshal([]byte(out), &result); err != nil {
+		t.Fatalf("handoff JSON invalid: %v\noutput:\n%s", err, out)
+	}
+	if !strings.Contains(out, `"brevity.cmux-handoff.v1"`) {
+		t.Errorf("handoff JSON missing schema field; output:\n%s", out)
+	}
+	for _, key := range []string{
+		"schema", "source", "options", "errors",
+		"importantTasks", "reviewCandidates", "suggestedNextActions", "safety",
+	} {
+		if _, ok := result[key]; !ok {
+			t.Errorf("handoff JSON missing key %q; output:\n%s", key, out)
+		}
+	}
+}
+
+func TestHandoff_JSON_SafetyBlock(t *testing.T) {
+	snap := cmux.Read(stubFetcher{stateJSON: minimalStateJSON(t), schedulerJSON: minimalSchedulerJSON()})
+	out := renderSnapshotOpts(snap, handoffJSONOpts())
+	var result map[string]any
+	if err := json.Unmarshal([]byte(out), &result); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+	safety, ok := result["safety"].(map[string]any)
+	if !ok {
+		t.Fatalf("handoff JSON safety must be an object; output:\n%s", out)
+	}
+	if safety["readOnly"] != true {
+		t.Errorf("handoff JSON safety.readOnly must be true; got %v", safety["readOnly"])
+	}
+	if _, ok := safety["note"]; !ok {
+		t.Error("handoff JSON safety must have a note field")
+	}
+}
+
+func TestHandoff_JSON_EmptyArraysNotNull(t *testing.T) {
+	// With no tasks or actions in manyTaskStateJSON(0), slices must be [] not null.
+	snap := cmux.Read(stubFetcher{stateJSON: manyTaskStateJSON(0), schedulerJSON: minimalSchedulerJSON()})
+	out := renderSnapshotOpts(snap, handoffJSONOpts())
+	for _, want := range []string{`"importantTasks": []`, `"reviewCandidates": []`, `"suggestedNextActions": []`} {
+		if !strings.Contains(out, want) {
+			t.Errorf("handoff JSON slice must be [] not null: missing %q; output:\n%s", want, out)
+		}
+	}
+}
+
+func TestHandoff_ImportantTask_Ordering(t *testing.T) {
+	// multiStateJSON has tasks: task-ready (ready-for-worker), task-review
+	// (reviewing), task-blocked (blocked), task-merged (merged).
+	// After ranking: task-review (0) → task-blocked (1) → task-ready (2) → task-merged (3).
+	snap := cmux.Read(stubFetcher{stateJSON: multiStateJSON(), schedulerJSON: minimalSchedulerJSON()})
+	out := renderSnapshotOpts(snap, handoffOpts())
+
+	reviewIdx := strings.Index(out, "task-review")
+	blockedIdx := strings.Index(out, "task-blocked")
+	readyIdx := strings.Index(out, "task-ready")
+	if reviewIdx < 0 || blockedIdx < 0 || readyIdx < 0 {
+		t.Fatalf("handoff text missing expected task slugs; output:\n%s", out)
+	}
+	if reviewIdx > blockedIdx {
+		t.Errorf("handoff: task-review (priority 0) must appear before task-blocked (priority 1)")
+	}
+	if blockedIdx > readyIdx {
+		t.Errorf("handoff: task-blocked (priority 1) must appear before task-ready (priority 2)")
+	}
+}
+
+func TestHandoff_ReviewCandidates_OnlyReviewingTasks(t *testing.T) {
+	// Only task-review (reviewing) should appear in Review Candidates.
+	// task-blocked and task-ready must not.
+	snap := cmux.Read(stubFetcher{stateJSON: multiStateJSON(), schedulerJSON: minimalSchedulerJSON()})
+	out := renderSnapshotOpts(snap, handoffOpts())
+
+	// Extract the Review Candidates section (between its heading and the next ---).
+	candidateSection := extractSection(out, "Review Candidates", sectionSep)
+	if !strings.Contains(candidateSection, "task-review") {
+		t.Errorf("handoff Review Candidates missing task-review; section:\n%s", candidateSection)
+	}
+	if strings.Contains(candidateSection, "task-blocked") {
+		t.Error("handoff Review Candidates must not contain task-blocked")
+	}
+	if strings.Contains(candidateSection, "task-ready") {
+		t.Error("handoff Review Candidates must not contain task-ready")
+	}
+}
+
+func TestHandoff_ReviewCandidates_ChecklistPresent(t *testing.T) {
+	// Review candidates must include inline checklist items.
+	snap := cmux.Read(stubFetcher{stateJSON: multiStateJSON(), schedulerJSON: minimalSchedulerJSON()})
+	out := renderSnapshotOpts(snap, handoffOpts())
+	candidateSection := extractSection(out, "Review Candidates", sectionSep)
+	if !strings.Contains(candidateSection, "[x]") && !strings.Contains(candidateSection, "[ ]") {
+		t.Errorf("handoff Review Candidates missing checklist markers; section:\n%s", candidateSection)
+	}
+}
+
+func TestHandoff_Limit_Applied(t *testing.T) {
+	// 15 tasks, limit=3: important tasks shows first 3 and a truncation header.
+	snap := cmux.Read(stubFetcher{stateJSON: manyTaskStateJSON(15), schedulerJSON: minimalSchedulerJSON()})
+	out := renderSnapshotOpts(snap, cmux.RenderOptions{Handoff: true, Limit: 3})
+	if !strings.Contains(out, "showing 3 of 15") {
+		t.Errorf("handoff limit=3 with 15 tasks missing truncation header; output:\n%s", out)
+	}
+	if !strings.Contains(out, "task-1") {
+		t.Error("handoff limit=3 missing task-1")
+	}
+	if strings.Contains(out, "task-4") {
+		t.Error("handoff limit=3 must not show task-4 in important tasks")
+	}
+}
+
+func TestHandoff_EmptyState_NoTasks(t *testing.T) {
+	snap := cmux.Read(stubFetcher{stateJSON: manyTaskStateJSON(0), schedulerJSON: minimalSchedulerJSON()})
+	out := renderSnapshotOpts(snap, handoffOpts())
+	if !strings.Contains(out, "Important Tasks: none tracked") {
+		t.Errorf("handoff empty state missing 'Important Tasks: none tracked'; output:\n%s", out)
+	}
+	if !strings.Contains(out, "Review Candidates: none") {
+		t.Errorf("handoff empty state missing 'Review Candidates: none'; output:\n%s", out)
+	}
+}
+
+func TestHandoff_EmptyState_Markdown(t *testing.T) {
+	snap := cmux.Read(stubFetcher{stateJSON: manyTaskStateJSON(0), schedulerJSON: minimalSchedulerJSON()})
+	out := renderSnapshotOpts(snap, handoffMarkdownOpts())
+	if !strings.Contains(out, "_No tasks tracked._") {
+		t.Errorf("handoff markdown empty state missing '_No tasks tracked._'; output:\n%s", out)
+	}
+	if !strings.Contains(out, "_No review candidates._") {
+		t.Errorf("handoff markdown empty state missing '_No review candidates._'; output:\n%s", out)
+	}
+}
+
+func TestHandoff_RuntimeStateError_GracefulDegradation(t *testing.T) {
+	snap := cmux.Read(stubFetcher{
+		stateErr:      errors.New("runtime unavailable"),
+		schedulerJSON: minimalSchedulerJSON(),
+	})
+	out := renderSnapshotOpts(snap, handoffOpts())
+	if !strings.Contains(out, "CMUX HANDOFF PACKET") {
+		t.Error("handoff text missing header even on error")
+	}
+	if !strings.Contains(out, "runtime unavailable") {
+		t.Errorf("handoff text missing runtime error message; output:\n%s", out)
+	}
+}
+
+func TestHandoff_NoANSI(t *testing.T) {
+	snap := cmux.Read(stubFetcher{stateJSON: minimalStateJSON(t), schedulerJSON: minimalSchedulerJSON()})
+	for _, name := range []string{"text", "markdown", "json"} {
+		var opts cmux.RenderOptions
+		switch name {
+		case "text":
+			opts = handoffOpts()
+		case "markdown":
+			opts = handoffMarkdownOpts()
+		case "json":
+			opts = handoffJSONOpts()
+		}
+		if out := renderSnapshotOpts(snap, opts); strings.Contains(out, "\x1b[") {
+			t.Errorf("handoff %s output contains ANSI escape sequences", name)
+		}
+	}
+}
+
+func TestHandoff_Text_Deterministic(t *testing.T) {
+	snap := cmux.Read(stubFetcher{stateJSON: minimalStateJSON(t), schedulerJSON: minimalSchedulerJSON()})
+	opts := handoffOpts()
+	if out1, out2 := renderSnapshotOpts(snap, opts), renderSnapshotOpts(snap, opts); out1 != out2 {
+		t.Error("handoff text Render is not deterministic")
+	}
+}
+
+func TestHandoff_Markdown_Deterministic(t *testing.T) {
+	snap := cmux.Read(stubFetcher{stateJSON: minimalStateJSON(t), schedulerJSON: minimalSchedulerJSON()})
+	opts := handoffMarkdownOpts()
+	if out1, out2 := renderSnapshotOpts(snap, opts), renderSnapshotOpts(snap, opts); out1 != out2 {
+		t.Error("handoff markdown Render is not deterministic")
+	}
+}
+
+func TestHandoff_JSON_Deterministic(t *testing.T) {
+	snap := cmux.Read(stubFetcher{stateJSON: minimalStateJSON(t), schedulerJSON: minimalSchedulerJSON()})
+	opts := handoffJSONOpts()
+	if out1, out2 := renderSnapshotOpts(snap, opts), renderSnapshotOpts(snap, opts); out1 != out2 {
+		t.Error("handoff JSON Render is not deterministic")
+	}
+}
+
+func TestHandoff_NormalOutput_Unchanged(t *testing.T) {
+	// Without Handoff:true the default text render must not produce handoff output.
+	snap := cmux.Read(stubFetcher{stateJSON: minimalStateJSON(t), schedulerJSON: minimalSchedulerJSON()})
+	out := renderSnapshot(snap) // zero RenderOptions
+	if strings.Contains(out, "CMUX HANDOFF PACKET") {
+		t.Error("normal cmux output must not contain CMUX HANDOFF PACKET header")
+	}
+	if !strings.Contains(out, "CMUX OPERATOR") {
+		t.Error("normal cmux output must still contain CMUX OPERATOR header")
+	}
+}
+
+func TestHandoff_JSON_OptionsBlock(t *testing.T) {
+	snap := cmux.Read(stubFetcher{stateJSON: minimalStateJSON(t), schedulerJSON: minimalSchedulerJSON()})
+	out := renderSnapshotOpts(snap, cmux.RenderOptions{Handoff: true, Output: cmux.OutputJSON, Limit: 5})
+	var result map[string]any
+	if err := json.Unmarshal([]byte(out), &result); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+	options, ok := result["options"].(map[string]any)
+	if !ok {
+		t.Fatalf("handoff JSON options must be an object; output:\n%s", out)
+	}
+	if options["limit"] != float64(5) {
+		t.Errorf("handoff JSON options.limit must be 5; got %v", options["limit"])
+	}
+	if options["output"] != "json" {
+		t.Errorf("handoff JSON options.output must be \"json\"; got %v", options["output"])
+	}
+}
+
+func TestHandoff_JSON_RuntimeSummaryPresent(t *testing.T) {
+	snap := cmux.Read(stubFetcher{stateJSON: minimalStateJSON(t), schedulerJSON: minimalSchedulerJSON()})
+	out := renderSnapshotOpts(snap, handoffJSONOpts())
+	var result map[string]any
+	if err := json.Unmarshal([]byte(out), &result); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+	if _, ok := result["runtimeSummary"]; !ok {
+		t.Errorf("handoff JSON missing runtimeSummary when runtime state available; output:\n%s", out)
+	}
+}
+
+func TestHandoff_Markdown_ReviewCandidatesHaveChecklist(t *testing.T) {
+	// multiStateJSON has task-review in reviewing state — it should appear in
+	// the markdown Review Candidates section with a GFM checklist.
+	snap := cmux.Read(stubFetcher{stateJSON: multiStateJSON(), schedulerJSON: minimalSchedulerJSON()})
+	out := renderSnapshotOpts(snap, handoffMarkdownOpts())
+	if !strings.Contains(out, "#### Review Checklist") {
+		t.Errorf("handoff markdown Review Candidates missing #### Review Checklist heading; output:\n%s", out)
+	}
+	if !strings.Contains(out, "**Merge Readiness:**") {
+		t.Errorf("handoff markdown Review Candidates missing **Merge Readiness:**; output:\n%s", out)
+	}
+}
+
 func TestReview_OverridesSection(t *testing.T) {
 	// --review overrides --section; section=providers is ignored.
 	snap := cmux.Read(stubFetcher{
