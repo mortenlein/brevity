@@ -28,6 +28,7 @@ const (
 	ExecutionPreflightID           ID = "execution-preflight"
 	ExecutionLaunchDryRunID        ID = "execution-launch-dry-run"
 	ExecutionLaunchID              ID = "execution-launch"
+	ExecutionFlowID                ID = "execution-flow"
 	ProviderStatusID               ID = "provider-status"
 	ProviderSetID                  ID = "provider-set"
 	ProviderResetID                ID = "provider-reset"
@@ -198,6 +199,11 @@ var (
 		Words: []string{"execution", "launch"},
 		Usage: "brevity execution launch <execution-id> [--json]",
 	}
+	ExecutionFlow = Command{
+		ID:    ExecutionFlowID,
+		Words: []string{"execution", "flow"},
+		Usage: "brevity execution flow [--json]",
+	}
 	ProviderSet = Command{
 		ID:    ProviderSetID,
 		Words: []string{"provider", "set"},
@@ -354,6 +360,7 @@ var UsageCommands = []Command{
 	ExecutionPreflight,
 	ExecutionLaunchDryRun,
 	ExecutionLaunch,
+	ExecutionFlow,
 	Doctor,
 	ProviderStatus,
 	ProviderSet,

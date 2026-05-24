@@ -18,6 +18,7 @@ and bounded to one selected item.
 
 ```powershell
 brevity queue add <task>
+brevity execution flow
 brevity queue inspect
 brevity queue plan
 brevity scheduler plan
@@ -36,6 +37,12 @@ brevity queue inspect
 
 `brevity queue add <task>` appends one queued item for the task. It writes
 `.brevity\runtime-queue.json`. It does not reserve, plan, or launch anything.
+
+`brevity execution flow` reads queue, scheduler, and execution state and prints
+the next likely manual operator step. It is guidance only. It does not reserve
+queue items, create execution records, launch providers, start workers, start
+the supervisor, mutate run history, or drain the queue. Use
+`brevity execution flow --json` for machine-readable guidance.
 
 `brevity queue inspect` reads queue file health, counts, reservations, and
 warnings. It is read-only.
