@@ -30,7 +30,7 @@ const selectedDetailTitle = "Selected Detail"
 const emptyRuntimeSignalsTitle = "No runtime signals"
 const emptyRuntimeSignalsAuthority = "PowerShell backend is authoritative. This dashboard is read-only."
 const emptyRuntimeSignalsRefresh = "Refresh to re-read state."
-const cockpitLineWidth = 1000
+const cockpitMinimumLineWidth = 12
 
 type refreshMsg struct {
 	state contracts.RuntimeState
@@ -781,32 +781,54 @@ func (model Model) renderSummary() string {
 	var output strings.Builder
 	fmt.Fprintln(&output)
 	renderSection(&output, "Brevity Runtime")
-	renderCockpitPanel(&output, model, "Runtime", runtimePanelLine(state, model.source))
+	renderCockpitPanel(&output, model, "Runtime", func(width int) string { return runtimePanelLine(state, model.source, width) })
 	renderCockpitPanel(&output, model, "Queue", queuePanelLine(state.Queue))
-	renderCockpitPanel(&output, model, "Scheduler", schedulerPanelLine(state))
+	renderCockpitPanel(&output, model, "Scheduler", func(width int) string { return schedulerPanelLine(state, width) })
 	renderCockpitPanel(&output, model, "Executions", executionPanelLine(state.Executions))
-	renderCockpitPanel(&output, model, "Next Action", nextActionPanelLine(state))
+	renderCockpitPanel(&output, model, "Next Action", func(width int) string { return nextActionPanelLine(state, width) })
 	return output.String()
 }
 
-func renderCockpitPanel(output *strings.Builder, model Model, title string, line string) {
-	fmt.Fprintf(output, "%s\n", model.renderLine(fmt.Sprintf("  [%-11s] %s", title, line)))
+func renderCockpitPanel(output *strings.Builder, model Model, title string, line func(width int) string) {
+	prefix := cockpitPanelPrefix(title, model.contentWidth())
+	lineWidth := model.contentWidth() - visibleWidth(prefix)
+	if lineWidth < cockpitMinimumLineWidth {
+		lineWidth = cockpitMinimumLineWidth
+	}
+	fmt.Fprintf(output, "%s\n", model.renderLine(prefix+line(lineWidth)))
 }
 
-func runtimePanelLine(state contracts.RuntimeState, source string) string {
-	return statusLine(cockpitLineWidth,
-		statusSegment{text: "source " + fallback(source, "unknown"), priority: 0},
+func cockpitPanelPrefix(title string, width int) string {
+	if width < 110 {
+		return fmt.Sprintf("  [%s] ", title)
+	}
+	return fmt.Sprintf("  [%-11s] ", title)
+}
+
+func runtimePanelLine(state contracts.RuntimeState, source string, width int) string {
+	return statusLine(width,
+		statusSegment{text: "source " + fallback(source, "unknown"), priority: 1},
 		statusSegment{text: "supervisor " + supervisorBadge(state), priority: 0},
-		statusSegment{text: "provider health " + providerStatusSummary(state.Providers.Summary), priority: 1},
+		statusSegment{text: "provider health " + providerStatusSummary(state.Providers.Summary), compact: "provider health " + providerStatusSummaryCompact(state.Providers.Summary), priority: 0},
 		statusSegment{text: "repo " + fallback(state.RepoRoot, "(unknown)"), priority: 3},
 	)
 }
 
-func queuePanelLine(queue *contracts.RuntimeQueue) string {
-	if queue == nil {
-		return "file health [UNKNOWN] no queue state | total 0 | queued 0 | reserved 0 | next runnable -"
+func queuePanelLine(queue *contracts.RuntimeQueue) func(width int) string {
+	return func(width int) string {
+		return queuePanelLineForWidth(queue, width)
 	}
-	return statusLine(cockpitLineWidth,
+}
+
+func queuePanelLineForWidth(queue *contracts.RuntimeQueue, width int) string {
+	if queue == nil {
+		return statusLine(width,
+			statusSegment{text: "file health [UNKNOWN] no queue state", compact: "queue unknown", priority: 0},
+			statusSegment{text: "no queued work", priority: 0},
+			statusSegment{text: "next -", priority: 1},
+		)
+	}
+	return statusLine(width,
 		statusSegment{text: "file health " + stateBadge(queue.State, queueWarningText(queue)), priority: 0},
 		statusSegment{text: fmt.Sprintf("total %d", queue.TotalItems), priority: 0},
 		statusSegment{text: fmt.Sprintf("queued %d", queue.CountsByStatus["queued"]), priority: 0},
@@ -815,7 +837,7 @@ func queuePanelLine(queue *contracts.RuntimeQueue) string {
 	)
 }
 
-func schedulerPanelLine(state contracts.RuntimeState) string {
+func schedulerPanelLine(state contracts.RuntimeState, width int) string {
 	task := "-"
 	eligible := "no"
 	reason := schedulerBlockedReason(state)
@@ -828,22 +850,49 @@ func schedulerPanelLine(state contracts.RuntimeState) string {
 	if reason == "" {
 		reason = "-"
 	}
-	return statusLine(cockpitLineWidth,
+	return statusLine(width,
 		statusSegment{text: "selected task " + task, priority: 0},
 		statusSegment{text: "reservation " + eligible, priority: 0},
 		statusSegment{text: "blocked reason " + reason, priority: 1},
 	)
 }
 
-func executionPanelLine(executions *contracts.RuntimeExecution) string {
-	if executions == nil {
-		return "file health [UNKNOWN] no execution state | lifecycle planned:0 ready:0 launching:0 completed:0 failed:0 | newest - / -"
+func executionPanelLine(executions *contracts.RuntimeExecution) func(width int) string {
+	return func(width int) string {
+		return executionPanelLineForWidth(executions, width)
 	}
-	return statusLine(cockpitLineWidth,
-		statusSegment{text: "file health " + stateBadge(executions.State, executionWarningText(executions)), priority: 1},
-		statusSegment{text: "newest " + fallback(executions.NewestExecutionTask, "-") + " / " + fallback(executions.NewestExecutionStatus, "-"), priority: 0},
-		statusSegment{text: "lifecycle " + executionCockpitStatusSummary(executions.CountsByStatus), priority: 0},
+}
+
+func executionPanelLineForWidth(executions *contracts.RuntimeExecution, width int) string {
+	if executions == nil {
+		return statusLine(width,
+			statusSegment{text: "file health [UNKNOWN] no execution state", compact: "exec unknown", priority: 0},
+			statusSegment{text: "no execution records", priority: 0},
+			statusSegment{text: "newest - / -", priority: 1},
+		)
+	}
+	failed := executions.CountsByStatus["failed"]
+	ready := executions.CountsByStatus["ready"]
+	healthPriority := 2
+	if executionWarningText(executions) != "" {
+		healthPriority = 0
+	}
+	return statusLine(width,
+		statusSegment{text: executionAlertSummary(failed, ready), priority: 0},
+		statusSegment{text: "file health " + stateBadge(executions.State, executionWarningText(executions)), priority: healthPriority},
+		statusSegment{text: "newest " + fallback(executions.NewestExecutionTask, "-") + " / " + fallback(executions.NewestExecutionStatus, "-"), priority: 1},
+		statusSegment{text: "lifecycle " + executionCockpitStatusSummary(executions.CountsByStatus), priority: 2},
 	)
+}
+
+func executionAlertSummary(failed int, ready int) string {
+	if failed > 0 {
+		return fmt.Sprintf("failed %d %s", failed, warningMarker())
+	}
+	if ready > 0 {
+		return fmt.Sprintf("ready %d", ready)
+	}
+	return "no active executions"
 }
 
 func executionCockpitStatusSummary(counts map[string]int) string {
@@ -855,9 +904,9 @@ func executionCockpitStatusSummary(counts map[string]int) string {
 	return strings.Join(parts, " ")
 }
 
-func nextActionPanelLine(state contracts.RuntimeState) string {
+func nextActionPanelLine(state contracts.RuntimeState, width int) string {
 	command, reason := suggestedOperatorAction(state)
-	return statusLine(cockpitLineWidth,
+	return statusLine(width,
 		statusSegment{text: "command " + command, priority: 0},
 		statusSegment{text: "reason " + reason, priority: 1},
 	)
@@ -933,6 +982,13 @@ func providerStatusSummary(summary contracts.ProviderSummary) string {
 		return fmt.Sprintf("%d providers ok", summary.Total)
 	}
 	return fmt.Sprintf("%d providers | %d degraded | %d unavailable", summary.Total, summary.Degraded, summary.Unavailable)
+}
+
+func providerStatusSummaryCompact(summary contracts.ProviderSummary) string {
+	if summary.Degraded == 0 && summary.Unavailable == 0 {
+		return fmt.Sprintf("%d providers ok", summary.Total)
+	}
+	return fmt.Sprintf("%d providers | %d degr", summary.Total, summary.Degraded)
 }
 
 func cleanupCandidateSummary(state contracts.RuntimeState) string {

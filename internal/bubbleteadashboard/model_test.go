@@ -3470,6 +3470,95 @@ func TestOperatorCockpitNarrowWidthAndReadOnlyRender(t *testing.T) {
 	}
 }
 
+func TestOperatorCockpitTerminalPolishAcrossCommonWidths(t *testing.T) {
+	state := emptyBubbleState()
+	state.Queue = &contracts.RuntimeQueue{
+		State:          "valid",
+		TotalItems:     3,
+		ReservedItems:  1,
+		CountsByStatus: map[string]int{"queued": 2, "reserved": 1},
+		Plan:           &contracts.QueuePlan{State: "valid", Runnable: 1, Skipped: 1, NextRunnableTask: "task-alpha-with-a-long-readable-name", FirstSkipReason: "blocked by provider gate", Reserved: 1, ReadOnly: true},
+	}
+	state.Executions = &contracts.RuntimeExecution{
+		State:                 "valid",
+		TotalExecutions:       4,
+		CountsByStatus:        map[string]int{"planned": 1, "ready": 1, "launching": 0, "completed": 1, "failed": 1},
+		NewestExecutionTask:   "task-beta-with-a-long-readable-name",
+		NewestExecutionStatus: "failed",
+	}
+
+	tests := []struct {
+		name  string
+		width int
+		want  []string
+	}{
+		{name: "narrow split pane", width: 42, want: []string{"[Runtime]", "[Queue]", "[Executions]", "[Next Action]", "failed"}},
+		{name: "medium vscode terminal", width: 82, want: []string{"supervisor", "queued 2", "reservation yes", "failed 1 !", "command brevity task status"}},
+		{name: "wide desktop terminal", width: 180, want: []string{"provider health", "next runnable task-alpha", "lifecycle failed:1 ready:1 launching:0 planned:1 completed:1", "reason failed execution needs inspection"}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			model := NewModelWithSource(&fakeClient{}, time.Second, "native")
+			model.state = state
+			model.hasState = true
+			model.width = tt.width
+
+			output := plainView(model.View())
+			assertLinesWithinWidth(t, output, tt.width)
+			for _, want := range tt.want {
+				if !strings.Contains(output, want) {
+					t.Fatalf("%s cockpit missing %q:\n%s", tt.name, want, output)
+				}
+			}
+			if strings.Contains(output, "lifecycle planned:0 ready:0 launching:0 completed:0 failed:0") {
+				t.Fatalf("%s cockpit kept noisy zero lifecycle wall:\n%s", tt.name, output)
+			}
+		})
+	}
+}
+
+func TestOperatorCockpitEmptyAndCorruptedStateWording(t *testing.T) {
+	tests := []struct {
+		name  string
+		state contracts.RuntimeState
+		want  []string
+	}{
+		{
+			name:  "empty state",
+			state: emptyBubbleState(),
+			want:  []string{"file health [UNKNOWN] no queue state", "no queued work", "file health [UNKNOWN] no execution state", "no execution records", "no queued or ready work"},
+		},
+		{
+			name: "corrupted queue and executions",
+			state: func() contracts.RuntimeState {
+				state := emptyBubbleState()
+				state.Queue = &contracts.RuntimeQueue{State: "corrupted", Error: "invalid character", CountsByStatus: map[string]int{}}
+				state.Executions = &contracts.RuntimeExecution{State: "corrupted", Error: "invalid character", CountsByStatus: map[string]int{}}
+				return state
+			}(),
+			want: []string{"[CORRUPTED] corrupted !1", "blocked reason queue corrupted", "no active executions"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			model := NewModelWithSource(&fakeClient{}, time.Second, "native")
+			model.state = tt.state
+			model.hasState = true
+			model.width = 96
+
+			output := plainView(model.View())
+			assertLinesWithinWidth(t, output, model.width)
+			for _, want := range tt.want {
+				if !strings.Contains(output, want) {
+					t.Fatalf("%s cockpit missing %q:\n%s", tt.name, want, output)
+				}
+			}
+		})
+	}
+}
+
 func bubbleState() contracts.RuntimeState {
 	return contracts.RuntimeState{
 		Schema:   contracts.RuntimeStateSchema,
