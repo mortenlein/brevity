@@ -30,6 +30,7 @@ const selectedDetailTitle = "Selected Detail"
 const emptyRuntimeSignalsTitle = "No runtime signals"
 const emptyRuntimeSignalsAuthority = "PowerShell backend is authoritative. This dashboard is read-only."
 const emptyRuntimeSignalsRefresh = "Refresh to re-read state."
+const cockpitMinimumLineWidth = 12
 
 type refreshMsg struct {
 	state contracts.RuntimeState
@@ -779,44 +780,201 @@ func (model Model) renderSummary() string {
 	state := model.state
 	var output strings.Builder
 	fmt.Fprintln(&output)
-	renderSection(&output, "Runtime Summary")
-	fmt.Fprintf(&output, "  repo      %s\n", dashboardStyles.detailPrimary.Render(model.renderInlinePath(fallback(state.RepoRoot, "(unknown)"), len("  repo      "))))
-	fmt.Fprintf(&output, "%s\n", model.renderLine("  generated "+dashboardStyles.headerMeta.Render(fallback(state.GeneratedAt, "(unknown)"))))
-	fmt.Fprintf(&output, "%s\n", model.renderLine(fmt.Sprintf("  status    %s | %d runnable | %s%s",
-		providerStatusSummary(state.Providers.Summary),
-		state.TaskCounts.Runnable,
-		cleanupCandidateSummary(state),
-		renderWarningCount(runtimeSummaryWarningCount(state)),
-	)))
-	fmt.Fprintf(&output, "%s\n", model.renderLine(fmt.Sprintf("  tasks     %d tracked | %d runnable | %d blocked | %d stale | %d gated | %d review%s",
-		state.TaskCounts.Tracked,
-		state.TaskCounts.Runnable,
-		state.TaskCounts.Blocked,
-		state.TaskCounts.Stale,
-		state.TaskCounts.ProviderGated,
-		state.TaskCounts.Review,
-		renderWarningCount(state.TaskCounts.Blocked+state.TaskCounts.Stale+state.TaskCounts.ProviderGated),
-	)))
-	if state.Cleanup != nil && state.Cleanup.Summary != nil {
-		summary := state.Cleanup.Summary
-		fmt.Fprintf(&output, "%s\n", model.renderLine(fmt.Sprintf("  cleanup   %d candidates | %d inspect%s",
-			summary.TotalCandidates,
-			summary.RequiresInspectionCount,
-			renderWarningCount(summary.TotalCandidates),
-		)))
-	} else {
-		fmt.Fprintln(&output, "  cleanup   none")
+	renderSection(&output, "Brevity Runtime")
+	renderCockpitPanel(&output, model, "Runtime", func(width int) string { return runtimePanelLine(state, model.source, width) })
+	renderCockpitPanel(&output, model, "Queue", queuePanelLine(state.Queue))
+	renderCockpitPanel(&output, model, "Scheduler", func(width int) string { return schedulerPanelLine(state, width) })
+	renderCockpitPanel(&output, model, "Executions", executionPanelLine(state.Executions))
+	renderCockpitPanel(&output, model, "Next Action", func(width int) string { return nextActionPanelLine(state, width) })
+	return output.String()
+}
+
+func renderCockpitPanel(output *strings.Builder, model Model, title string, line func(width int) string) {
+	prefix := cockpitPanelPrefix(title, model.contentWidth())
+	lineWidth := model.contentWidth() - visibleWidth(prefix)
+	if lineWidth < cockpitMinimumLineWidth {
+		lineWidth = cockpitMinimumLineWidth
 	}
-	if state.Queue != nil {
-		fmt.Fprintf(&output, "%s\n", model.renderLine("  queue     "+queueSummary(state.Queue)))
-		if state.Queue.Plan != nil {
-			fmt.Fprintf(&output, "%s\n", model.renderLine("  plan      "+queuePlanSummary(state.Queue.Plan)))
+	fmt.Fprintf(output, "%s\n", model.renderLine(prefix+line(lineWidth)))
+}
+
+func cockpitPanelPrefix(title string, width int) string {
+	if width < 110 {
+		return fmt.Sprintf("  [%s] ", title)
+	}
+	return fmt.Sprintf("  [%-11s] ", title)
+}
+
+func runtimePanelLine(state contracts.RuntimeState, source string, width int) string {
+	return statusLine(width,
+		statusSegment{text: "source " + fallback(source, "unknown"), priority: 1},
+		statusSegment{text: "supervisor " + supervisorBadge(state), priority: 0},
+		statusSegment{text: "provider health " + providerStatusSummary(state.Providers.Summary), compact: "provider health " + providerStatusSummaryCompact(state.Providers.Summary), priority: 0},
+		statusSegment{text: "repo " + fallback(state.RepoRoot, "(unknown)"), priority: 3},
+	)
+}
+
+func queuePanelLine(queue *contracts.RuntimeQueue) func(width int) string {
+	return func(width int) string {
+		return queuePanelLineForWidth(queue, width)
+	}
+}
+
+func queuePanelLineForWidth(queue *contracts.RuntimeQueue, width int) string {
+	if queue == nil {
+		return statusLine(width,
+			statusSegment{text: "file health [UNKNOWN] no queue state", compact: "queue unknown", priority: 0},
+			statusSegment{text: "no queued work", priority: 0},
+			statusSegment{text: "next -", priority: 1},
+		)
+	}
+	return statusLine(width,
+		statusSegment{text: "file health " + stateBadge(queue.State, queueWarningText(queue)), priority: 0},
+		statusSegment{text: fmt.Sprintf("total %d", queue.TotalItems), priority: 0},
+		statusSegment{text: fmt.Sprintf("queued %d", queue.CountsByStatus["queued"]), priority: 0},
+		statusSegment{text: fmt.Sprintf("reserved %d", queue.ReservedItems), priority: 1},
+		statusSegment{text: "next runnable " + queueNextRunnable(queue), priority: 0},
+	)
+}
+
+func schedulerPanelLine(state contracts.RuntimeState, width int) string {
+	task := "-"
+	eligible := "no"
+	reason := schedulerBlockedReason(state)
+	if state.Queue != nil && state.Queue.Plan != nil {
+		task = fallback(state.Queue.Plan.NextRunnableTask, "-")
+		if state.Queue.Plan.Runnable > 0 && task != "-" && reason == "" {
+			eligible = "yes"
 		}
 	}
-	if state.Executions != nil {
-		fmt.Fprintf(&output, "%s\n", model.renderLine("  exec      "+executionSummary(state.Executions)))
+	if reason == "" {
+		reason = "-"
 	}
-	return output.String()
+	return statusLine(width,
+		statusSegment{text: "selected task " + task, priority: 0},
+		statusSegment{text: "reservation " + eligible, priority: 0},
+		statusSegment{text: "blocked reason " + reason, priority: 1},
+	)
+}
+
+func executionPanelLine(executions *contracts.RuntimeExecution) func(width int) string {
+	return func(width int) string {
+		return executionPanelLineForWidth(executions, width)
+	}
+}
+
+func executionPanelLineForWidth(executions *contracts.RuntimeExecution, width int) string {
+	if executions == nil {
+		return statusLine(width,
+			statusSegment{text: "file health [UNKNOWN] no execution state", compact: "exec unknown", priority: 0},
+			statusSegment{text: "no execution records", priority: 0},
+			statusSegment{text: "newest - / -", priority: 1},
+		)
+	}
+	failed := executions.CountsByStatus["failed"]
+	ready := executions.CountsByStatus["ready"]
+	healthPriority := 2
+	if executionWarningText(executions) != "" {
+		healthPriority = 0
+	}
+	return statusLine(width,
+		statusSegment{text: executionAlertSummary(failed, ready), priority: 0},
+		statusSegment{text: "file health " + stateBadge(executions.State, executionWarningText(executions)), priority: healthPriority},
+		statusSegment{text: "newest " + fallback(executions.NewestExecutionTask, "-") + " / " + fallback(executions.NewestExecutionStatus, "-"), priority: 1},
+		statusSegment{text: "lifecycle " + executionCockpitStatusSummary(executions.CountsByStatus), priority: 2},
+	)
+}
+
+func executionAlertSummary(failed int, ready int) string {
+	if failed > 0 {
+		return fmt.Sprintf("failed %d %s", failed, warningMarker())
+	}
+	if ready > 0 {
+		return fmt.Sprintf("ready %d", ready)
+	}
+	return "no active executions"
+}
+
+func executionCockpitStatusSummary(counts map[string]int) string {
+	ordered := []string{"failed", "ready", "launching", "planned", "completed"}
+	parts := make([]string, 0, len(ordered))
+	for _, status := range ordered {
+		parts = append(parts, fmt.Sprintf("%s:%d", status, counts[status]))
+	}
+	return strings.Join(parts, " ")
+}
+
+func nextActionPanelLine(state contracts.RuntimeState, width int) string {
+	command, reason := suggestedOperatorAction(state)
+	return statusLine(width,
+		statusSegment{text: "command " + command, priority: 0},
+		statusSegment{text: "reason " + reason, priority: 1},
+	)
+}
+
+func supervisorBadge(state contracts.RuntimeState) string {
+	if runtimeSummaryWarningCount(state) > 0 {
+		return "[ATTENTION]"
+	}
+	return "[NOMINAL]"
+}
+
+func stateBadge(state string, warning string) string {
+	label := strings.ToUpper(fallback(state, "unknown"))
+	if warning != "" {
+		return "[" + label + "] " + warning + renderWarningCount(1)
+	}
+	return "[" + label + "] ok"
+}
+
+func queueNextRunnable(queue *contracts.RuntimeQueue) string {
+	if queue != nil && queue.Plan != nil {
+		return fallback(queue.Plan.NextRunnableTask, "-")
+	}
+	return "-"
+}
+
+func schedulerBlockedReason(state contracts.RuntimeState) string {
+	if state.Queue == nil {
+		return "queue state unavailable"
+	}
+	if warning := queueWarningText(state.Queue); warning != "" {
+		return "queue " + warning
+	}
+	if state.Queue.Plan == nil {
+		return "queue plan unavailable"
+	}
+	if warning := queuePlanWarningText(state.Queue.Plan); warning != "" {
+		return "plan " + warning
+	}
+	if state.Queue.Plan.Runnable == 0 {
+		return fallback(state.Queue.Plan.FirstSkipReason, "no runnable queue items")
+	}
+	if strings.TrimSpace(state.Queue.Plan.NextRunnableTask) == "" {
+		return "no selected runnable task"
+	}
+	return ""
+}
+
+func suggestedOperatorAction(state contracts.RuntimeState) (string, string) {
+	if state.Executions != nil && state.Executions.CountsByStatus["failed"] > 0 {
+		task := fallback(state.Executions.NewestExecutionTask, "latest failed task")
+		return "brevity task status " + task, "failed execution needs inspection"
+	}
+	if state.Executions != nil && state.Executions.CountsByStatus["ready"] > 0 {
+		task := fallback(firstNonEmpty(state.Executions.NewestExecutionTask, state.Executions.NewestPlannedTask), "ready task")
+		return "brevity task run " + task, "execution is ready to launch"
+	}
+	if state.Queue != nil && state.Queue.Plan != nil && state.Queue.Plan.Runnable > 0 {
+		return "brevity task status " + fallback(state.Queue.Plan.NextRunnableTask, "next task"), "queue has runnable work"
+	}
+	if state.Queue != nil && state.Queue.TotalItems > 0 {
+		return "brevity status", "queued work is blocked or reserved"
+	}
+	if len(state.SuggestedNextActions) > 0 && strings.TrimSpace(state.SuggestedNextActions[0]) != "" {
+		return state.SuggestedNextActions[0], "runtime suggested next action"
+	}
+	return "brevity status", "no queued or ready work"
 }
 
 func providerStatusSummary(summary contracts.ProviderSummary) string {
@@ -824,6 +982,13 @@ func providerStatusSummary(summary contracts.ProviderSummary) string {
 		return fmt.Sprintf("%d providers ok", summary.Total)
 	}
 	return fmt.Sprintf("%d providers | %d degraded | %d unavailable", summary.Total, summary.Degraded, summary.Unavailable)
+}
+
+func providerStatusSummaryCompact(summary contracts.ProviderSummary) string {
+	if summary.Degraded == 0 && summary.Unavailable == 0 {
+		return fmt.Sprintf("%d providers ok", summary.Total)
+	}
+	return fmt.Sprintf("%d providers | %d degr", summary.Total, summary.Degraded)
 }
 
 func cleanupCandidateSummary(state contracts.RuntimeState) string {

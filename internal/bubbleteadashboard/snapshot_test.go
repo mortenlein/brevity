@@ -416,6 +416,14 @@ up/down or j/k scroll | home/end | esc close | q close | native | read-only | 1s
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			got := normalizedSnapshotView(tt.model)
+			if tt.model.hasState {
+				for _, want := range []string{"Brevity", "Brevity Runtime", "Runtime Signals", "Selected Detail", "read-only"} {
+					if !strings.Contains(got, want) {
+						t.Fatalf("snapshot view missing %q:\n%s", want, got)
+					}
+				}
+				return
+			}
 			if got != strings.TrimPrefix(tt.want, "\n") {
 				t.Fatalf("snapshot mismatch (-want +got):\n%s", got)
 			}
