@@ -45,6 +45,7 @@ type commandKind string
 
 const (
 	commandDashboard             commandKind = commandKind(commands.DashboardID)
+	commandReview                commandKind = "review"
 	commandRuntimeState          commandKind = commandKind(commands.RuntimeStateID)
 	commandRuntimeStart          commandKind = commandKind(commands.RuntimeStartID)
 	commandRuntimeStop           commandKind = commandKind(commands.RuntimeStopID)
@@ -107,6 +108,7 @@ type cliOptions struct {
 	once              bool
 	watch             bool
 	bubble            bool
+	review            bool
 	noClear           bool
 	refresh           time.Duration
 	jsonSource        string
@@ -220,12 +222,19 @@ func parseOptions(args []string) (cliOptions, error) {
 	if len(args) > 0 && args[0] == "support" {
 		return parseSupportOptions(args)
 	}
+	if len(args) > 0 && args[0] == "review" {
+		if len(args) != 1 {
+			return cliOptions{}, fmt.Errorf("usage: brevity review")
+		}
+		return cliOptions{kind: commandReview, bubble: true, review: true, refresh: 5 * time.Second, jsonSource: "native"}, nil
+	}
 
 	flags := flag.NewFlagSet("brevity", flag.ContinueOnError)
 	flags.SetOutput(io.Discard)
 	flags.BoolVar(&options.once, "once", false, "render the dashboard once")
 	flags.BoolVar(&options.watch, "watch", false, "refresh the dashboard until interrupted")
 	flags.BoolVar(&options.bubble, "bubble", false, "run the experimental Bubble Tea dashboard")
+	flags.BoolVar(&options.review, "review", false, "run the Bubble Tea review workspace")
 	flags.BoolVar(&options.noClear, "no-clear", false, "do not clear the screen before changed dashboard renders")
 	refresh := flags.String("refresh", options.refresh.String(), "dashboard refresh interval")
 	jsonSource := flags.String("json-source", options.jsonSource, "runtime JSON source")
@@ -253,6 +262,9 @@ func parseOptions(args []string) (cliOptions, error) {
 	}
 	if options.bubble && options.once {
 		return cliOptions{}, fmt.Errorf("--bubble and --once cannot be used together")
+	}
+	if options.review && !options.bubble {
+		return cliOptions{}, fmt.Errorf("--review requires --bubble")
 	}
 	if flags.NArg() > 0 {
 		return cliOptions{}, fmt.Errorf("unexpected argument: %s", flags.Arg(0))
@@ -1070,7 +1082,7 @@ func run(stdout io.Writer, args []string) error {
 	defer stop()
 
 	client := runtimeclient.Client(runtimeclient.NewPowerShellClient())
-	if options.kind == commandDashboard && options.jsonSource == "native" {
+	if (options.kind == commandDashboard || options.kind == commandReview) && options.jsonSource == "native" {
 		client = runtimeclient.NewNativeClient("")
 	}
 
@@ -1087,6 +1099,11 @@ func runWithOptions(stdout io.Writer, client runtimeclient.Client, options cliOp
 
 func runWithContextOptions(ctx context.Context, stdout io.Writer, client runtimeclient.Client, options cliOptions) error {
 	switch options.kind {
+	case commandReview:
+		if options.refresh <= 0 {
+			options.refresh = 5 * time.Second
+		}
+		return bubbleteadashboard.RunReviewWithSource(ctx, os.Stdin, stdout, client, options.refresh, options.jsonSource)
 	case commandQueueHelp:
 		writeQueueUsage(stdout)
 		return nil
@@ -1134,6 +1151,9 @@ func runWithContextOptions(ctx context.Context, stdout io.Writer, client runtime
 		if options.bubble {
 			if options.refresh <= 0 {
 				options.refresh = 5 * time.Second
+			}
+			if options.review {
+				return bubbleteadashboard.RunReviewWithSource(ctx, os.Stdin, stdout, client, options.refresh, options.jsonSource)
 			}
 			return bubbleteadashboard.RunWithSource(ctx, os.Stdin, stdout, client, options.refresh, options.jsonSource)
 		}
@@ -3163,6 +3183,7 @@ func writeUsage(stdout io.Writer) {
 	fmt.Fprintln(stdout, "  --once                    Render the dashboard once.")
 	fmt.Fprintln(stdout, "  --watch                   Refresh the dashboard until interrupted.")
 	fmt.Fprintln(stdout, "  --bubble                  Run the experimental Bubble Tea dashboard.")
+	fmt.Fprintln(stdout, "  --review                  With --bubble, open the review workspace.")
 	fmt.Fprintln(stdout, "  --refresh <duration>      Set the dashboard refresh interval.")
 	fmt.Fprintln(stdout, "  --json-source <source>    Runtime JSON source: powershell or native.")
 	fmt.Fprintln(stdout, "  --no-clear                Do not clear before changed dashboard renders.")

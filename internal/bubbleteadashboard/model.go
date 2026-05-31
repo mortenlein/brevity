@@ -106,6 +106,7 @@ type Model struct {
 	pollingEnabled  bool
 	refreshInterval time.Duration
 	source          string
+	reviewMode      bool
 }
 
 func NewModel(client runtimeclient.Client, refreshInterval time.Duration) Model {
@@ -132,12 +133,22 @@ func Run(ctx context.Context, input io.Reader, stdout io.Writer, client runtimec
 }
 
 func RunWithSource(ctx context.Context, input io.Reader, stdout io.Writer, client runtimeclient.Client, refreshInterval time.Duration, source string) error {
+	return runWithModel(ctx, input, stdout, NewModelWithSource(client, refreshInterval, source))
+}
+
+func RunReviewWithSource(ctx context.Context, input io.Reader, stdout io.Writer, client runtimeclient.Client, refreshInterval time.Duration, source string) error {
+	model := NewModelWithSource(client, refreshInterval, source)
+	model.reviewMode = true
+	return runWithModel(ctx, input, stdout, model)
+}
+
+func runWithModel(ctx context.Context, input io.Reader, stdout io.Writer, model Model) error {
 	if !isTerminalInput(input) {
-		return runLineFallback(stdout, input, client, refreshInterval, source)
+		return runLineFallback(stdout, input, model)
 	}
 
 	program := tea.NewProgram(
-		NewModelWithSource(client, refreshInterval, source),
+		model,
 		tea.WithContext(ctx),
 		tea.WithInput(input),
 		tea.WithOutput(stdout),
@@ -154,8 +165,7 @@ func isTerminalInput(input io.Reader) bool {
 	return term.IsTerminal(int(file.Fd()))
 }
 
-func runLineFallback(stdout io.Writer, input io.Reader, client runtimeclient.Client, refreshInterval time.Duration, source string) error {
-	model := NewModelWithSource(client, refreshInterval, source)
+func runLineFallback(stdout io.Writer, input io.Reader, model Model) error {
 	refreshed := model.refreshCmd()().(refreshMsg)
 	updated, _ := model.Update(refreshed)
 	model = updated.(Model)
@@ -255,6 +265,23 @@ func (model Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (model Model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	if model.reviewMode {
+		switch msg.String() {
+		case "q", "ctrl+c":
+			return model, tea.Quit
+		case "r":
+			if model.polling {
+				return model, nil
+			}
+			return model, func() tea.Msg { return refreshStartedMsg{} }
+		case "l":
+			model.pollingEnabled = !model.pollingEnabled
+			return model, nil
+		default:
+			return model, nil
+		}
+	}
+
 	if model.actionPreview != nil {
 		switch msg.String() {
 		case "esc", "q", "p", "ctrl+p":
@@ -415,6 +442,9 @@ func (model Model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 func (model Model) View() string {
+	if model.reviewMode {
+		return model.reviewView()
+	}
 	if model.usesUltraSmallHeightMode() {
 		return model.renderUltraSmallHeightView()
 	}
