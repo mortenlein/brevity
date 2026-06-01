@@ -3,35 +3,61 @@ package bubbleteadashboard
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"golang.org/x/term"
 )
 
 const productGoalPath = "docs/product-goal.md"
+const planningIdeasPath = ".brevity/ideas.json"
+
+type PlanningIdea struct {
+	ID          string `json:"id"`
+	Title       string `json:"title"`
+	Description string `json:"description,omitempty"`
+	CreatedAt   string `json:"createdAt"`
+	Status      string `json:"status"`
+}
+
+type planningIdeaStore struct {
+	path string
+}
 
 type PlanningModel struct {
 	productGoal string
 	loadError   error
+	storeError  error
 	repoRoot    string
+	store       planningIdeaStore
+	ideas       []PlanningIdea
+	selected    int
+	inputMode   string
+	inputValue  string
+	message     string
+	now         func() time.Time
 	width       int
 	height      int
 	quitting    bool
 }
 
 func NewPlanningModel(productGoal string, loadError error) PlanningModel {
-	return PlanningModel{productGoal: strings.TrimSpace(productGoal), loadError: loadError, repoRoot: "."}
+	return PlanningModel{productGoal: strings.TrimSpace(productGoal), loadError: loadError, repoRoot: ".", now: time.Now}
 }
 
 func RunPlan(ctx context.Context, input io.Reader, stdout io.Writer, repoRoot string) error {
 	goal, err := loadProductGoal(repoRoot)
 	model := NewPlanningModel(goal, err)
 	model.repoRoot = fallback(repoRoot, ".")
+	model.store = newPlanningIdeaStore(model.repoRoot)
+	model.ideas, model.storeError = model.store.Load()
 	if !isPlanningTerminalInput(input) {
 		return runPlanningLineFallback(stdout, input, model)
 	}
@@ -69,7 +95,16 @@ func runPlanningLineFallback(stdout io.Writer, input io.Reader, model PlanningMo
 	}
 	scanner := bufio.NewScanner(input)
 	for scanner.Scan() {
-		key := strings.TrimSpace(strings.ToLower(scanner.Text()))
+		line := scanner.Text()
+		key := strings.TrimSpace(strings.ToLower(line))
+		if model.inputMode != "" {
+			updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+			model.inputValue = line
+			updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+			model = updated.(PlanningModel)
+			fmt.Fprint(stdout, model.View())
+			continue
+		}
 		updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(key)})
 		model = updated.(PlanningModel)
 		if key == "q" {
@@ -90,13 +125,114 @@ func (model PlanningModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		model.width = msg.Width
 		model.height = msg.Height
 	case tea.KeyMsg:
+		if model.inputMode != "" {
+			return model.updateInput(msg)
+		}
 		switch strings.ToLower(msg.String()) {
 		case "q", "esc", "ctrl+c":
 			model.quitting = true
 			return model, tea.Quit
+		case "n":
+			model.inputMode = "new-title"
+			model.inputValue = ""
+			model.message = "Enter idea title, then press enter."
+		case "enter":
+			if len(model.ideas) > 0 {
+				model.message = "Inspecting selected idea."
+			}
+		case "up", "k":
+			if model.selected > 0 {
+				model.selected--
+			}
+		case "down", "j":
+			if model.selected < len(model.ideas)-1 {
+				model.selected++
+			}
+		case "d":
+			model = model.deleteSelectedIdea()
+		case "t":
+			if len(model.ideas) == 0 {
+				model.message = "Capture an idea before creating a task draft."
+			} else {
+				model.message = "Task draft conversion is not implemented yet."
+			}
 		}
 	}
 	return model, nil
+}
+
+func (model PlanningModel) updateInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.Type {
+	case tea.KeyEsc:
+		model.inputMode = ""
+		model.inputValue = ""
+		model.message = "Idea capture cancelled."
+	case tea.KeyEnter:
+		if strings.TrimSpace(model.inputValue) == "" {
+			model.message = "Idea title is required."
+			return model, nil
+		}
+		idea := PlanningIdea{
+			ID:        model.nextIdeaID(),
+			Title:     strings.TrimSpace(model.inputValue),
+			CreatedAt: model.now().UTC().Format(time.RFC3339),
+			Status:    "captured",
+		}
+		model.ideas = append(model.ideas, idea)
+		model.selected = len(model.ideas) - 1
+		model.inputMode = ""
+		model.inputValue = ""
+		if err := model.store.Save(model.ideas); err != nil {
+			model.storeError = err
+			model.message = "Could not save idea: " + err.Error()
+		} else {
+			model.message = "Idea captured."
+		}
+	case tea.KeyBackspace, tea.KeyCtrlH:
+		if len(model.inputValue) > 0 {
+			runes := []rune(model.inputValue)
+			model.inputValue = string(runes[:len(runes)-1])
+		}
+	case tea.KeyRunes:
+		model.inputValue += string(msg.Runes)
+	}
+	return model, nil
+}
+
+func (model PlanningModel) nextIdeaID() string {
+	base := "idea-" + model.now().UTC().Format("20060102-150405")
+	seen := map[string]struct{}{}
+	for _, idea := range model.ideas {
+		seen[idea.ID] = struct{}{}
+	}
+	if _, ok := seen[base]; !ok {
+		return base
+	}
+	for index := 2; ; index++ {
+		id := fmt.Sprintf("%s-%d", base, index)
+		if _, ok := seen[id]; !ok {
+			return id
+		}
+	}
+}
+
+func (model PlanningModel) deleteSelectedIdea() PlanningModel {
+	if len(model.ideas) == 0 {
+		model.message = "No idea selected."
+		return model
+	}
+	deleted := model.ideas[model.selected]
+	model.ideas = append(model.ideas[:model.selected], model.ideas[model.selected+1:]...)
+	if model.selected >= len(model.ideas) && model.selected > 0 {
+		model.selected--
+	}
+	if err := model.store.Save(model.ideas); err != nil {
+		model.storeError = err
+		model.message = "Could not delete idea: " + err.Error()
+		return model
+	}
+	model.message = "Deleted idea: " + deleted.Title
+	return model
 }
 
 func (model PlanningModel) View() string {
@@ -132,11 +268,22 @@ func (model PlanningModel) View() string {
 
 	output.WriteString("\n")
 	renderSection(&output, "Workspace")
-	if !planningPlanExists(model.repoRoot) {
-		output.WriteString(model.wrapped("  ", "No plan exists yet. Start with the product goal, write the smallest useful plan, then turn it into one reviewable task."))
-		output.WriteString(model.wrapped("  ", "A good Brevity plan should make a developer more likely to open Brevity instead of Codex directly."))
+	if model.storeError != nil {
+		output.WriteString(model.wrapped("  ", "Planning store unavailable: "+model.storeError.Error()))
+	}
+	if len(model.ideas) == 0 {
+		output.WriteString(model.wrapped("  ", "No ideas captured yet. Press n to capture the smallest useful operator intent before it becomes task machinery."))
 	} else {
-		output.WriteString(model.line("  plan draft detected; refine it until the next task is obvious"))
+		renderSection(&output, "Ideas")
+		for index, idea := range model.ideas {
+			prefix := fmt.Sprintf("  %d. ", index+1)
+			if index == model.selected {
+				prefix = "  > "
+			}
+			output.WriteString(model.line(prefix + idea.Title + " [" + idea.Status + "]"))
+		}
+		output.WriteString("\n")
+		model.renderSelectedIdea(&output)
 	}
 
 	output.WriteString("\n")
@@ -152,9 +299,32 @@ func (model PlanningModel) View() string {
 
 	output.WriteString("\n")
 	renderSection(&output, "Mutation Boundary")
-	output.WriteString(model.wrapped("  ", "This workspace reads docs/product-goal.md and renders guidance only. It does not mutate task, queue, execution, provider, or run state."))
+	output.WriteString(model.wrapped("  ", "This workspace may update .brevity/ideas.json only. It does not mutate task, queue, execution, provider, or run state."))
 	output.WriteString(model.footer())
 	return output.String()
+}
+
+func (model PlanningModel) renderSelectedIdea(output *strings.Builder) {
+	if len(model.ideas) == 0 {
+		return
+	}
+	idea := model.ideas[model.selected]
+	renderSection(output, "Selected Idea")
+	output.WriteString(model.line("  Title:   " + idea.Title))
+	output.WriteString(model.line("  Status:  " + idea.Status))
+	output.WriteString(model.line("  Created: " + idea.CreatedAt))
+	if strings.TrimSpace(idea.Description) != "" {
+		output.WriteString(model.wrapped("  Description: ", idea.Description))
+	}
+	output.WriteString("\n")
+	renderSection(output, "Next Steps")
+	for _, step := range []string{
+		"[convert to milestone] placeholder",
+		"[convert to task draft] placeholder",
+		"[edit] placeholder",
+	} {
+		output.WriteString(model.line("  " + step))
+	}
 }
 
 func (model PlanningModel) contentWidth() int {
@@ -182,7 +352,14 @@ func (model PlanningModel) wrapped(prefix string, value string) string {
 }
 
 func (model PlanningModel) footer() string {
-	return "\n" + dashboardStyles.footer.Render(model.line("  q quit"))
+	if model.inputMode != "" {
+		return "\n" + dashboardStyles.footer.Render(model.line("  title: "+model.inputValue+"  enter save  esc cancel"))
+	}
+	help := "  n new idea  enter inspect  d delete  t task draft  q quit"
+	if model.message != "" {
+		help = "  " + model.message + "  |  " + strings.TrimSpace(help)
+	}
+	return "\n" + dashboardStyles.footer.Render(model.line(help))
 }
 
 func planningGoalLines(markdown string, limit int) []string {
@@ -214,4 +391,41 @@ func planningPlanExists(repoRoot string) bool {
 		}
 	}
 	return false
+}
+
+func newPlanningIdeaStore(repoRoot string) planningIdeaStore {
+	if strings.TrimSpace(repoRoot) == "" {
+		repoRoot = "."
+	}
+	return planningIdeaStore{path: filepath.Join(repoRoot, planningIdeasPath)}
+}
+
+func (store planningIdeaStore) Load() ([]PlanningIdea, error) {
+	data, err := os.ReadFile(store.path)
+	if os.IsNotExist(err) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	var ideas []PlanningIdea
+	if err := json.Unmarshal(data, &ideas); err != nil {
+		return nil, err
+	}
+	sort.SliceStable(ideas, func(i, j int) bool {
+		return ideas[i].CreatedAt < ideas[j].CreatedAt
+	})
+	return ideas, nil
+}
+
+func (store planningIdeaStore) Save(ideas []PlanningIdea) error {
+	if err := os.MkdirAll(filepath.Dir(store.path), 0o755); err != nil {
+		return err
+	}
+	data, err := json.MarshalIndent(ideas, "", "  ")
+	if err != nil {
+		return err
+	}
+	data = append(data, '\n')
+	return os.WriteFile(store.path, data, 0o644)
 }
