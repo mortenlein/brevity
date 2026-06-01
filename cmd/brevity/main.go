@@ -46,6 +46,7 @@ type commandKind string
 const (
 	commandDashboard             commandKind = commandKind(commands.DashboardID)
 	commandReview                commandKind = "review"
+	commandPlan                  commandKind = "plan"
 	commandRuntimeState          commandKind = commandKind(commands.RuntimeStateID)
 	commandRuntimeStart          commandKind = commandKind(commands.RuntimeStartID)
 	commandRuntimeStop           commandKind = commandKind(commands.RuntimeStopID)
@@ -227,6 +228,12 @@ func parseOptions(args []string) (cliOptions, error) {
 			return cliOptions{}, fmt.Errorf("usage: brevity review")
 		}
 		return cliOptions{kind: commandReview, bubble: true, review: true, refresh: 5 * time.Second, jsonSource: "native"}, nil
+	}
+	if len(args) > 0 && args[0] == "plan" {
+		if len(args) != 1 {
+			return cliOptions{}, fmt.Errorf("usage: brevity plan")
+		}
+		return cliOptions{kind: commandPlan, bubble: true, jsonSource: "native"}, nil
 	}
 
 	flags := flag.NewFlagSet("brevity", flag.ContinueOnError)
@@ -1099,6 +1106,8 @@ func runWithOptions(stdout io.Writer, client runtimeclient.Client, options cliOp
 
 func runWithContextOptions(ctx context.Context, stdout io.Writer, client runtimeclient.Client, options cliOptions) error {
 	switch options.kind {
+	case commandPlan:
+		return bubbleteadashboard.RunPlan(ctx, os.Stdin, stdout, "")
 	case commandReview:
 		if options.refresh <= 0 {
 			options.refresh = 5 * time.Second

@@ -164,6 +164,16 @@ func TestHelpExposesOrchestrationConcepts(t *testing.T) {
 	}
 }
 
+func TestParsePlanCommand(t *testing.T) {
+	options, err := parseOptions([]string{"plan"})
+	if err != nil {
+		t.Fatalf("parseOptions returned error: %v", err)
+	}
+	if options.kind != commandPlan || !options.bubble || options.jsonSource != "native" {
+		t.Fatalf("options = %#v, want native Bubble Tea plan command", options)
+	}
+}
+
 func TestCommandGroupHelpDocumentsPipelineAndMutationBoundaries(t *testing.T) {
 	tests := []struct {
 		name  string
