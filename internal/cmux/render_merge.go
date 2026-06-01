@@ -73,11 +73,12 @@ func groupTasksForMerge(tasks []contracts.TaskSummary) map[string][]contracts.Ta
 // group in mergeGroupOrder.  Tasks inside each group is always a non-nil slice
 // (empty when no tasks fall into that group or when limit has been applied).
 type CMUXMergeReport struct {
-	Schema  string           `json:"schema"`
-	Source  string           `json:"source"`
-	Options CMUXMergeOptions `json:"options"`
-	Errors  []string         `json:"errors"`
-	Groups  []CMUXMergeGroup `json:"groups"`
+	Schema  string            `json:"schema"`
+	Source  string            `json:"source"`
+	Options CMUXMergeOptions  `json:"options"`
+	Errors  []string          `json:"errors"`
+	Summary CMUXMergeDecision `json:"summary"`
+	Groups  []CMUXMergeGroup  `json:"groups"`
 }
 
 // CMUXMergeOptions records the render parameters that were active when this
@@ -91,10 +92,28 @@ type CMUXMergeOptions struct {
 // Count is the total number of tasks in this group before any limit is applied.
 // Shown is the number of tasks included in Tasks after the limit is applied.
 type CMUXMergeGroup struct {
-	Group string     `json:"group"`
-	Count int        `json:"count"`
-	Shown int        `json:"shown"`
-	Tasks []CMUXTask `json:"tasks"`
+	Group string          `json:"group"`
+	Count int             `json:"count"`
+	Shown int             `json:"shown"`
+	Tasks []CMUXMergeTask `json:"tasks"`
+}
+
+type CMUXMergeDecision struct {
+	NextAction    string `json:"nextAction"`
+	ReadyCount    int    `json:"readyCount"`
+	ReviewCount   int    `json:"reviewCount"`
+	BlockedCount  int    `json:"blockedCount"`
+	NeedsRunCount int    `json:"needsRunCount"`
+	MergedCount   int    `json:"mergedCount"`
+	OtherCount    int    `json:"otherCount"`
+}
+
+type CMUXMergeTask struct {
+	CMUXTask
+	NextAction string `json:"nextAction"`
+	MergeGate  string `json:"mergeGate"`
+	Attention  string `json:"attention"`
+	Command    string `json:"command"`
 }
 
 // renderMerge dispatches to the appropriate merge-readiness renderer based on
@@ -137,6 +156,14 @@ func renderTextMerge(w io.Writer, snap Snapshot, opts RenderOptions) {
 	}
 
 	groups := groupTasksForMerge(snap.RuntimeState.Tasks)
+	decision := buildMergeDecision(groups)
+
+	fmt.Fprintln(w)
+	fmt.Fprintln(w, "Action Summary")
+	fmt.Fprintf(w, "  next action: %s\n", decision.NextAction)
+	fmt.Fprintf(w, "  ready:       %d ready-for-merge | %d reviewing\n", decision.ReadyCount, decision.ReviewCount)
+	fmt.Fprintf(w, "  blocked:     %d blocked | %d needs-run\n", decision.BlockedCount, decision.NeedsRunCount)
+	fmt.Fprintf(w, "  closed:      %d merged | %d other\n", decision.MergedCount, decision.OtherCount)
 
 	for i, groupName := range mergeGroupOrder {
 		if i > 0 {
@@ -162,7 +189,11 @@ func renderTextMerge(w io.Writer, snap Snapshot, opts RenderOptions) {
 			if j > 0 {
 				fmt.Fprintln(w)
 			}
+			taskDecision := buildMergeTask(t)
 			fmt.Fprintf(w, "  %-32s %s\n", t.Slug, reviewTaskState(t))
+			fmt.Fprintf(w, "    next:    %s\n", taskDecision.NextAction)
+			fmt.Fprintf(w, "    gate:    %s\n", taskDecision.MergeGate)
+			fmt.Fprintf(w, "    command: %s\n", taskDecision.Command)
 			renderTaskWorktree(w, t)
 			renderTaskPrompt(w, t)
 			renderTaskLastRun(w, t)
@@ -200,6 +231,15 @@ func renderMarkdownMerge(w io.Writer, snap Snapshot, opts RenderOptions) {
 	}
 
 	groups := groupTasksForMerge(snap.RuntimeState.Tasks)
+	decision := buildMergeDecision(groups)
+
+	fmt.Fprintln(w)
+	fmt.Fprintln(w, "## Action Summary")
+	fmt.Fprintln(w)
+	fmt.Fprintf(w, "- **Next action:** %s\n", decision.NextAction)
+	fmt.Fprintf(w, "- **Ready:** %d ready-for-merge, %d reviewing\n", decision.ReadyCount, decision.ReviewCount)
+	fmt.Fprintf(w, "- **Blocked:** %d blocked, %d needs-run\n", decision.BlockedCount, decision.NeedsRunCount)
+	fmt.Fprintf(w, "- **Closed/other:** %d merged, %d other\n", decision.MergedCount, decision.OtherCount)
 
 	for _, groupName := range mergeGroupOrder {
 		group := groups[groupName]
@@ -221,9 +261,13 @@ func renderMarkdownMerge(w io.Writer, snap Snapshot, opts RenderOptions) {
 			continue
 		}
 		for _, t := range shown {
+			taskDecision := buildMergeTask(t)
 			fmt.Fprintf(w, "### %s\n", t.Slug)
 			fmt.Fprintln(w)
 			fmt.Fprintf(w, "**State:** %s\n", reviewTaskState(t))
+			fmt.Fprintf(w, "**Next action:** %s\n", taskDecision.NextAction)
+			fmt.Fprintf(w, "**Merge gate:** %s\n", taskDecision.MergeGate)
+			fmt.Fprintf(w, "**Command:** `%s`\n", taskDecision.Command)
 			fmt.Fprintln(w)
 			renderMarkdownTaskDetail(w, t)
 			fmt.Fprintln(w)
@@ -247,6 +291,9 @@ func renderJSONMerge(w io.Writer, snap Snapshot, opts RenderOptions) {
 			Output: outputStr,
 		},
 		Errors: make([]string, 0),
+		Summary: CMUXMergeDecision{
+			NextAction: "runtime state unavailable",
+		},
 		Groups: make([]CMUXMergeGroup, 0),
 	}
 
@@ -259,15 +306,16 @@ func renderJSONMerge(w io.Writer, snap Snapshot, opts RenderOptions) {
 
 	if snap.HasRuntimeState {
 		groups := groupTasksForMerge(snap.RuntimeState.Tasks)
+		report.Summary = buildMergeDecision(groups)
 		for _, groupName := range mergeGroupOrder {
 			group := groups[groupName]
 			shown := group
 			if limit > 0 && len(shown) > limit {
 				shown = shown[:limit]
 			}
-			tasks := make([]CMUXTask, 0, len(shown))
+			tasks := make([]CMUXMergeTask, 0, len(shown))
 			for _, t := range shown {
-				tasks = append(tasks, buildJSONTask(t))
+				tasks = append(tasks, buildMergeTask(t))
 			}
 			report.Groups = append(report.Groups, CMUXMergeGroup{
 				Group: groupName,
@@ -284,4 +332,62 @@ func renderJSONMerge(w io.Writer, snap Snapshot, opts RenderOptions) {
 		return
 	}
 	_, _ = w.Write(append(out, '\n'))
+}
+
+func buildMergeDecision(groups map[string][]contracts.TaskSummary) CMUXMergeDecision {
+	decision := CMUXMergeDecision{
+		ReadyCount:    len(groups["ready-for-merge"]),
+		ReviewCount:   len(groups["reviewing"]),
+		NeedsRunCount: len(groups["needs-run"]),
+		BlockedCount:  len(groups["blocked"]),
+		MergedCount:   len(groups["merged"]),
+		OtherCount:    len(groups["other"]),
+	}
+	switch {
+	case decision.ReadyCount > 0:
+		decision.NextAction = "run merge prep for ready-for-merge tasks"
+	case decision.ReviewCount > 0:
+		decision.NextAction = "review pending worktrees before merge prep"
+	case decision.BlockedCount > 0:
+		decision.NextAction = "resolve blocked tasks before merge"
+	case decision.NeedsRunCount > 0:
+		decision.NextAction = "run eligible tasks before review"
+	case decision.OtherCount > 0:
+		decision.NextAction = "inspect uncategorized task states"
+	default:
+		decision.NextAction = "no merge candidates"
+	}
+	return decision
+}
+
+func buildMergeTask(t contracts.TaskSummary) CMUXMergeTask {
+	decision := buildReviewDecision(t)
+	return CMUXMergeTask{
+		CMUXTask:   buildJSONTask(t),
+		NextAction: decision.NextAction,
+		MergeGate:  decision.MergeGate,
+		Attention:  decision.Attention,
+		Command:    mergeTaskCommand(t),
+	}
+}
+
+func mergeTaskCommand(t contracts.TaskSummary) string {
+	slug := strings.TrimSpace(t.Slug)
+	if slug == "" {
+		slug = "<task>"
+	}
+	switch mergeGroupForTask(t) {
+	case "ready-for-merge":
+		return "brevity task merge " + slug + " --plan"
+	case "reviewing":
+		return "brevity cmux --review " + slug
+	case "needs-run":
+		return "brevity task runtime-info " + slug
+	case "blocked":
+		return "brevity cmux --blocked-report"
+	case "merged":
+		return "brevity task cleanup " + slug + " --plan"
+	default:
+		return "brevity cmux --task " + slug
+	}
 }

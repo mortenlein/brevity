@@ -1,6 +1,7 @@
 package bubbleteadashboard
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"path/filepath"
@@ -58,6 +59,7 @@ type DashboardCommandBridge interface {
 	ExecuteTaskStart(slug string, repoRoot string) pscontract.ExecutionResult
 	ExecuteContextRefresh(slug string, repoRoot string) pscontract.ExecutionResult
 	LoadTaskRunPlan(slug string, profile string, repoRoot string) pscontract.ExecutionResult
+	LoadTaskMergePlan(slug string, repoRoot string) pscontract.ExecutionResult
 	ExecuteTaskRun(slug string, profile string, repoRoot string) pscontract.ExecutionResult
 }
 
@@ -162,6 +164,39 @@ func (bridge RuntimeClientCommandBridge) LoadTaskRunPlan(slug string, profile st
 		result.ExitCode = 1
 		result.Error = err.Error()
 	}
+	return result
+}
+
+func (bridge RuntimeClientCommandBridge) LoadTaskMergePlan(slug string, repoRoot string) pscontract.ExecutionResult {
+	started := time.Now()
+	result := pscontract.ExecutionResult{
+		ActionID:            pscontract.ActionMergeTask,
+		CommandDisplayLabel: "Merge prep",
+		StartedAt:           started,
+		CompletedAt:         time.Now(),
+		ExitCode:            0,
+	}
+	store, err := state.NewStore(repoRoot)
+	if err != nil {
+		result.ExitCode = 1
+		result.Error = err.Error()
+		return result
+	}
+	commandResult, runErr := actions.TaskMergeService{Store: store}.Plan(slug)
+	var output bytes.Buffer
+	if renderErr := actions.RenderTaskMergePlanResult(&output, commandResult); renderErr != nil {
+		result.ExitCode = 1
+		result.Error = renderErr.Error()
+	} else {
+		result.Stdout = output.String()
+	}
+	if runErr != nil || !commandResult.Success {
+		result.ExitCode = 1
+		if runErr != nil {
+			result.Error = runErr.Error()
+		}
+	}
+	result.CompletedAt = time.Now()
 	return result
 }
 

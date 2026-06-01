@@ -107,6 +107,7 @@ type Model struct {
 	refreshInterval time.Duration
 	source          string
 	reviewMode      bool
+	reviewSelected  int
 }
 
 func NewModel(client runtimeclient.Client, refreshInterval time.Duration) Model {
@@ -266,6 +267,38 @@ func (model Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 func (model Model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if model.reviewMode {
+		if model.commandRun != nil {
+			switch msg.String() {
+			case "esc":
+				if model.commandRun.status.isActive() {
+					return model, nil
+				}
+				model.commandRun = nil
+				return model, nil
+			case "q":
+				if model.commandRun.status.isActive() {
+					return model, nil
+				}
+				model.commandRun = nil
+				return model, nil
+			case "j", "down":
+				model.commandRun.scroll++
+				return model, nil
+			case "k", "up":
+				if model.commandRun.scroll > 0 {
+					model.commandRun.scroll--
+				}
+				return model, nil
+			case "home":
+				model.commandRun.scroll = 0
+				return model, nil
+			case "end":
+				model.commandRun.scroll = maxInt
+				return model, nil
+			default:
+				return model, nil
+			}
+		}
 		switch msg.String() {
 		case "q", "ctrl+c":
 			return model, tea.Quit
@@ -277,6 +310,19 @@ func (model Model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		case "l":
 			model.pollingEnabled = !model.pollingEnabled
 			return model, nil
+		case "n", "tab":
+			model.moveReviewSelection(1)
+			return model, nil
+		case "p", "shift+tab":
+			model.moveReviewSelection(-1)
+			return model, nil
+		case "s", "d", "o", "e", "a", "x", "m":
+			action, cmd, ok := model.reviewCommandForKey(msg.String())
+			if !ok {
+				return model, nil
+			}
+			model.startCommandRun(action)
+			return model, cmd(model.commandRun.id)
 		default:
 			return model, nil
 		}
@@ -989,14 +1035,14 @@ func schedulerBlockedReason(state contracts.RuntimeState) string {
 func suggestedOperatorAction(state contracts.RuntimeState) (string, string) {
 	if state.Executions != nil && state.Executions.CountsByStatus["failed"] > 0 {
 		task := fallback(state.Executions.NewestExecutionTask, "latest failed task")
-		return "brevity task status " + task, "failed execution needs inspection"
+		return "brevity task runtime-info " + task, "failed execution needs inspection"
 	}
 	if state.Executions != nil && state.Executions.CountsByStatus["ready"] > 0 {
 		task := fallback(firstNonEmpty(state.Executions.NewestExecutionTask, state.Executions.NewestPlannedTask), "ready task")
 		return "brevity task run " + task, "execution is ready to launch"
 	}
 	if state.Queue != nil && state.Queue.Plan != nil && state.Queue.Plan.Runnable > 0 {
-		return "brevity task status " + fallback(state.Queue.Plan.NextRunnableTask, "next task"), "queue has runnable work"
+		return "brevity task runtime-info " + fallback(state.Queue.Plan.NextRunnableTask, "next task"), "queue has runnable work"
 	}
 	if state.Queue != nil && state.Queue.TotalItems > 0 {
 		return "brevity status", "queued work is blocked or reserved"
@@ -1885,6 +1931,9 @@ func (model Model) renderCommandResult(usedRows ...int) string {
 		"  action        " + run.action.Label,
 		"  status        " + string(run.status),
 	}
+	if model.reviewMode {
+		return model.renderReviewCommandResult(run, lines, usedRows...)
+	}
 	if run.status == commandRunning {
 		if run.action.ID == ActionRunWorker {
 			lines = append(lines,
@@ -2227,6 +2276,10 @@ func (model Model) renderFooter() string {
 	source := fallback(model.source, "unknown")
 	controls := "up/down or j/k move | r refresh | p actions | d details | q quit | ? help"
 	compactControls := "j/k r p d q quit ? help"
+	if model.reviewMode {
+		controls = "n/p queue | s status | d diff | o explorer | e editor | a approve | x reject | m merge prep | r refresh | q quit"
+		compactControls = "n/p s d o e a x m r q"
+	}
 	if model.commandRun != nil {
 		if model.commandRun.status.isActive() {
 			controls = "command running | q/esc wait | read-only"

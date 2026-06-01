@@ -70,6 +70,9 @@ type fakeCommandBridge struct {
 	planSlug     string
 	planProfile  string
 	planRepo     string
+	mergeCalls   int
+	mergeSlug    string
+	mergeRepo    string
 	runCalls     int
 	runSlug      string
 	runProfile   string
@@ -141,6 +144,19 @@ func (bridge *fakeCommandBridge) LoadTaskRunPlan(slug string, profile string, re
 	}
 	if bridge.result.ActionID == "" {
 		bridge.result.ActionID = pscontract.ActionRunWorker
+	}
+	return bridge.result
+}
+
+func (bridge *fakeCommandBridge) LoadTaskMergePlan(slug string, repoRoot string) pscontract.ExecutionResult {
+	bridge.mergeCalls++
+	bridge.mergeSlug = slug
+	bridge.mergeRepo = repoRoot
+	if bridge.result.CommandDisplayLabel == "" {
+		bridge.result.CommandDisplayLabel = "Merge prep"
+	}
+	if bridge.result.ActionID == "" {
+		bridge.result.ActionID = pscontract.ActionMergeTask
 	}
 	return bridge.result
 }
@@ -3416,7 +3432,7 @@ func TestOperatorCockpitQueuedReadyFailedAndCorruptedSignals(t *testing.T) {
 		"ready:1",
 		"failed:1",
 		"newest task-beta / failed",
-		"command brevity task status task-beta",
+		"command brevity task runtime-info task-beta",
 		"failed execution needs inspection",
 	} {
 		if !strings.Contains(output, want) {
@@ -3493,7 +3509,7 @@ func TestOperatorCockpitTerminalPolishAcrossCommonWidths(t *testing.T) {
 		want  []string
 	}{
 		{name: "narrow split pane", width: 42, want: []string{"[Runtime]", "[Queue]", "[Executions]", "[Next Action]", "failed"}},
-		{name: "medium vscode terminal", width: 82, want: []string{"supervisor", "queued 2", "reservation yes", "failed 1 !", "command brevity task status"}},
+		{name: "medium vscode terminal", width: 82, want: []string{"supervisor", "queued 2", "reservation yes", "failed 1 !", "command brevity task runtime-info"}},
 		{name: "wide desktop terminal", width: 180, want: []string{"provider health", "next runnable task-alpha", "lifecycle failed:1 ready:1 launching:0 planned:1 completed:1", "reason failed execution needs inspection"}},
 	}
 

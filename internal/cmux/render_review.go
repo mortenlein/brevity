@@ -34,10 +34,19 @@ type CMUXReviewReport struct {
 	Task             *CMUXTask           `json:"task,omitempty"`
 	Providers        *CMUXProviders      `json:"providers,omitempty"`
 	Queue            *CMUXQueueScheduler `json:"queue,omitempty"`
+	NextAction       string              `json:"nextAction,omitempty"`
+	MergeGate        string              `json:"mergeGate,omitempty"`
+	Attention        string              `json:"attention,omitempty"`
 	ReviewChecklist  []CMUXChecklistItem `json:"reviewChecklist"`
 	SuggestedActions []string            `json:"suggestedActions"`
 	MergeReadiness   string              `json:"mergeReadiness,omitempty"`
 	CleanupReadiness string              `json:"cleanupReadiness,omitempty"`
+}
+
+type CMUXReviewDecision struct {
+	NextAction string
+	MergeGate  string
+	Attention  string
 }
 
 // renderReview dispatches to the appropriate review renderer based on output
@@ -111,17 +120,17 @@ func buildReviewSuggestedActions(t contracts.TaskSummary) []string {
 	switch state {
 	case "ready-for-merge":
 		return []string{
-			"Run brevity task merge --plan " + t.Slug + " to preview merge.",
+			"Run brevity task merge " + t.Slug + " --plan to preview merge.",
 		}
 	case "reviewing":
 		return []string{
 			"Review worktree changes before merging.",
-			"Run brevity task merge --plan " + t.Slug + " to preview merge.",
+			"Run brevity task merge " + t.Slug + " --plan to preview merge.",
 		}
 	case "merged":
 		return []string{
 			"Task is already merged.",
-			"Run brevity task cleanup --plan " + t.Slug + " to preview cleanup.",
+			"Run brevity task cleanup " + t.Slug + " --plan to preview cleanup.",
 		}
 	case "blocked":
 		return []string{
@@ -132,6 +141,75 @@ func buildReviewSuggestedActions(t contracts.TaskSummary) []string {
 			"Run brevity cmux --task " + t.Slug + " to see full task detail.",
 		}
 	}
+}
+
+func buildReviewDecision(t contracts.TaskSummary) CMUXReviewDecision {
+	state := reviewTaskState(t)
+	_, presence := resolveTaskWorktree(t)
+	runStatus := strings.TrimSpace(t.LatestRunWorkerStatus)
+	if runStatus == "" {
+		runStatus = strings.TrimSpace(t.WorkerStatus)
+	}
+	if t.ProviderGated || state == "provider-gated" || strings.Contains(strings.ToLower(t.ProviderHealth), "gated") {
+		return CMUXReviewDecision{
+			NextAction: "Resolve provider gate before review.",
+			MergeGate:  "blocked by provider gate",
+			Attention:  "Provider health or profile prevents confident approval.",
+		}
+	}
+	if state == "blocked" || runStatus == "failed" {
+		return CMUXReviewDecision{
+			NextAction: "Inspect failure context before rerun or approval.",
+			MergeGate:  "blocked by failed or blocked task state",
+			Attention:  reviewFailureAttention(t),
+		}
+	}
+	if presence != "present" {
+		return CMUXReviewDecision{
+			NextAction: "Restore or locate the worktree before review.",
+			MergeGate:  "blocked until worktree is present",
+			Attention:  "No durable worktree path is available for diff inspection.",
+		}
+	}
+	switch state {
+	case "ready-for-merge":
+		return CMUXReviewDecision{
+			NextAction: "Run merge prep, then approve or reject.",
+			MergeGate:  "ready for merge prep after human review",
+			Attention:  "Verify diff, test coverage, and merge plan before integrating.",
+		}
+	case "reviewing", "ready-for-review", "needs-inspection":
+		return CMUXReviewDecision{
+			NextAction: "Review worktree diff, then approve or reject.",
+			MergeGate:  "needs human approval before merge prep",
+			Attention:  "Use git status and diff before accepting generated work.",
+		}
+	case "merged":
+		return CMUXReviewDecision{
+			NextAction: "Prepare cleanup if the merge is already integrated.",
+			MergeGate:  "already merged",
+			Attention:  "Confirm branch integration before removing worktree artifacts.",
+		}
+	default:
+		return CMUXReviewDecision{
+			NextAction: "Inspect task state before review.",
+			MergeGate:  "not ready for approval",
+			Attention:  "Current state does not prove review readiness.",
+		}
+	}
+}
+
+func reviewFailureAttention(t contracts.TaskSummary) string {
+	if failureType := strings.TrimSpace(t.LatestRunFailureType); failureType != "" {
+		return "Latest run failed with " + failureType + "."
+	}
+	if logPath := strings.TrimSpace(t.LatestRunLogPath); logPath != "" {
+		return "Inspect latest run log at " + logPath + "."
+	}
+	if logPath := strings.TrimSpace(t.LastLogPath); logPath != "" {
+		return "Inspect latest run log at " + logPath + "."
+	}
+	return "Failure details are limited in the current runtime contract."
 }
 
 // mergeReadinessNote returns a human-readable merge readiness label for a
@@ -187,6 +265,13 @@ func renderTextReview(w io.Writer, snap Snapshot, opts RenderOptions) {
 
 	state := reviewTaskState(task)
 	_, presence := resolveTaskWorktree(task)
+	decision := buildReviewDecision(task)
+
+	fmt.Fprintln(w)
+	fmt.Fprintln(w, "Decision")
+	fmt.Fprintf(w, "  next action: %s\n", decision.NextAction)
+	fmt.Fprintf(w, "  merge gate:  %s\n", decision.MergeGate)
+	fmt.Fprintf(w, "  attention:   %s\n", decision.Attention)
 
 	// Task detail.
 	fmt.Fprintln(w)
@@ -252,8 +337,15 @@ func renderMarkdownReview(w io.Writer, snap Snapshot, opts RenderOptions) {
 
 	state := reviewTaskState(task)
 	_, presence := resolveTaskWorktree(task)
+	decision := buildReviewDecision(task)
 
 	// Task section.
+	fmt.Fprintln(w)
+	fmt.Fprintln(w, "## Decision")
+	fmt.Fprintln(w)
+	fmt.Fprintf(w, "- **Next action:** %s\n", decision.NextAction)
+	fmt.Fprintf(w, "- **Merge gate:** %s\n", decision.MergeGate)
+	fmt.Fprintf(w, "- **Attention:** %s\n", decision.Attention)
 	fmt.Fprintln(w)
 	fmt.Fprintf(w, "## Task: %s\n", task.Slug)
 	fmt.Fprintln(w)
@@ -329,6 +421,10 @@ func renderJSONReview(w io.Writer, snap Snapshot, opts RenderOptions) {
 			report.SuggestedActions = buildReviewSuggestedActions(task)
 			state := reviewTaskState(task)
 			_, presence := resolveTaskWorktree(task)
+			decision := buildReviewDecision(task)
+			report.NextAction = decision.NextAction
+			report.MergeGate = decision.MergeGate
+			report.Attention = decision.Attention
 			report.MergeReadiness = mergeReadinessNote(state)
 			report.CleanupReadiness = cleanupReadinessNote(state, presence)
 		} else {

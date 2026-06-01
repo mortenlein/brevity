@@ -65,6 +65,9 @@ type CMUXHandoffCandidate struct {
 	LastRunProvider  string              `json:"lastRunProvider,omitempty"`
 	LastRunProfile   string              `json:"lastRunProfile,omitempty"`
 	LastRunExitCode  string              `json:"lastRunExitCode,omitempty"`
+	NextAction       string              `json:"nextAction"`
+	MergeGate        string              `json:"mergeGate"`
+	Attention        string              `json:"attention"`
 	ReviewChecklist  []CMUXChecklistItem `json:"reviewChecklist"`
 	MergeReadiness   string              `json:"mergeReadiness"`
 	CleanupReadiness string              `json:"cleanupReadiness"`
@@ -139,6 +142,7 @@ func buildHandoffCandidate(t contracts.TaskSummary) CMUXHandoffCandidate {
 	jt := buildJSONTask(t)
 	state := reviewTaskState(t)
 	_, presence := resolveTaskWorktree(t)
+	decision := buildReviewDecision(t)
 	return CMUXHandoffCandidate{
 		Slug:             jt.Slug,
 		State:            jt.State,
@@ -149,6 +153,9 @@ func buildHandoffCandidate(t contracts.TaskSummary) CMUXHandoffCandidate {
 		LastRunProvider:  jt.LastRunProvider,
 		LastRunProfile:   jt.LastRunProfile,
 		LastRunExitCode:  jt.LastRunExitCode,
+		NextAction:       decision.NextAction,
+		MergeGate:        decision.MergeGate,
+		Attention:        decision.Attention,
 		ReviewChecklist:  buildReviewChecklist(t),
 		MergeReadiness:   mergeReadinessNote(state),
 		CleanupReadiness: cleanupReadinessNote(state, presence),
@@ -242,8 +249,12 @@ func renderTextHandoff(w io.Writer, snap Snapshot, opts RenderOptions) {
 		for _, t := range candidates {
 			state := reviewTaskState(t)
 			_, presence := resolveTaskWorktree(t)
+			decision := buildReviewDecision(t)
 			fmt.Fprintln(w)
 			fmt.Fprintf(w, "  %s  [%s]\n", t.Slug, state)
+			fmt.Fprintf(w, "  next:    %s\n", decision.NextAction)
+			fmt.Fprintf(w, "  gate:    %s\n", decision.MergeGate)
+			fmt.Fprintf(w, "  watch:   %s\n", decision.Attention)
 			renderTaskWorktree(w, t)
 			renderTaskPrompt(w, t)
 			renderTaskLastRun(w, t)
@@ -368,8 +379,13 @@ func renderMarkdownHandoff(w io.Writer, snap Snapshot, opts RenderOptions) {
 		for _, t := range candidates {
 			state := reviewTaskState(t)
 			_, presence := resolveTaskWorktree(t)
+			decision := buildReviewDecision(t)
 			fmt.Fprintln(w)
 			fmt.Fprintf(w, "### %s [%s]\n", t.Slug, state)
+			fmt.Fprintln(w)
+			fmt.Fprintf(w, "**Next action:** %s\n", decision.NextAction)
+			fmt.Fprintf(w, "**Merge gate:** %s\n", decision.MergeGate)
+			fmt.Fprintf(w, "**Attention:** %s\n", decision.Attention)
 			fmt.Fprintln(w)
 			renderMarkdownTaskDetail(w, t)
 			fmt.Fprintln(w)

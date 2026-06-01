@@ -2152,6 +2152,33 @@ func TestReview_Text_ReadinessNotesPresent(t *testing.T) {
 	}
 }
 
+func TestReview_Text_DecisionFirst(t *testing.T) {
+	snap := cmux.Read(stubFetcher{
+		stateJSON:     richTaskStateJSON(),
+		schedulerJSON: minimalSchedulerJSON(),
+	})
+	out := renderSnapshotOpts(snap, reviewOpts("rich-task"))
+	decisionIndex := strings.Index(out, "Decision")
+	taskIndex := strings.Index(out, "Task: rich-task")
+	if decisionIndex < 0 {
+		t.Fatalf("review text missing Decision section; output:\n%s", out)
+	}
+	if taskIndex < 0 || decisionIndex > taskIndex {
+		t.Fatalf("review text must show Decision before task detail; output:\n%s", out)
+	}
+	for _, want := range []string{
+		"next action:",
+		"merge gate:",
+		"attention:",
+		"Inspect task state before review.",
+		"not ready for approval",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("review decision missing %q; output:\n%s", want, out)
+		}
+	}
+}
+
 func TestReview_Text_SuggestedActionsPresent(t *testing.T) {
 	snap := cmux.Read(stubFetcher{
 		stateJSON:     richTaskStateJSON(),
@@ -2163,6 +2190,20 @@ func TestReview_Text_SuggestedActionsPresent(t *testing.T) {
 	}
 }
 
+func TestReview_Text_MergedTaskCleanupCommandUsesCLIOrder(t *testing.T) {
+	snap := cmux.Read(stubFetcher{
+		stateJSON:     multiStateJSON(),
+		schedulerJSON: minimalSchedulerJSON(),
+	})
+	out := renderSnapshotOpts(snap, reviewOpts("task-merged"))
+	if !strings.Contains(out, "Run brevity task cleanup task-merged --plan to preview cleanup.") {
+		t.Fatalf("review cleanup guidance must use task cleanup <slug> --plan; output:\n%s", out)
+	}
+	if strings.Contains(out, "brevity task cleanup --plan task-merged") {
+		t.Fatalf("review cleanup guidance used invalid flag order; output:\n%s", out)
+	}
+}
+
 func TestReview_Markdown_HeadingsPresent(t *testing.T) {
 	snap := cmux.Read(stubFetcher{
 		stateJSON:     richTaskStateJSON(),
@@ -2171,6 +2212,7 @@ func TestReview_Markdown_HeadingsPresent(t *testing.T) {
 	out := renderSnapshotOpts(snap, reviewMarkdownOpts("rich-task"))
 	for _, want := range []string{
 		"# CMUX Review Packet:",
+		"## Decision",
 		"## Task:",
 		"## Queue / Scheduler",
 		"## Review Checklist",
@@ -2239,6 +2281,26 @@ func TestReview_JSON_Structure(t *testing.T) {
 		if _, ok := result[key]; !ok {
 			t.Errorf("review JSON missing key %q; output:\n%s", key, out)
 		}
+	}
+}
+
+func TestReview_JSON_DecisionFields(t *testing.T) {
+	snap := cmux.Read(stubFetcher{
+		stateJSON:     richTaskStateJSON(),
+		schedulerJSON: minimalSchedulerJSON(),
+	})
+	out := renderSnapshotOpts(snap, reviewJSONOpts("rich-task"))
+	var result map[string]any
+	if err := json.Unmarshal([]byte(out), &result); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+	for _, key := range []string{"nextAction", "mergeGate", "attention"} {
+		if value, ok := result[key].(string); !ok || strings.TrimSpace(value) == "" {
+			t.Errorf("review JSON decision field %q missing or empty; output:\n%s", key, out)
+		}
+	}
+	if result["mergeGate"] != "not ready for approval" {
+		t.Errorf("mergeGate = %v, want not ready for approval", result["mergeGate"])
 	}
 }
 
@@ -2551,6 +2613,21 @@ func TestHandoff_ReviewCandidates_ChecklistPresent(t *testing.T) {
 	}
 }
 
+func TestHandoff_ReviewCandidates_DecisionSupportPresent(t *testing.T) {
+	snap := cmux.Read(stubFetcher{stateJSON: multiStateJSON(), schedulerJSON: minimalSchedulerJSON()})
+	out := renderSnapshotOpts(snap, handoffOpts())
+	candidateSection := extractSection(out, "Review Candidates", sectionSep)
+	for _, want := range []string{
+		"next:    Restore or locate the worktree before review.",
+		"gate:    blocked until worktree is present",
+		"watch:   No durable worktree path is available for diff inspection.",
+	} {
+		if !strings.Contains(candidateSection, want) {
+			t.Errorf("handoff Review Candidates missing decision support %q; section:\n%s", want, candidateSection)
+		}
+	}
+}
+
 func TestHandoff_Limit_Applied(t *testing.T) {
 	// 15 tasks, limit=3: important tasks shows first 3 and a truncation header.
 	snap := cmux.Read(stubFetcher{stateJSON: manyTaskStateJSON(15), schedulerJSON: minimalSchedulerJSON()})
@@ -2700,6 +2777,48 @@ func TestHandoff_Markdown_ReviewCandidatesHaveChecklist(t *testing.T) {
 	}
 }
 
+func TestHandoff_Markdown_ReviewCandidatesHaveDecisionSupport(t *testing.T) {
+	snap := cmux.Read(stubFetcher{stateJSON: multiStateJSON(), schedulerJSON: minimalSchedulerJSON()})
+	out := renderSnapshotOpts(snap, handoffMarkdownOpts())
+	for _, want := range []string{
+		"**Next action:** Restore or locate the worktree before review.",
+		"**Merge gate:** blocked until worktree is present",
+		"**Attention:** No durable worktree path is available for diff inspection.",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("handoff markdown Review Candidates missing decision support %q; output:\n%s", want, out)
+		}
+	}
+}
+
+func TestHandoff_JSON_ReviewCandidatesHaveDecisionSupport(t *testing.T) {
+	snap := cmux.Read(stubFetcher{stateJSON: multiStateJSON(), schedulerJSON: minimalSchedulerJSON()})
+	out := renderSnapshotOpts(snap, handoffJSONOpts())
+	var result struct {
+		ReviewCandidates []struct {
+			NextAction string `json:"nextAction"`
+			MergeGate  string `json:"mergeGate"`
+			Attention  string `json:"attention"`
+		} `json:"reviewCandidates"`
+	}
+	if err := json.Unmarshal([]byte(out), &result); err != nil {
+		t.Fatalf("invalid JSON: %v\noutput:\n%s", err, out)
+	}
+	if len(result.ReviewCandidates) != 1 {
+		t.Fatalf("expected one review candidate, got %d; output:\n%s", len(result.ReviewCandidates), out)
+	}
+	candidate := result.ReviewCandidates[0]
+	if candidate.NextAction != "Restore or locate the worktree before review." {
+		t.Errorf("nextAction = %q", candidate.NextAction)
+	}
+	if candidate.MergeGate != "blocked until worktree is present" {
+		t.Errorf("mergeGate = %q", candidate.MergeGate)
+	}
+	if candidate.Attention != "No durable worktree path is available for diff inspection." {
+		t.Errorf("attention = %q", candidate.Attention)
+	}
+}
+
 // --- merge-readiness report tests ------------------------------------------
 
 // mergeReportStateJSON returns a runtime-state fixture covering all six merge
@@ -2765,6 +2884,9 @@ func TestMerge_Text_Structure(t *testing.T) {
 		"CMUX MERGE READINESS",
 		"[read-only]",
 		"source: native",
+		"Action Summary",
+		"next action: run merge prep for ready-for-merge tasks",
+		"ready:       1 ready-for-merge | 1 reviewing",
 		"ready-for-merge",
 		"reviewing",
 		"needs-run",
@@ -2774,6 +2896,36 @@ func TestMerge_Text_Structure(t *testing.T) {
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("merge text missing %q; output:\n%s", want, out)
+		}
+	}
+}
+
+func TestMerge_Text_ActionSummaryBeforeGroups(t *testing.T) {
+	snap := cmux.Read(stubFetcher{stateJSON: mergeReportStateJSON(), schedulerJSON: minimalSchedulerJSON()})
+	out := renderSnapshotOpts(snap, mergeOpts())
+	summaryIndex := strings.Index(out, "Action Summary")
+	groupIndex := strings.Index(out, "\nready-for-merge")
+	if summaryIndex < 0 {
+		t.Fatalf("merge text missing Action Summary; output:\n%s", out)
+	}
+	if groupIndex < 0 || summaryIndex > groupIndex {
+		t.Fatalf("merge Action Summary must appear before grouped tasks; output:\n%s", out)
+	}
+}
+
+func TestMerge_Text_TaskDecisionSupportPresent(t *testing.T) {
+	snap := cmux.Read(stubFetcher{stateJSON: mergeReportStateJSON(), schedulerJSON: minimalSchedulerJSON()})
+	out := renderSnapshotOpts(snap, mergeOpts())
+	for _, want := range []string{
+		"next:    Restore or locate the worktree before review.",
+		"gate:    blocked until worktree is present",
+		"command: brevity task merge mrg-rfm --plan",
+		"command: brevity cmux --review mrg-review",
+		"command: brevity task runtime-info mrg-run",
+		"command: brevity task cleanup mrg-merged --plan",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("merge text missing task decision support %q; output:\n%s", want, out)
 		}
 	}
 }
@@ -2822,6 +2974,8 @@ func TestMerge_Markdown_Structure(t *testing.T) {
 	out := renderSnapshotOpts(snap, mergeMarkdownOpts())
 	for _, want := range []string{
 		"# CMUX Merge Readiness [read-only]",
+		"## Action Summary",
+		"**Next action:** run merge prep for ready-for-merge tasks",
 		"## ready-for-merge",
 		"## reviewing",
 		"## needs-run",
@@ -2831,6 +2985,23 @@ func TestMerge_Markdown_Structure(t *testing.T) {
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("merge markdown missing %q; output:\n%s", want, out)
+		}
+	}
+}
+
+func TestMerge_Markdown_TaskDecisionSupportPresent(t *testing.T) {
+	snap := cmux.Read(stubFetcher{stateJSON: mergeReportStateJSON(), schedulerJSON: minimalSchedulerJSON()})
+	out := renderSnapshotOpts(snap, mergeMarkdownOpts())
+	for _, want := range []string{
+		"**Next action:** Restore or locate the worktree before review.",
+		"**Merge gate:** blocked until worktree is present",
+		"**Command:** `brevity task merge mrg-rfm --plan`",
+		"**Command:** `brevity cmux --review mrg-review`",
+		"**Command:** `brevity task runtime-info mrg-run`",
+		"**Command:** `brevity task cleanup mrg-merged --plan`",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("merge markdown missing task decision support %q; output:\n%s", want, out)
 		}
 	}
 }
@@ -2876,6 +3047,78 @@ func TestMerge_JSON_GroupsPresent(t *testing.T) {
 	}
 	if first["group"] != "ready-for-merge" {
 		t.Errorf("merge JSON groups[0].group = %v, want ready-for-merge", first["group"])
+	}
+}
+
+func TestMerge_JSON_SummaryPresent(t *testing.T) {
+	snap := cmux.Read(stubFetcher{stateJSON: mergeReportStateJSON(), schedulerJSON: minimalSchedulerJSON()})
+	out := renderSnapshotOpts(snap, mergeJSONOpts())
+	var result map[string]any
+	if err := json.Unmarshal([]byte(out), &result); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+	summary, ok := result["summary"].(map[string]any)
+	if !ok {
+		t.Fatalf("merge JSON missing summary object; output:\n%s", out)
+	}
+	if summary["nextAction"] != "run merge prep for ready-for-merge tasks" {
+		t.Errorf("summary.nextAction = %v", summary["nextAction"])
+	}
+	if summary["readyCount"] != float64(1) || summary["reviewCount"] != float64(1) || summary["blockedCount"] != float64(1) || summary["needsRunCount"] != float64(1) {
+		t.Errorf("summary counts unexpected: %#v", summary)
+	}
+}
+
+func TestMerge_JSON_TaskDecisionSupportPresent(t *testing.T) {
+	snap := cmux.Read(stubFetcher{stateJSON: mergeReportStateJSON(), schedulerJSON: minimalSchedulerJSON()})
+	out := renderSnapshotOpts(snap, mergeJSONOpts())
+	var result struct {
+		Groups []struct {
+			Group string `json:"group"`
+			Tasks []struct {
+				Slug       string `json:"slug"`
+				NextAction string `json:"nextAction"`
+				MergeGate  string `json:"mergeGate"`
+				Attention  string `json:"attention"`
+				Command    string `json:"command"`
+			} `json:"tasks"`
+		} `json:"groups"`
+	}
+	if err := json.Unmarshal([]byte(out), &result); err != nil {
+		t.Fatalf("invalid JSON: %v\noutput:\n%s", err, out)
+	}
+	if len(result.Groups) == 0 || len(result.Groups[0].Tasks) == 0 {
+		t.Fatalf("merge JSON missing ready-for-merge task; output:\n%s", out)
+	}
+	task := result.Groups[0].Tasks[0]
+	if task.Slug != "mrg-rfm" {
+		t.Fatalf("first ready task slug = %q", task.Slug)
+	}
+	if task.NextAction != "Restore or locate the worktree before review." {
+		t.Errorf("nextAction = %q", task.NextAction)
+	}
+	if task.MergeGate != "blocked until worktree is present" {
+		t.Errorf("mergeGate = %q", task.MergeGate)
+	}
+	if task.Attention != "No durable worktree path is available for diff inspection." {
+		t.Errorf("attention = %q", task.Attention)
+	}
+	if task.Command != "brevity task merge mrg-rfm --plan" {
+		t.Errorf("command = %q", task.Command)
+	}
+	needsRun := result.Groups[2].Tasks[0]
+	if needsRun.Slug != "mrg-run" {
+		t.Fatalf("needs-run task slug = %q", needsRun.Slug)
+	}
+	if needsRun.Command != "brevity task runtime-info mrg-run" {
+		t.Errorf("needs-run command = %q", needsRun.Command)
+	}
+	merged := result.Groups[4].Tasks[0]
+	if merged.Slug != "mrg-merged" {
+		t.Fatalf("merged task slug = %q", merged.Slug)
+	}
+	if merged.Command != "brevity task cleanup mrg-merged --plan" {
+		t.Errorf("merged command = %q", merged.Command)
 	}
 }
 

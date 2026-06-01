@@ -1,17 +1,47 @@
 package bubbleteadashboard
 
 import (
+	"context"
+	"errors"
 	"fmt"
+	"os/exec"
 	"strings"
+	"time"
 
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/mortenlein/brevity/internal/contracts"
+	"github.com/mortenlein/brevity/internal/pscontract"
 )
+
+const reviewGitTimeout = 750 * time.Millisecond
 
 type reviewCandidate struct {
 	task      contracts.TaskSummary
 	reason    string
 	blockers  []string
 	available bool
+}
+
+type reviewGitSummary struct {
+	available       bool
+	statusLine      string
+	diffLine        string
+	branchLine      string
+	changedFiles    []string
+	fileFocus       reviewFileFocus
+	stagedCount     int
+	modifiedCount   int
+	deletedCount    int
+	untrackedCount  int
+	inspectionError string
+}
+
+type reviewFileFocus struct {
+	code    int
+	tests   int
+	docs    int
+	config  int
+	unknown int
 }
 
 func (model Model) reviewView() string {
@@ -30,15 +60,18 @@ func (model Model) reviewView() string {
 		renderSection(&output, "Warnings")
 		output.WriteString(model.renderRuntimeErrorLine())
 	}
+	if model.commandRun != nil {
+		output.WriteString(model.renderCommandResult(renderedRows(output.String())))
+	}
 	return model.renderWithPinnedFooter(output.String())
 }
 
 func (model Model) renderReviewHeader() string {
 	width := model.contentWidth()
 	line := statusLine(width,
-		statusSegment{text: "REVIEW WORKSPACE", priority: 0},
+		statusSegment{text: "BREVITY REVIEW", priority: 0},
 		statusSegment{text: fallback(model.source, "unknown"), priority: 1},
-		statusSegment{text: "read-only", priority: 1},
+		statusSegment{text: "operator cockpit", compact: "cockpit", priority: 1},
 	)
 	return dashboardStyles.title.Render(line) + "\n"
 }
@@ -54,35 +87,68 @@ func (model Model) renderReviewLoadingView() string {
 }
 
 func (model Model) renderReviewBody() string {
-	candidate, ok := selectReviewCandidate(model.state)
+	candidate, ok := model.selectedReviewCandidate()
 	var output strings.Builder
 	if !ok {
-		renderSection(&output, "Review Candidate")
+		renderSection(&output, "Decision")
 		output.WriteString(model.renderLine("  No review candidate yet.") + "\n")
 		output.WriteString(model.renderLine("  Queue or launch work, then return here.") + "\n")
 		output.WriteString("\n")
-		renderSection(&output, "Next Commands")
+		renderSection(&output, "Commands")
 		output.WriteString(model.renderLine("  brevity queue add <task>") + "\n")
 		output.WriteString(model.renderLine("  brevity --bubble --review") + "\n")
 		return output.String()
 	}
 
 	task := candidate.task
-	renderSection(&output, "Review Candidate")
+	git := inspectReviewGit(taskWorktreePath(task))
+	renderSection(&output, "Decision")
+	output.WriteString(model.reviewDetail("next action", reviewNextAction(candidate, git)))
+	output.WriteString(model.reviewWrappedDetail("why", candidate.reason))
+	output.WriteString(model.reviewDetail("confidence", reviewConfidence(candidate, git)))
+	output.WriteString(model.reviewDetail("merge gate", reviewMergeGate(candidate, git)))
+
+	output.WriteString("\n")
+	renderSection(&output, "Review Queue")
+	for _, line := range reviewQueueLines(model.state, model.reviewSelected) {
+		output.WriteString(model.renderLine("  "+line) + "\n")
+	}
+
+	output.WriteString("\n")
+	renderSection(&output, "Candidate")
 	output.WriteString(model.reviewDetail("task", fallback(task.Slug, "(unknown)")))
 	output.WriteString(model.reviewDetail("task state", fallback(firstNonEmpty(task.NormalizedState, task.Status), "unknown")))
 	output.WriteString(model.reviewDetail("latest execution", fallback(latestExecutionStatus(task, model.state), "(none)")))
 	output.WriteString(model.reviewDetail("latest run", fallback(taskLatestRun(task), "(none)")))
-	output.WriteString(model.reviewWrappedDetail("reason", candidate.reason))
 
 	output.WriteString("\n")
-	renderSection(&output, "Worktree")
+	renderSection(&output, "Worktree Inspection")
 	output.WriteString(model.reviewPathDetail("path", fallback(taskWorktreePath(task), "(unknown)")))
 	output.WriteString(model.reviewDetail("branch", fallback(firstNonEmpty(task.Branch, nestedReviewWorktreeBranch(task)), "(unknown)")))
-	output.WriteString(model.reviewDetail("changed files", "(unknown)"))
+	output.WriteString(model.reviewDetail("git branch", fallback(git.branchLine, "(unknown)")))
+	output.WriteString(model.reviewDetail("git status", fallback(git.statusLine, "(unknown)")))
+	output.WriteString(model.reviewDetail("change mix", reviewChangeMix(git)))
+	output.WriteString(model.reviewDetail("review focus", reviewFocusLine(git)))
+	output.WriteString(model.reviewWrappedDetail("attention", reviewFocusGuidance(git)))
+	output.WriteString(model.reviewDetail("diff summary", fallback(git.diffLine, "(unknown)")))
+	for _, file := range firstNStrings(git.changedFiles, 5) {
+		output.WriteString(model.renderLine("  "+file) + "\n")
+	}
+	if len(git.changedFiles) > 5 {
+		output.WriteString(model.renderLine(fmt.Sprintf("  ... %d more files", len(git.changedFiles)-5)) + "\n")
+	}
+	if git.inspectionError != "" {
+		output.WriteString(model.reviewWrappedDetail("inspection", git.inspectionError))
+	}
 
 	output.WriteString("\n")
-	renderSection(&output, "Next Commands")
+	renderSection(&output, "Action Bar")
+	for _, action := range reviewActionBar(candidate, task, git) {
+		output.WriteString(model.renderLine("  "+action) + "\n")
+	}
+
+	output.WriteString("\n")
+	renderSection(&output, "Command Plan")
 	for _, command := range reviewCommands(task) {
 		output.WriteString(model.renderLine("  "+command) + "\n")
 	}
@@ -99,9 +165,594 @@ func (model Model) renderReviewBody() string {
 	return output.String()
 }
 
+func inspectReviewGit(worktree string) reviewGitSummary {
+	worktree = strings.TrimSpace(worktree)
+	if worktree == "" {
+		return reviewGitSummary{inspectionError: "worktree path is unavailable"}
+	}
+	statusOutput, statusErr := runReviewGit(worktree, "status", "--short", "--branch")
+	diffOutput, diffErr := runReviewGit(worktree, "diff", "--stat", "--compact-summary")
+	if statusErr != nil {
+		return reviewGitSummary{inspectionError: statusErr.Error()}
+	}
+	lines := nonEmptyGitStatusLines(statusOutput)
+	summary := reviewGitSummary{available: true, branchLine: "(unknown)"}
+	if len(lines) > 0 && strings.HasPrefix(lines[0], "## ") {
+		summary.branchLine = strings.TrimSpace(strings.TrimPrefix(lines[0], "## "))
+		lines = lines[1:]
+	}
+	summary.changedFiles = lines
+	summary.stagedCount, summary.modifiedCount, summary.deletedCount, summary.untrackedCount = reviewGitCounts(lines)
+	summary.fileFocus = reviewFileFocusCounts(lines)
+	switch len(lines) {
+	case 0:
+		summary.statusLine = "clean"
+	case 1:
+		summary.statusLine = "1 changed file"
+	default:
+		summary.statusLine = fmt.Sprintf("%d changed files", len(lines))
+	}
+	if diffErr != nil {
+		summary.diffLine = "diff unavailable: " + diffErr.Error()
+	} else if strings.TrimSpace(diffOutput) == "" {
+		summary.diffLine = "no unstaged diff"
+	} else {
+		summary.diffLine = firstLine(diffOutput)
+	}
+	return summary
+}
+
+func reviewFileFocusCounts(lines []string) reviewFileFocus {
+	var focus reviewFileFocus
+	for _, line := range lines {
+		path := reviewGitStatusPath(line)
+		if path == "" {
+			focus.unknown++
+			continue
+		}
+		lower := strings.ToLower(path)
+		switch {
+		case strings.Contains(lower, "_test.") || strings.Contains(lower, ".test.") || strings.Contains(lower, ".spec.") || strings.Contains(lower, "/test/") || strings.Contains(lower, "\\test\\") || strings.Contains(lower, "/tests/") || strings.Contains(lower, "\\tests\\"):
+			focus.tests++
+		case strings.HasSuffix(lower, ".md") || strings.HasSuffix(lower, ".txt") || strings.HasPrefix(lower, "docs/") || strings.HasPrefix(lower, "docs\\"):
+			focus.docs++
+		case strings.HasSuffix(lower, ".json") || strings.HasSuffix(lower, ".yaml") || strings.HasSuffix(lower, ".yml") || strings.HasSuffix(lower, ".toml") || strings.HasSuffix(lower, ".mod") || strings.HasSuffix(lower, ".sum") || strings.HasPrefix(lower, ".github/") || strings.HasPrefix(lower, ".github\\"):
+			focus.config++
+		case strings.HasSuffix(lower, ".go") || strings.HasSuffix(lower, ".ps1") || strings.HasSuffix(lower, ".js") || strings.HasSuffix(lower, ".ts") || strings.HasSuffix(lower, ".tsx") || strings.HasSuffix(lower, ".jsx") || strings.HasSuffix(lower, ".py") || strings.HasSuffix(lower, ".cs") || strings.HasSuffix(lower, ".rs"):
+			focus.code++
+		default:
+			focus.unknown++
+		}
+	}
+	return focus
+}
+
+func reviewGitStatusPath(line string) string {
+	line = strings.TrimRight(line, "\r")
+	if strings.TrimSpace(line) == "" {
+		return ""
+	}
+	if strings.HasPrefix(line, "??") {
+		return strings.TrimSpace(strings.TrimPrefix(line, "??"))
+	}
+	if len(line) <= 3 {
+		return ""
+	}
+	path := strings.TrimSpace(line[3:])
+	if renameParts := strings.Split(path, " -> "); len(renameParts) > 1 {
+		path = strings.TrimSpace(renameParts[len(renameParts)-1])
+	}
+	return path
+}
+
+func reviewGitCounts(lines []string) (staged int, modified int, deleted int, untracked int) {
+	for _, line := range lines {
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
+		if strings.HasPrefix(line, "??") {
+			untracked++
+			continue
+		}
+		if len(line) < 2 {
+			continue
+		}
+		indexStatus := line[0]
+		worktreeStatus := line[1]
+		if indexStatus != ' ' && indexStatus != '?' {
+			staged++
+		}
+		if indexStatus == 'M' || worktreeStatus == 'M' {
+			modified++
+		}
+		if indexStatus == 'D' || worktreeStatus == 'D' {
+			deleted++
+		}
+	}
+	return staged, modified, deleted, untracked
+}
+
+func runReviewGit(worktree string, args ...string) (string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), reviewGitTimeout)
+	defer cancel()
+	fullArgs := append([]string{"-C", worktree}, args...)
+	cmd := exec.CommandContext(ctx, "git", fullArgs...)
+	output, err := cmd.CombinedOutput()
+	if ctx.Err() == context.DeadlineExceeded {
+		return "", fmt.Errorf("git inspection timed out")
+	}
+	if err != nil {
+		message := strings.TrimSpace(string(output))
+		if message == "" {
+			message = err.Error()
+		}
+		return "", errors.New(message)
+	}
+	return string(output), nil
+}
+
+func reviewNextAction(candidate reviewCandidate, git reviewGitSummary) string {
+	if len(candidate.blockers) > 0 {
+		return "resolve blockers before approval"
+	}
+	if git.available && len(git.changedFiles) == 0 {
+		return "inspect run output; no worktree diff found"
+	}
+	if git.available {
+		return "review diff, then approve or reject"
+	}
+	return "inspect worktree before approval"
+}
+
+func reviewConfidence(candidate reviewCandidate, git reviewGitSummary) string {
+	if len(candidate.blockers) > 0 {
+		return "blocked"
+	}
+	if !git.available {
+		return "limited; git inspection unavailable"
+	}
+	if len(git.changedFiles) == 0 {
+		return "limited; no changed files detected"
+	}
+	return "ready for human review"
+}
+
+func reviewMergeGate(candidate reviewCandidate, git reviewGitSummary) string {
+	if len(candidate.blockers) > 0 {
+		return "blocked by task/runtime signals"
+	}
+	if !git.available {
+		return "blocked until worktree is inspected"
+	}
+	if len(git.changedFiles) == 0 {
+		return "blocked; no diff to merge"
+	}
+	if git.untrackedCount > 0 {
+		return "caution; untracked files need review"
+	}
+	return "ready for merge prep after human approval"
+}
+
+func reviewChangeMix(git reviewGitSummary) string {
+	if !git.available {
+		return "(unknown)"
+	}
+	if len(git.changedFiles) == 0 {
+		return "clean"
+	}
+	parts := []string{}
+	if git.stagedCount > 0 {
+		parts = append(parts, fmt.Sprintf("%d staged", git.stagedCount))
+	}
+	if git.modifiedCount > 0 {
+		parts = append(parts, fmt.Sprintf("%d modified", git.modifiedCount))
+	}
+	if git.deletedCount > 0 {
+		parts = append(parts, fmt.Sprintf("%d deleted", git.deletedCount))
+	}
+	if git.untrackedCount > 0 {
+		parts = append(parts, fmt.Sprintf("%d untracked", git.untrackedCount))
+	}
+	if len(parts) == 0 {
+		return fmt.Sprintf("%d changed", len(git.changedFiles))
+	}
+	return strings.Join(parts, " | ")
+}
+
+func reviewFocusLine(git reviewGitSummary) string {
+	if !git.available {
+		return "(unknown)"
+	}
+	if len(git.changedFiles) == 0 {
+		return "no changed files"
+	}
+	parts := []string{}
+	if git.fileFocus.code > 0 {
+		parts = append(parts, fmt.Sprintf("%d code", git.fileFocus.code))
+	}
+	if git.fileFocus.tests > 0 {
+		parts = append(parts, fmt.Sprintf("%d tests", git.fileFocus.tests))
+	}
+	if git.fileFocus.docs > 0 {
+		parts = append(parts, fmt.Sprintf("%d docs", git.fileFocus.docs))
+	}
+	if git.fileFocus.config > 0 {
+		parts = append(parts, fmt.Sprintf("%d config", git.fileFocus.config))
+	}
+	if git.fileFocus.unknown > 0 {
+		parts = append(parts, fmt.Sprintf("%d other", git.fileFocus.unknown))
+	}
+	return strings.Join(parts, " | ")
+}
+
+func reviewFocusGuidance(git reviewGitSummary) string {
+	if !git.available {
+		return "inspect worktree manually; git summary is unavailable"
+	}
+	if len(git.changedFiles) == 0 {
+		return "no diff detected; verify the run output before approval"
+	}
+	if git.fileFocus.tests == 0 && git.fileFocus.code > 0 {
+		return "code changed without test files; review test coverage before approval"
+	}
+	if git.untrackedCount > 0 {
+		return "untracked files present; decide whether they belong in the merge"
+	}
+	if git.fileFocus.config > 0 {
+		return "configuration changed; verify runtime and CI impact"
+	}
+	return "review code and tests together before approval"
+}
+
+func reviewActionBar(candidate reviewCandidate, task contracts.TaskSummary, git reviewGitSummary) []string {
+	slug := fallback(task.Slug, "<task>")
+	worktree := fallback(taskWorktreePath(task), "<worktree>")
+	approveState := "blocked"
+	mergeState := "blocked"
+	if len(candidate.blockers) == 0 && git.available && len(git.changedFiles) > 0 {
+		approveState = "available"
+		mergeState = "after approval"
+	} else if len(candidate.blockers) == 0 {
+		approveState = "inspect first"
+		mergeState = "inspect first"
+	}
+	return []string{
+		"s status      inspect       git -C " + worktree + " status",
+		"d diff        inspect       git -C " + worktree + " diff",
+		"o explorer    external      open " + worktree,
+		"e editor      external      code " + worktree,
+		"a approve     " + padRight(approveState, 15) + "approval gate for " + slug,
+		"x reject      available     capture rejection notes for " + slug,
+		"m merge prep  " + padRight(mergeState, 15) + "brevity task merge " + slug + " --plan",
+	}
+}
+
+type reviewCommandFactory func(id int) tea.Cmd
+
+func (model Model) reviewCommandForKey(key string) (ActionDescriptor, reviewCommandFactory, bool) {
+	candidate, ok := model.selectedReviewCandidate()
+	if !ok {
+		return ActionDescriptor{}, nil, false
+	}
+	task := candidate.task
+	worktree := strings.TrimSpace(taskWorktreePath(task))
+	switch key {
+	case "s":
+		return reviewAction("Git status"), model.reviewExecCommand("Git status", "git", "-C", worktree, "status"), worktree != ""
+	case "d":
+		return reviewAction("Git diff"), model.reviewExecCommand("Git diff", "git", "-C", worktree, "diff"), worktree != ""
+	case "o":
+		return reviewAction("Open worktree"), model.reviewStartCommand("Open worktree", "explorer", worktree), worktree != ""
+	case "e":
+		return reviewAction("Open editor"), model.reviewStartCommand("Open editor", "code", worktree), worktree != ""
+	case "a":
+		return reviewAction("Approve review"), model.reviewSyntheticCommand("Approve review", reviewApprovalOutput(candidate, task, inspectReviewGit(worktree))), true
+	case "x":
+		return reviewAction("Reject review"), model.reviewSyntheticCommand("Reject review", reviewRejectionOutput(task)), true
+	case "m":
+		return reviewAction("Merge prep"), model.reviewSyntheticCommand("Merge prep", strings.Join(reviewMergePrepOutput(candidate, task, inspectReviewGit(worktree)), "\n")), true
+	default:
+		return ActionDescriptor{}, nil, false
+	}
+}
+
+func reviewAction(label string) ActionDescriptor {
+	return ActionDescriptor{
+		Label:             label,
+		Kind:              ActionKindReadOnly,
+		Enabled:           true,
+		ExecutesViaBridge: false,
+	}
+}
+
+func (model Model) reviewExecCommand(label string, name string, args ...string) reviewCommandFactory {
+	return func(id int) tea.Cmd {
+		return func() tea.Msg {
+			started := time.Now()
+			result := pscontract.ExecutionResult{
+				CommandDisplayLabel: label,
+				StartedAt:           started,
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			cmd := exec.CommandContext(ctx, name, args...)
+			output, err := cmd.CombinedOutput()
+			result.CompletedAt = time.Now()
+			result.Stdout = string(output)
+			if ctx.Err() == context.DeadlineExceeded {
+				result.ExitCode = 1
+				result.TimedOut = true
+				result.Error = "command timed out"
+			} else if err != nil {
+				result.ExitCode = 1
+				result.Error = err.Error()
+			}
+			return commandResultMsg{id: id, result: result}
+		}
+	}
+}
+
+func (model Model) reviewStartCommand(label string, name string, args ...string) reviewCommandFactory {
+	return func(id int) tea.Cmd {
+		return func() tea.Msg {
+			started := time.Now()
+			result := pscontract.ExecutionResult{
+				CommandDisplayLabel: label,
+				StartedAt:           started,
+				CompletedAt:         time.Now(),
+				Stdout:              name + " " + strings.Join(args, " "),
+			}
+			cmd := exec.Command(name, args...)
+			if err := cmd.Start(); err != nil {
+				result.ExitCode = 1
+				result.Error = err.Error()
+			}
+			return commandResultMsg{id: id, result: result}
+		}
+	}
+}
+
+func (model Model) reviewSyntheticCommand(label string, output string) reviewCommandFactory {
+	return func(id int) tea.Cmd {
+		return func() tea.Msg {
+			now := time.Now()
+			return commandResultMsg{id: id, result: pscontract.ExecutionResult{
+				CommandDisplayLabel: label,
+				StartedAt:           now,
+				CompletedAt:         now,
+				Stdout:              output,
+			}}
+		}
+	}
+}
+
+func (model Model) renderReviewCommandResult(run commandRunState, lines []string, usedRows ...int) string {
+	if run.status == commandRunning {
+		lines = append(lines,
+			"  outcome       waiting for command output",
+			"  next          review the result before approving or merging",
+			"  close         disabled while command is running",
+		)
+		return model.renderPanel("Review Action", lines, detailTruncatedIndicator, usedRows...)
+	}
+	if run.result == nil {
+		lines = append(lines,
+			"  outcome       no result yet",
+			"  next          wait for completion or refresh review state",
+			"  close         esc or q closes action",
+		)
+		return model.renderPanel("Review Action", lines, detailTruncatedIndicator, usedRows...)
+	}
+
+	result := *run.result
+	outcome := "completed"
+	if !result.Success() {
+		outcome = "needs attention"
+	}
+	if result.TimedOut {
+		outcome = "timed out"
+	}
+	if result.Canceled {
+		outcome = "canceled"
+	}
+	lines = append(lines,
+		"  outcome       "+outcome,
+		"  exit code     "+fmt.Sprint(result.ExitCode),
+		"  next          "+reviewCommandFollowUp(run.action.Label, result),
+	)
+	if result.TimedOut {
+		lines = append(lines, "  timeout       command exceeded its read-only timeout")
+	}
+	if stdout := strings.TrimSpace(result.Stdout); stdout != "" {
+		lines = append(lines, commandOutputLines("output", stdout)...)
+	} else if result.Success() {
+		lines = append(lines, "  output        (empty)")
+	}
+	if stderr := strings.TrimSpace(result.Stderr); stderr != "" {
+		lines = append(lines, commandOutputLines("stderr", stderr)...)
+	}
+	if result.Error != "" && strings.TrimSpace(result.Stderr) == "" {
+		lines = append(lines, "  error         "+result.Error)
+	}
+	lines = append(lines, "  close         esc or q closes action")
+	return model.renderScrollablePanel("Review Action", lines, run.scroll, detailTruncatedIndicator, usedRows...)
+}
+
+func reviewCommandFollowUp(label string, result pscontract.ExecutionResult) string {
+	if !result.Success() {
+		return "inspect the error before making a review decision"
+	}
+	switch strings.ToLower(strings.TrimSpace(label)) {
+	case "git status":
+		return "open the diff if the worktree contains reviewable changes"
+	case "git diff":
+		return "approve, reject, or run merge prep after human diff review"
+	case "open worktree", "open editor":
+		return "inspect files, then return to approve, reject, or merge prep"
+	case "approve review":
+		return "run merge prep only after the diff is acceptable"
+	case "reject review":
+		return "record required changes and leave the worktree intact"
+	case "merge prep":
+		return "run the listed merge-plan command after approval"
+	default:
+		return "continue review from the current decision gate"
+	}
+}
+
+func reviewApprovalOutput(candidate reviewCandidate, task contracts.TaskSummary, git reviewGitSummary) string {
+	lines := []string{
+		"Approval gate",
+		"task: " + fallback(task.Slug, "(unknown)"),
+		"state: " + fallback(firstNonEmpty(task.NormalizedState, task.Status), "unknown"),
+		"git: " + fallback(git.statusLine, "(unknown)"),
+		"merge gate: " + reviewMergeGate(candidate, git),
+		"focus: " + reviewFocusLine(git),
+		"attention: " + reviewFocusGuidance(git),
+	}
+	if len(candidate.blockers) > 0 {
+		lines = append(lines, "decision: blocked; resolve blockers before approval")
+		for _, blocker := range candidate.blockers {
+			lines = append(lines, "- "+blocker)
+		}
+		return strings.Join(lines, "\n")
+	}
+	if !git.available || len(git.changedFiles) == 0 {
+		lines = append(lines, "decision: blocked; inspect worktree and confirm there is a diff")
+		return strings.Join(lines, "\n")
+	}
+	lines = append(lines,
+		"decision: approval can proceed after human diff review",
+		"next: run merge prep when the diff is acceptable",
+	)
+	return strings.Join(lines, "\n")
+}
+
+func reviewRejectionOutput(task contracts.TaskSummary) string {
+	return strings.Join([]string{
+		"Rejection notes",
+		"task: " + fallback(task.Slug, "(unknown)"),
+		"record: summarize what must change before rerun",
+		"next: leave the worktree intact for the worker or operator to inspect",
+	}, "\n")
+}
+
+func reviewMergePrepOutput(candidate reviewCandidate, task contracts.TaskSummary, git reviewGitSummary) []string {
+	slug := fallback(task.Slug, "<task>")
+	worktree := fallback(taskWorktreePath(task), "<worktree>")
+	lines := []string{
+		"Merge preparation",
+		"gate: " + reviewMergeGate(candidate, git),
+		"status: " + fallback(git.statusLine, "(unknown)"),
+		"change mix: " + reviewChangeMix(git),
+		"focus: " + reviewFocusLine(git),
+		"attention: " + reviewFocusGuidance(git),
+		"1. review git -C " + worktree + " diff",
+		"2. verify git -C " + worktree + " status",
+		"3. inspect git -C " + worktree + " log --oneline -5",
+		"4. run brevity task merge " + slug + " --plan",
+	}
+	if len(candidate.blockers) > 0 {
+		lines = append(lines, "blockers:")
+		for _, blocker := range candidate.blockers {
+			lines = append(lines, "- "+blocker)
+		}
+	}
+	return lines
+}
+
+func nonEmptyLines(value string) []string {
+	lines := strings.Split(strings.ReplaceAll(value, "\r\n", "\n"), "\n")
+	kept := make([]string, 0, len(lines))
+	for _, line := range lines {
+		if strings.TrimSpace(line) != "" {
+			kept = append(kept, strings.TrimSpace(line))
+		}
+	}
+	return kept
+}
+
+func nonEmptyGitStatusLines(value string) []string {
+	lines := strings.Split(strings.ReplaceAll(value, "\r\n", "\n"), "\n")
+	kept := make([]string, 0, len(lines))
+	for _, line := range lines {
+		if strings.TrimSpace(line) != "" {
+			kept = append(kept, strings.TrimRight(line, "\r"))
+		}
+	}
+	return kept
+}
+
+func firstLine(value string) string {
+	lines := nonEmptyLines(value)
+	if len(lines) == 0 {
+		return ""
+	}
+	return lines[0]
+}
+
+func firstNStrings(values []string, count int) []string {
+	if count < 0 {
+		count = 0
+	}
+	if len(values) <= count {
+		return values
+	}
+	return values[:count]
+}
+
 func selectReviewCandidate(state contracts.RuntimeState) (reviewCandidate, bool) {
-	if len(state.Tasks) == 0 {
+	candidates := collectReviewCandidates(state)
+	if len(candidates) == 0 {
 		return reviewCandidate{}, false
+	}
+	return candidates[0], true
+}
+
+func (model Model) selectedReviewCandidate() (reviewCandidate, bool) {
+	candidates := collectReviewCandidates(model.state)
+	if len(candidates) == 0 {
+		return reviewCandidate{}, false
+	}
+	index := clampReviewSelection(model.reviewSelected, len(candidates))
+	return candidates[index], true
+}
+
+func (model *Model) moveReviewSelection(delta int) {
+	candidates := collectReviewCandidates(model.state)
+	if len(candidates) == 0 {
+		model.reviewSelected = 0
+		return
+	}
+	model.reviewSelected = clampReviewSelection(model.reviewSelected+delta, len(candidates))
+}
+
+func clampReviewSelection(index int, count int) int {
+	if count <= 0 {
+		return 0
+	}
+	if index < 0 {
+		return count - 1
+	}
+	if index >= count {
+		return 0
+	}
+	return index
+}
+
+func collectReviewCandidates(state contracts.RuntimeState) []reviewCandidate {
+	if len(state.Tasks) == 0 {
+		return nil
+	}
+	candidates := make([]reviewCandidate, 0, len(state.Tasks))
+	seen := map[string]bool{}
+	add := func(task contracts.TaskSummary, taskIndex int, reason string) {
+		key := reviewTaskKey(task, taskIndex)
+		if seen[key] {
+			return
+		}
+		seen[key] = true
+		candidates = append(candidates, buildReviewCandidate(task, state, reason))
 	}
 	priorities := []func(contracts.TaskSummary) (string, bool){
 		func(task contracts.TaskSummary) (string, bool) {
@@ -126,19 +777,80 @@ func selectReviewCandidate(state contracts.RuntimeState) (reviewCandidate, bool)
 		},
 	}
 	for _, priority := range priorities {
-		for _, task := range state.Tasks {
+		for index, task := range state.Tasks {
 			if reason, ok := priority(task); ok {
-				return buildReviewCandidate(task, state, reason), true
+				add(task, index, reason)
 			}
 		}
 	}
-	for _, task := range state.Tasks {
+	for index, task := range state.Tasks {
 		candidate := buildReviewCandidate(task, state, "no ready review signal; showing the most actionable blocker")
 		if len(candidate.blockers) > 0 {
-			return candidate, true
+			add(task, index, candidate.reason)
 		}
 	}
-	return buildReviewCandidate(state.Tasks[0], state, "missing review signals; inspect task state before acting"), true
+	if len(candidates) == 0 {
+		add(state.Tasks[0], 0, "missing review signals; inspect task state before acting")
+	}
+	return candidates
+}
+
+func reviewTaskKey(task contracts.TaskSummary, fallbackIndex int) string {
+	if slug := strings.TrimSpace(task.Slug); slug != "" {
+		return "slug:" + slug
+	}
+	return fmt.Sprintf("index:%d", fallbackIndex)
+}
+
+func reviewQueueLines(state contracts.RuntimeState, selectedIndex int) []string {
+	candidates := collectReviewCandidates(state)
+	if len(candidates) == 0 {
+		return []string{"none"}
+	}
+	selectedIndex = clampReviewSelection(selectedIndex, len(candidates))
+	windowStart := reviewQueueWindowStart(selectedIndex, len(candidates), 4)
+	windowEnd := windowStart + 4
+	if windowEnd > len(candidates) {
+		windowEnd = len(candidates)
+	}
+	lines := []string{fmt.Sprintf("candidate %d of %d", selectedIndex+1, len(candidates))}
+	for index := windowStart; index < windowEnd; index++ {
+		candidate := candidates[index]
+		task := candidate.task
+		marker := " "
+		if index == selectedIndex {
+			marker = ">"
+		}
+		lines = append(lines, fmt.Sprintf("%s %-24s %-16s %s", marker, fallback(task.Slug, "(unknown)"), fallback(firstNonEmpty(task.NormalizedState, task.Status), "unknown"), reviewQueueReason(candidate)))
+	}
+	if windowStart > 0 {
+		lines = append(lines, fmt.Sprintf("  ... %d earlier candidates", windowStart))
+	}
+	if windowEnd < len(candidates) {
+		lines = append(lines, fmt.Sprintf("  ... %d more candidates", len(candidates)-windowEnd))
+	}
+	return lines
+}
+
+func reviewQueueWindowStart(selectedIndex int, count int, windowSize int) int {
+	if windowSize <= 0 || count <= windowSize {
+		return 0
+	}
+	start := selectedIndex - windowSize + 1
+	if start < 0 {
+		return 0
+	}
+	if start > count-windowSize {
+		return count - windowSize
+	}
+	return start
+}
+
+func reviewQueueReason(candidate reviewCandidate) string {
+	if len(candidate.blockers) > 0 {
+		return "blocked: " + candidate.blockers[0]
+	}
+	return candidate.reason
 }
 
 func buildReviewCandidate(task contracts.TaskSummary, state contracts.RuntimeState, reason string) reviewCandidate {

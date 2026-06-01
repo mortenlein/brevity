@@ -2,6 +2,8 @@ package bubbleteadashboard
 
 import (
 	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -15,7 +17,7 @@ func TestReviewWorkspaceNoCandidate(t *testing.T) {
 
 	output := plainView(model.View())
 	for _, want := range []string{
-		"REVIEW WORKSPACE",
+		"BREVITY REVIEW",
 		"No review candidate yet.",
 		"Queue or launch work, then return here.",
 	} {
@@ -33,10 +35,14 @@ func TestReviewWorkspaceCompletedExecutionCandidate(t *testing.T) {
 
 	output := plainView(model.View())
 	for _, want := range []string{
+		"next action      inspect worktree before approval",
 		"task             done-task",
 		"task state       ready-for-review",
 		"latest execution completed",
 		"latest run       id=run-1 status=succeeded exit=0",
+		"git status       (unknown)",
+		"merge gate       blocked until worktree is inspected",
+		"attention        inspect worktree manually; git summary is unavailable",
 		"none detected; candidate for review, not a merge verdict",
 	} {
 		if !strings.Contains(output, want) {
@@ -83,6 +89,72 @@ func TestReviewWorkspaceProviderGatedBlocker(t *testing.T) {
 	}
 }
 
+func TestReviewWorkspaceShowsPrioritizedReviewQueue(t *testing.T) {
+	state := emptyBubbleState()
+	state.Tasks = []contracts.TaskSummary{
+		reviewTask("queued-task", "queued", "", ""),
+		reviewTask("ready-task", "ready-for-review", "completed", "succeeded"),
+		reviewTask("inspect-task", "needs-inspection", "completed", "succeeded"),
+	}
+	model := reviewTestModel(state, 130)
+
+	output := plainView(model.View())
+	for _, want := range []string{
+		"Review Queue",
+		"> ready-task",
+		"ready-for-review",
+		"task state is ready-for-review",
+		"inspect-task",
+		"needs-inspection",
+		"queued-task",
+		"blocked: queued: work has not been reserved or executed yet",
+	} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("review queue missing %q:\n%s", want, output)
+		}
+	}
+	if strings.Index(output, "> ready-task") > strings.Index(output, "inspect-task") {
+		t.Fatalf("ready review candidate should rank before needs-inspection:\n%s", output)
+	}
+}
+
+func TestReviewWorkspaceKeyboardMovesReviewQueueSelection(t *testing.T) {
+	state := emptyBubbleState()
+	state.Tasks = []contracts.TaskSummary{
+		reviewTask("queued-task", "queued", "", ""),
+		reviewTask("ready-task", "ready-for-review", "completed", "succeeded"),
+		reviewTask("inspect-task", "needs-inspection", "completed", "succeeded"),
+	}
+	model := reviewTestModel(state, 130)
+
+	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("n")})
+	model = updated.(Model)
+	output := plainView(model.View())
+	for _, want := range []string{
+		"candidate 2 of 3",
+		"> inspect-task",
+		"task             inspect-task",
+	} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("next review selection missing %q:\n%s", want, output)
+		}
+	}
+
+	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("p")})
+	model = updated.(Model)
+	output = plainView(model.View())
+	for _, want := range []string{
+		"candidate 1 of 3",
+		"> ready-task",
+		"task             ready-task",
+		"n/p s d o e a x m r q",
+	} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("previous review selection missing %q:\n%s", want, output)
+		}
+	}
+}
+
 func TestReviewWorkspaceCommandRendering(t *testing.T) {
 	state := emptyBubbleState()
 	state.Tasks = []contracts.TaskSummary{reviewTask("review-me", "ready-for-review", "completed", "succeeded")}
@@ -91,6 +163,11 @@ func TestReviewWorkspaceCommandRendering(t *testing.T) {
 	output := plainView(model.View())
 	for _, want := range []string{
 		"brevity cmux --review review-me",
+		"s status      inspect       git -C C:\\repo\\worktrees\\active\\review-me status",
+		"d diff        inspect       git -C C:\\repo\\worktrees\\active\\review-me diff",
+		"o explorer    external      open C:\\repo\\worktrees\\active\\review-me",
+		"a approve     inspect first  approval gate for review-me",
+		"x reject      available     capture rejection notes for review-me",
 		"git -C C:\\repo\\worktrees\\active\\review-me status",
 		"git -C C:\\repo\\worktrees\\active\\review-me diff --stat",
 		"git -C C:\\repo\\worktrees\\active\\review-me log --oneline -5",
@@ -111,12 +188,68 @@ func TestReviewWorkspaceWidths(t *testing.T) {
 			model := reviewTestModel(state, width)
 			output := plainView(model.View())
 			assertLinesWithinWidth(t, output, width)
-			for _, want := range []string{"REVIEW WORKSPACE", "Review Candidate", "Next Commands", "Blockers"} {
+			for _, want := range []string{"BREVITY REVIEW", "Decision", "Action Bar", "Blockers"} {
 				if !strings.Contains(output, want) {
 					t.Fatalf("width %d missing %q:\n%s", width, want, output)
 				}
 			}
 		})
+	}
+}
+
+func TestReviewWorkspaceGitInspectionSummary(t *testing.T) {
+	dir := t.TempDir()
+	runReviewTestGit(t, dir, "init")
+	runReviewTestGit(t, dir, "config", "core.autocrlf", "false")
+	runReviewTestGit(t, dir, "config", "user.email", "brevity@example.test")
+	runReviewTestGit(t, dir, "config", "user.name", "Brevity Test")
+	if err := os.WriteFile(filepath.Join(dir, "main.go"), []byte("package main\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runReviewTestGit(t, dir, "add", ".")
+	runReviewTestGit(t, dir, "commit", "-m", "initial")
+	if err := os.WriteFile(filepath.Join(dir, "main.go"), []byte("package main\n\nfunc main() {}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "new.txt"), []byte("new\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "file_test.go"), []byte("package test\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	state := emptyBubbleState()
+	task := reviewTask("git-task", "ready-for-review", "completed", "succeeded")
+	task.WorktreePath = dir
+	state.Tasks = []contracts.TaskSummary{task}
+	model := reviewTestModel(state, 120)
+
+	output := plainView(model.View())
+	for _, want := range []string{
+		"next action      review diff, then approve or reject",
+		"confidence       ready for human review",
+		"merge gate       caution; untracked files need review",
+		"git status       3 changed files",
+		"change mix       1 modified | 2 untracked",
+		"review focus     1 code | 1 tests | 1 docs",
+		"attention        untracked files present; decide whether they belong in the merge",
+		"a approve     available      approval gate for git-task",
+		"m merge prep  after approval brevity task merge git-task --plan",
+		"M main.go",
+		"?? new.txt",
+	} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("git inspection output missing %q:\n%s", want, output)
+		}
+	}
+}
+
+func runReviewTestGit(t *testing.T, dir string, args ...string) {
+	t.Helper()
+	cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("git %s failed: %v\n%s", strings.Join(args, " "), err, output)
 	}
 }
 
@@ -142,7 +275,6 @@ func TestReviewWorkspaceDoesNotMutateRuntimeFilesOrBridge(t *testing.T) {
 	for _, key := range []tea.KeyMsg{
 		{Type: tea.KeyRunes, Runes: []rune("p")},
 		{Type: tea.KeyEnter},
-		{Type: tea.KeyRunes, Runes: []rune("d")},
 	} {
 		updated, cmd := model.Update(key)
 		model = updated.(Model)
@@ -158,6 +290,106 @@ func TestReviewWorkspaceDoesNotMutateRuntimeFilesOrBridge(t *testing.T) {
 	}
 	if got, _ := os.ReadFile(execFile); string(got) != "exec-before" {
 		t.Fatalf("execution file mutated by review render: %q", got)
+	}
+}
+
+func TestReviewWorkspaceKeyboardActionsOpenCommandPanels(t *testing.T) {
+	dir := t.TempDir()
+	runReviewTestGit(t, dir, "init")
+	runReviewTestGit(t, dir, "config", "core.autocrlf", "false")
+	runReviewTestGit(t, dir, "config", "user.email", "brevity@example.test")
+	runReviewTestGit(t, dir, "config", "user.name", "Brevity Test")
+	if err := os.WriteFile(filepath.Join(dir, "main.go"), []byte("package main\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runReviewTestGit(t, dir, "add", ".")
+	runReviewTestGit(t, dir, "commit", "-m", "initial")
+	if err := os.WriteFile(filepath.Join(dir, "main.go"), []byte("package main\n\nfunc main() {}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	state := emptyBubbleState()
+	task := reviewTask("keyboard-task", "ready-for-review", "completed", "succeeded")
+	task.WorktreePath = dir
+	state.Tasks = []contracts.TaskSummary{task}
+	model := reviewTestModel(state, 120)
+
+	updated, cmd := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("d")})
+	model = updated.(Model)
+	if cmd == nil {
+		t.Fatal("review diff shortcut returned nil command")
+	}
+	updated, _ = model.Update(cmd())
+	model = updated.(Model)
+	output := plainView(model.View())
+	for _, want := range []string{
+		"Review Action",
+		"action        Git diff",
+		"outcome       completed",
+		"next          approve, reject, or run merge prep after human diff review",
+		"main.go",
+	} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("review diff command output missing %q:\n%s", want, output)
+		}
+	}
+
+	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	model = updated.(Model)
+	updated, cmd = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("m")})
+	model = updated.(Model)
+	if cmd == nil {
+		t.Fatal("merge prep shortcut returned nil command")
+	}
+	updated, _ = model.Update(cmd())
+	model = updated.(Model)
+	output = plainView(model.View())
+	for _, want := range []string{
+		"action        Merge prep",
+		"outcome       completed",
+		"next          run the listed merge-plan command after approval",
+		"Merge preparation",
+		"gate: ready for merge prep after human approval",
+		"attention: code changed without test files; review test coverage before approval",
+		"brevity task merge keyboard-task --plan",
+	} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("merge prep command output missing %q:\n%s", want, output)
+		}
+	}
+}
+
+func TestReviewWorkspaceApprovalGateUsesGitAndBlockers(t *testing.T) {
+	state := emptyBubbleState()
+	task := reviewTask("blocked-task", "provider-gated", "", "")
+	task.ProviderGated = true
+	state.Tasks = []contracts.TaskSummary{task}
+	model := reviewTestModel(state, 120)
+
+	updated, cmd := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("a")})
+	model = updated.(Model)
+	if cmd == nil {
+		t.Fatal("approve shortcut returned nil command")
+	}
+	updated, _ = model.Update(cmd())
+	model = updated.(Model)
+	output := plainView(model.View())
+	for _, want := range []string{
+		"action        Approve review",
+		"outcome       completed",
+		"next          run merge prep only after the diff is acceptable",
+		"Approval gate",
+		"merge gate: blocked by task/runtime signals",
+		"attention: inspect worktree manually; git summary is unavailable",
+		"decision: blocked; resolve blockers before approval",
+		"provider gated",
+	} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("approval gate output missing %q:\n%s", want, output)
+		}
+	}
+	if strings.Contains(output, "approval can proceed") {
+		t.Fatalf("approval gate allowed a blocked task:\n%s", output)
 	}
 }
 
