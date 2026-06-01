@@ -22,6 +22,7 @@ type Tasks struct {
 type Task struct {
 	Slug                  string              `json:"slug"`
 	ID                    string              `json:"id,omitempty"`
+	Description           string              `json:"description,omitempty"`
 	Status                string              `json:"status"`
 	NormalizedState       string              `json:"normalizedState,omitempty"`
 	MetadataStatus        string              `json:"metadataStatus,omitempty"`

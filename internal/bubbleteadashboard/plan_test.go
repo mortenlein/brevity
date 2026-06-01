@@ -80,6 +80,7 @@ func TestPlanningWorkspaceActionsRender(t *testing.T) {
 		"n new idea",
 		"enter inspect",
 		"t task draft",
+		"p promote",
 		"q quit",
 	} {
 		if !strings.Contains(stripANSI(output), want) {
@@ -117,6 +118,63 @@ func TestPlanningWorkspaceCreatesAndPersistsIdea(t *testing.T) {
 	}
 }
 
+func TestPlanningWorkspaceCreatesTaskDraftFromIdea(t *testing.T) {
+	root := planningFixture(t)
+	model := NewPlanningModel("Operator leverage.", nil)
+	model.repoRoot = root
+	model.store = newPlanningIdeaStore(root)
+	model.draftStore = newPlanningTaskDraftStore(root)
+	model.now = fixedPlanningTime
+	model.ideas = []PlanningIdea{{
+		ID:        "idea-1",
+		Title:     "File-level diff navigation",
+		CreatedAt: "2026-06-01T09:00:00Z",
+		Status:    "captured",
+	}}
+
+	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("t")})
+	model = updated.(PlanningModel)
+
+	if len(model.drafts) != 1 {
+		t.Fatalf("drafts = %#v, want one draft", model.drafts)
+	}
+	draft := model.drafts[0]
+	if draft.Title != "File-level diff navigation" || draft.Status != "draft" || draft.IdeaID != "idea-1" {
+		t.Fatalf("draft metadata = %#v", draft)
+	}
+	if draft.Description != "Generated from planning idea" ||
+		draft.AcceptanceCriteria != "[placeholder]" ||
+		draft.Validation != "[placeholder]" ||
+		draft.CreatedAt != "2026-06-01T10:00:00Z" {
+		t.Fatalf("draft content = %#v", draft)
+	}
+}
+
+func TestPlanningWorkspacePersistsTaskDraft(t *testing.T) {
+	root := planningFixture(t)
+	model := NewPlanningModel("Operator leverage.", nil)
+	model.repoRoot = root
+	model.draftStore = newPlanningTaskDraftStore(root)
+	model.now = fixedPlanningTime
+	model.ideas = []PlanningIdea{{
+		ID:        "idea-1",
+		Title:     "Review notes persistence",
+		CreatedAt: "2026-06-01T09:00:00Z",
+		Status:    "captured",
+	}}
+
+	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("t")})
+	model = updated.(PlanningModel)
+
+	data, err := os.ReadFile(filepath.Join(root, planningTaskDraftsPath))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !json.Valid(data) || !strings.Contains(string(data), "Review notes persistence") {
+		t.Fatalf("task draft store not durable JSON:\n%s", data)
+	}
+}
+
 func TestPlanningWorkspaceReloadsIdeas(t *testing.T) {
 	root := planningFixture(t)
 	store := newPlanningIdeaStore(root)
@@ -139,10 +197,304 @@ func TestPlanningWorkspaceReloadsIdeas(t *testing.T) {
 		"Merge experience improvements",
 		"Selected Idea",
 		"Status:  planning",
-		"[convert to task draft] placeholder",
+		"[t] Create Task Draft",
 	} {
 		if !strings.Contains(output.String(), want) {
 			t.Fatalf("reloaded planning output missing %q:\n%s", want, output.String())
+		}
+	}
+}
+
+func TestPlanningWorkspaceReloadsTaskDrafts(t *testing.T) {
+	root := planningFixture(t)
+	if err := newPlanningIdeaStore(root).Save([]PlanningIdea{{
+		ID:        "idea-1",
+		Title:     "Merge experience improvements",
+		CreatedAt: "2026-06-01T09:00:00Z",
+		Status:    "captured",
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := newPlanningTaskDraftStore(root).Save([]PlanningTaskDraft{{
+		ID:                 "draft-1",
+		IdeaID:             "idea-1",
+		Title:              "Merge experience improvements",
+		Description:        "Generated from planning idea",
+		Status:             "draft",
+		AcceptanceCriteria: "[placeholder]",
+		Validation:         "[placeholder]",
+		CreatedAt:          "2026-06-01T10:00:00Z",
+	}}); err != nil {
+		t.Fatal(err)
+	}
+
+	var output strings.Builder
+	if err := RunPlan(context.Background(), strings.NewReader("q\n"), &output, root); err != nil {
+		t.Fatalf("RunPlan returned error: %v", err)
+	}
+
+	for _, want := range []string{
+		"Task Drafts",
+		"Merge experience improvements",
+		"Selected Draft",
+		"Acceptance Criteria",
+		"Validation",
+		"[p] Promote To Task",
+	} {
+		if !strings.Contains(output.String(), want) {
+			t.Fatalf("reloaded planning output missing %q:\n%s", want, output.String())
+		}
+	}
+}
+
+func TestPlanningWorkspaceDoesNotDuplicateTaskDraftForIdea(t *testing.T) {
+	root := planningFixture(t)
+	model := NewPlanningModel("Operator leverage.", nil)
+	model.repoRoot = root
+	model.draftStore = newPlanningTaskDraftStore(root)
+	model.now = fixedPlanningTime
+	model.ideas = []PlanningIdea{{
+		ID:        "idea-1",
+		Title:     "File-level diff navigation",
+		CreatedAt: "2026-06-01T09:00:00Z",
+		Status:    "captured",
+	}}
+
+	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("t")})
+	model = updated.(PlanningModel)
+	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("t")})
+	model = updated.(PlanningModel)
+
+	if len(model.drafts) != 1 {
+		t.Fatalf("drafts = %#v, want one draft after duplicate create", model.drafts)
+	}
+	if !strings.Contains(model.message, "already exists") {
+		t.Fatalf("message = %q, want duplicate guidance", model.message)
+	}
+}
+
+func TestPlanningWorkspaceTaskDraftRendering(t *testing.T) {
+	model := NewPlanningModel("Operator leverage.", nil)
+	model.ideas = []PlanningIdea{{
+		ID:        "idea-1",
+		Title:     "Review notes persistence",
+		CreatedAt: "2026-06-01T09:00:00Z",
+		Status:    "captured",
+	}}
+	model.drafts = []PlanningTaskDraft{{
+		ID:                 "draft-1",
+		IdeaID:             "idea-1",
+		Title:              "Review notes persistence",
+		Description:        "Generated from planning idea",
+		Status:             "draft",
+		AcceptanceCriteria: "[placeholder]",
+		Validation:         "[placeholder]",
+		CreatedAt:          "2026-06-01T10:00:00Z",
+	}}
+
+	output := model.View()
+
+	for _, want := range []string{
+		"Task Drafts",
+		"status: draft",
+		"Selected Draft",
+		"Title:   Review notes persistence",
+		"Acceptance Criteria",
+		"[placeholder]",
+		"[refine] placeholder",
+	} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("task draft output missing %q:\n%s", want, output)
+		}
+	}
+}
+
+func TestPlanningWorkspaceTaskDraftEmptyState(t *testing.T) {
+	model := NewPlanningModel("Operator leverage.", nil)
+	model.ideas = []PlanningIdea{{
+		ID:        "idea-1",
+		Title:     "Review notes persistence",
+		CreatedAt: "2026-06-01T09:00:00Z",
+		Status:    "captured",
+	}}
+
+	output := model.View()
+
+	for _, want := range []string{
+		"Task Drafts",
+		"No task drafts yet.",
+		"press t",
+		"without touching",
+		"execution state",
+	} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("task draft empty state missing %q:\n%s", want, output)
+		}
+	}
+}
+
+func TestPlanningWorkspacePromotesTaskDraft(t *testing.T) {
+	root := planningFixture(t)
+	model := NewPlanningModel("Operator leverage.", nil)
+	model.repoRoot = root
+	model.draftStore = newPlanningTaskDraftStore(root)
+	model.now = fixedPlanningTime
+	model.drafts = []PlanningTaskDraft{{
+		ID:                 "draft-1",
+		IdeaID:             "idea-1",
+		Title:              "File-level diff navigation",
+		Description:        "Generated from planning idea",
+		Status:             "draft",
+		AcceptanceCriteria: "[placeholder]",
+		Validation:         "[placeholder]",
+		CreatedAt:          "2026-06-01T09:00:00Z",
+	}}
+
+	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("p")})
+	model = updated.(PlanningModel)
+
+	if len(model.drafts) != 1 || model.drafts[0].Status != "promoted" || model.drafts[0].TaskSlug != "file-level-diff-navigation" {
+		t.Fatalf("promoted draft = %#v", model.drafts)
+	}
+	if model.drafts[0].PromotedAt != "2026-06-01T10:00:00Z" {
+		t.Fatalf("promotedAt = %q", model.drafts[0].PromotedAt)
+	}
+}
+
+func TestPlanningWorkspacePromotedTaskPersistsToTasks(t *testing.T) {
+	root := planningFixture(t)
+	model := NewPlanningModel("Operator leverage.", nil)
+	model.repoRoot = root
+	model.draftStore = newPlanningTaskDraftStore(root)
+	model.now = fixedPlanningTime
+	model.drafts = []PlanningTaskDraft{{
+		ID:                 "draft-1",
+		IdeaID:             "idea-1",
+		Title:              "Review notes persistence",
+		Description:        "Generated from planning idea",
+		Status:             "draft",
+		AcceptanceCriteria: "[placeholder]",
+		Validation:         "[placeholder]",
+		CreatedAt:          "2026-06-01T09:00:00Z",
+	}}
+
+	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("p")})
+	model = updated.(PlanningModel)
+
+	data, err := os.ReadFile(filepath.Join(root, ".brevity", "tasks.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		`"slug": "review-notes-persistence"`,
+		`"description": "Generated from planning idea"`,
+		`"status": "draft"`,
+		`"normalizedState": "draft"`,
+		`"createdAt": "2026-06-01T09:00:00Z"`,
+	} {
+		if !strings.Contains(string(data), want) {
+			t.Fatalf("tasks.json missing %q:\n%s", want, string(data))
+		}
+	}
+}
+
+func TestPlanningWorkspaceDuplicatePromotionProtection(t *testing.T) {
+	root := planningFixture(t)
+	model := NewPlanningModel("Operator leverage.", nil)
+	model.repoRoot = root
+	model.draftStore = newPlanningTaskDraftStore(root)
+	model.now = fixedPlanningTime
+	model.drafts = []PlanningTaskDraft{{
+		ID:                 "draft-1",
+		IdeaID:             "idea-1",
+		Title:              "Review notes persistence",
+		Description:        "Generated from planning idea",
+		Status:             "draft",
+		AcceptanceCriteria: "[placeholder]",
+		Validation:         "[placeholder]",
+		CreatedAt:          "2026-06-01T09:00:00Z",
+	}}
+
+	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("p")})
+	model = updated.(PlanningModel)
+	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("p")})
+	model = updated.(PlanningModel)
+
+	if !strings.Contains(model.message, "already promoted") {
+		t.Fatalf("message = %q, want duplicate promotion guidance", model.message)
+	}
+	data, err := os.ReadFile(filepath.Join(root, ".brevity", "tasks.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if count := strings.Count(string(data), "review-notes-persistence"); count != 2 {
+		t.Fatalf("task occurrence count = %d, want slug and id only:\n%s", count, string(data))
+	}
+}
+
+func TestPlanningWorkspaceReloadsPromotedDrafts(t *testing.T) {
+	root := planningFixture(t)
+	if err := newPlanningTaskDraftStore(root).Save([]PlanningTaskDraft{{
+		ID:                 "draft-1",
+		IdeaID:             "idea-1",
+		TaskSlug:           "review-notes-persistence",
+		Title:              "Review notes persistence",
+		Description:        "Generated from planning idea",
+		Status:             "promoted",
+		AcceptanceCriteria: "[placeholder]",
+		Validation:         "[placeholder]",
+		CreatedAt:          "2026-06-01T09:00:00Z",
+		PromotedAt:         "2026-06-01T10:00:00Z",
+	}}); err != nil {
+		t.Fatal(err)
+	}
+
+	var output strings.Builder
+	if err := RunPlan(context.Background(), strings.NewReader("q\n"), &output, root); err != nil {
+		t.Fatalf("RunPlan returned error: %v", err)
+	}
+
+	for _, want := range []string{
+		"Status:  promoted",
+		"Task:    review-notes-persistence",
+		"Promoted: 2026-06-01T10:00:00Z",
+		"activate task",
+		"execute task",
+		"review task",
+	} {
+		if !strings.Contains(output.String(), want) {
+			t.Fatalf("promoted draft output missing %q:\n%s", want, output.String())
+		}
+	}
+}
+
+func TestPlanningWorkspacePromotionGuidanceRendering(t *testing.T) {
+	model := NewPlanningModel("Operator leverage.", nil)
+	model.drafts = []PlanningTaskDraft{{
+		ID:                 "draft-1",
+		IdeaID:             "idea-1",
+		TaskSlug:           "file-level-diff-navigation",
+		Title:              "File-level diff navigation",
+		Description:        "Generated from planning idea",
+		Status:             "promoted",
+		AcceptanceCriteria: "[placeholder]",
+		Validation:         "[placeholder]",
+		CreatedAt:          "2026-06-01T09:00:00Z",
+		PromotedAt:         "2026-06-01T10:00:00Z",
+	}}
+
+	output := model.View()
+
+	for _, want := range []string{
+		"status: promoted",
+		"Selected Draft",
+		"Task:    file-level-diff-navigation",
+		"activate task",
+		"execute task",
+		"review task",
+	} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("promotion guidance missing %q:\n%s", want, output)
 		}
 	}
 }
@@ -191,6 +543,39 @@ func TestPlanningWorkspaceNarrowWidthReadable(t *testing.T) {
 	}
 }
 
+func TestPlanningWorkspaceTaskDraftNarrowWidthReadable(t *testing.T) {
+	model := NewPlanningModel("Operator leverage starts with a focused planning workspace.", nil)
+	model.ideas = []PlanningIdea{{
+		ID:        "idea-1",
+		Title:     "A very long planning idea title that must not break narrow rendering",
+		CreatedAt: "2026-06-01T09:00:00Z",
+		Status:    "captured",
+	}}
+	model.drafts = []PlanningTaskDraft{{
+		ID:                 "draft-1",
+		IdeaID:             "idea-1",
+		Title:              "A very long planning idea title that must not break narrow rendering",
+		Description:        "Generated from planning idea",
+		Status:             "draft",
+		AcceptanceCriteria: "[placeholder]",
+		Validation:         "[placeholder]",
+		CreatedAt:          "2026-06-01T10:00:00Z",
+	}}
+	updated, _ := model.Update(tea.WindowSizeMsg{Width: 32, Height: 30})
+	model = updated.(PlanningModel)
+
+	output := model.View()
+
+	for _, line := range strings.Split(strings.TrimSuffix(output, "\n"), "\n") {
+		if visibleWidth(stripANSI(line)) > model.contentWidth() {
+			t.Fatalf("line exceeds width %d: %q\n%s", model.contentWidth(), line, output)
+		}
+	}
+	if !strings.Contains(output, "Task Drafts") || !strings.Contains(output, "Selected Draft") {
+		t.Fatalf("narrow draft output dropped key sections:\n%s", output)
+	}
+}
+
 func TestRunPlanDoesNotMutateRuntimeState(t *testing.T) {
 	root := planningFixture(t)
 
@@ -212,6 +597,47 @@ func TestRunPlanDoesNotMutateRuntimeState(t *testing.T) {
 	}
 	if !strings.Contains(output.String(), "Mutation Boundary") {
 		t.Fatalf("planning output missing mutation boundary:\n%s", output.String())
+	}
+
+	for path, before := range stateFiles {
+		after, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(after) != before {
+			t.Fatalf("%s mutated\nbefore: %s\nafter: %s", path, before, after)
+		}
+	}
+}
+
+func TestRunPlanTaskDraftDoesNotMutateRuntimeState(t *testing.T) {
+	root := planningFixture(t)
+	if err := newPlanningIdeaStore(root).Save([]PlanningIdea{{
+		ID:        "idea-1",
+		Title:     "Review notes persistence",
+		CreatedAt: "2026-06-01T09:00:00Z",
+		Status:    "captured",
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	stateFiles := map[string]string{
+		filepath.Join(root, ".brevity", "tasks.json"):      `[{"slug":"alpha","status":"planned"}]` + "\n",
+		filepath.Join(root, ".brevity", "queue.json"):      `[{"id":"q1","task":"alpha","status":"queued"}]` + "\n",
+		filepath.Join(root, ".brevity", "executions.json"): `[{"id":"e1","task":"alpha","status":"planned"}]` + "\n",
+		filepath.Join(root, ".brevity", "runs.jsonl"):      `{"runId":"r1","slug":"alpha"}` + "\n",
+	}
+	for path, data := range stateFiles {
+		if err := os.WriteFile(path, []byte(data), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	var output strings.Builder
+	if err := RunPlan(context.Background(), strings.NewReader("t\nq\n"), &output, root); err != nil {
+		t.Fatalf("RunPlan returned error: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(root, planningTaskDraftsPath)); err != nil {
+		t.Fatalf("task draft store was not created: %v", err)
 	}
 
 	for path, before := range stateFiles {
