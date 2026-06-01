@@ -36,6 +36,40 @@ type reviewGitSummary struct {
 	inspectionError string
 }
 
+type reviewCommandRunner interface {
+	Run(ctx context.Context, name string, args ...string) reviewCommandOutput
+}
+
+type reviewCommandOutput struct {
+	Stdout   string
+	Stderr   string
+	ExitCode int
+	Err      error
+	TimedOut bool
+}
+
+type execReviewCommandRunner struct{}
+
+type reviewDiffView struct {
+	task     contracts.TaskSummary
+	worktree string
+	loading  bool
+	result   reviewDiffResult
+	scroll   int
+}
+
+type reviewDiffResult struct {
+	task           string
+	worktree       string
+	changedFiles   []string
+	stat           string
+	stagedCount    int
+	unstagedCount  int
+	untrackedCount int
+	errorMessage   string
+	commands       [][]string
+}
+
 type reviewFileFocus struct {
 	code    int
 	tests   int
@@ -87,6 +121,9 @@ func (model Model) renderReviewLoadingView() string {
 }
 
 func (model Model) renderReviewBody() string {
+	if model.reviewDiff != nil {
+		return model.renderReviewDiffBody()
+	}
 	candidate, ok := model.selectedReviewCandidate()
 	var output strings.Builder
 	if !ok {
@@ -101,7 +138,7 @@ func (model Model) renderReviewBody() string {
 	}
 
 	task := candidate.task
-	git := inspectReviewGit(taskWorktreePath(task))
+	git := model.inspectReviewGit(taskWorktreePath(task))
 	renderSection(&output, "Decision")
 	output.WriteString(model.reviewDetail("next action", reviewNextAction(candidate, git)))
 	output.WriteString(model.reviewWrappedDetail("why", candidate.reason))
@@ -166,12 +203,20 @@ func (model Model) renderReviewBody() string {
 }
 
 func inspectReviewGit(worktree string) reviewGitSummary {
+	return inspectReviewGitWithRunner(execReviewCommandRunner{}, worktree)
+}
+
+func (model Model) inspectReviewGit(worktree string) reviewGitSummary {
+	return inspectReviewGitWithRunner(model.reviewCommandRunner(), worktree)
+}
+
+func inspectReviewGitWithRunner(runner reviewCommandRunner, worktree string) reviewGitSummary {
 	worktree = strings.TrimSpace(worktree)
 	if worktree == "" {
 		return reviewGitSummary{inspectionError: "worktree path is unavailable"}
 	}
-	statusOutput, statusErr := runReviewGit(worktree, "status", "--short", "--branch")
-	diffOutput, diffErr := runReviewGit(worktree, "diff", "--stat", "--compact-summary")
+	statusOutput, statusErr := runReviewGitWithRunner(runner, worktree, "status", "--short", "--branch")
+	diffOutput, diffErr := runReviewGitWithRunner(runner, worktree, "diff", "--stat", "--compact-summary")
 	if statusErr != nil {
 		return reviewGitSummary{inspectionError: statusErr.Error()}
 	}
@@ -273,22 +318,53 @@ func reviewGitCounts(lines []string) (staged int, modified int, deleted int, unt
 }
 
 func runReviewGit(worktree string, args ...string) (string, error) {
+	return runReviewGitWithRunner(execReviewCommandRunner{}, worktree, args...)
+}
+
+func runReviewGitWithRunner(runner reviewCommandRunner, worktree string, args ...string) (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), reviewGitTimeout)
 	defer cancel()
 	fullArgs := append([]string{"-C", worktree}, args...)
-	cmd := exec.CommandContext(ctx, "git", fullArgs...)
-	output, err := cmd.CombinedOutput()
-	if ctx.Err() == context.DeadlineExceeded {
+	result := runner.Run(ctx, "git", fullArgs...)
+	if result.TimedOut || ctx.Err() == context.DeadlineExceeded {
 		return "", fmt.Errorf("git inspection timed out")
 	}
-	if err != nil {
-		message := strings.TrimSpace(string(output))
+	if result.Err != nil || result.ExitCode != 0 {
+		message := strings.TrimSpace(firstNonEmpty(result.Stderr, result.Stdout))
 		if message == "" {
-			message = err.Error()
+			if result.Err != nil {
+				message = result.Err.Error()
+			} else {
+				message = fmt.Sprintf("git exited with code %d", result.ExitCode)
+			}
 		}
 		return "", errors.New(message)
 	}
-	return string(output), nil
+	return result.Stdout, nil
+}
+
+func (execReviewCommandRunner) Run(ctx context.Context, name string, args ...string) reviewCommandOutput {
+	cmd := exec.CommandContext(ctx, name, args...)
+	output, err := cmd.CombinedOutput()
+	result := reviewCommandOutput{Stdout: string(output)}
+	if ctx.Err() == context.DeadlineExceeded {
+		result.ExitCode = 1
+		result.TimedOut = true
+		result.Err = ctx.Err()
+		return result
+	}
+	if err != nil {
+		result.ExitCode = 1
+		result.Err = err
+	}
+	return result
+}
+
+func (model Model) reviewCommandRunner() reviewCommandRunner {
+	if model.reviewRunner != nil {
+		return model.reviewRunner
+	}
+	return execReviewCommandRunner{}
 }
 
 func reviewNextAction(candidate reviewCandidate, git reviewGitSummary) string {
@@ -419,8 +495,8 @@ func reviewActionBar(candidate reviewCandidate, task contracts.TaskSummary, git 
 	return []string{
 		"s status      inspect       git -C " + worktree + " status",
 		"d diff        inspect       git -C " + worktree + " diff",
-		"o explorer    external      open " + worktree,
-		"e editor      external      code " + worktree,
+		"o editor      external      code " + worktree,
+		"e explorer    external      open " + worktree,
 		"a approve     " + padRight(approveState, 15) + "approval gate for " + slug,
 		"x reject      available     capture rejection notes for " + slug,
 		"m merge prep  " + padRight(mergeState, 15) + "brevity task merge " + slug + " --plan",
@@ -440,20 +516,170 @@ func (model Model) reviewCommandForKey(key string) (ActionDescriptor, reviewComm
 	case "s":
 		return reviewAction("Git status"), model.reviewExecCommand("Git status", "git", "-C", worktree, "status"), worktree != ""
 	case "d":
-		return reviewAction("Git diff"), model.reviewExecCommand("Git diff", "git", "-C", worktree, "diff"), worktree != ""
+		return ActionDescriptor{}, nil, false
 	case "o":
-		return reviewAction("Open worktree"), model.reviewStartCommand("Open worktree", "explorer", worktree), worktree != ""
-	case "e":
 		return reviewAction("Open editor"), model.reviewStartCommand("Open editor", "code", worktree), worktree != ""
+	case "e":
+		return reviewAction("Open worktree"), model.reviewStartCommand("Open worktree", "explorer", worktree), worktree != ""
 	case "a":
-		return reviewAction("Approve review"), model.reviewSyntheticCommand("Approve review", reviewApprovalOutput(candidate, task, inspectReviewGit(worktree))), true
+		return reviewAction("Approve review"), model.reviewSyntheticCommand("Approve review", reviewApprovalOutput(candidate, task, model.inspectReviewGit(worktree))), true
 	case "x":
 		return reviewAction("Reject review"), model.reviewSyntheticCommand("Reject review", reviewRejectionOutput(task)), true
 	case "m":
-		return reviewAction("Merge prep"), model.reviewSyntheticCommand("Merge prep", strings.Join(reviewMergePrepOutput(candidate, task, inspectReviewGit(worktree)), "\n")), true
+		return reviewAction("Merge prep"), model.reviewSyntheticCommand("Merge prep", strings.Join(reviewMergePrepOutput(candidate, task, model.inspectReviewGit(worktree)), "\n")), true
 	default:
 		return ActionDescriptor{}, nil, false
 	}
+}
+
+func (model *Model) openReviewDiff() tea.Cmd {
+	candidate, ok := model.selectedReviewCandidate()
+	if !ok {
+		return nil
+	}
+	task := candidate.task
+	worktree := strings.TrimSpace(taskWorktreePath(task))
+	model.reviewDiff = &reviewDiffView{
+		task:     task,
+		worktree: worktree,
+		loading:  worktree != "",
+		result: reviewDiffResult{
+			task:     fallback(task.Slug, "(unknown)"),
+			worktree: fallback(worktree, "(unknown)"),
+		},
+	}
+	if worktree == "" {
+		model.reviewDiff.result.errorMessage = "worktree path is unavailable; diff view is disabled"
+		return nil
+	}
+	return model.reviewDiffCmd()
+}
+
+func (model Model) reviewDiffCmd() tea.Cmd {
+	if model.reviewDiff == nil {
+		return nil
+	}
+	view := *model.reviewDiff
+	if strings.TrimSpace(view.worktree) == "" {
+		return func() tea.Msg {
+			return reviewDiffLoadedMsg{result: reviewDiffResult{
+				task:         fallback(view.task.Slug, "(unknown)"),
+				worktree:     "(unknown)",
+				errorMessage: "worktree path is unavailable; diff view is disabled",
+			}}
+		}
+	}
+	runner := model.reviewCommandRunner()
+	return func() tea.Msg {
+		return reviewDiffLoadedMsg{result: loadReviewDiff(runner, view.task, view.worktree)}
+	}
+}
+
+func loadReviewDiff(runner reviewCommandRunner, task contracts.TaskSummary, worktree string) reviewDiffResult {
+	result := reviewDiffResult{
+		task:     fallback(task.Slug, "(unknown)"),
+		worktree: worktree,
+		commands: [][]string{
+			{"git", "-C", worktree, "status", "--porcelain"},
+			{"git", "-C", worktree, "diff", "--stat"},
+		},
+	}
+	statusOutput, statusErr := runReviewGitWithRunner(runner, worktree, "status", "--porcelain")
+	if statusErr != nil {
+		result.errorMessage = statusErr.Error()
+		return result
+	}
+	lines := nonEmptyGitStatusLines(statusOutput)
+	result.changedFiles = reviewChangedFilePaths(lines)
+	result.stagedCount, result.unstagedCount, result.untrackedCount = reviewDiffCounts(lines)
+	statOutput, statErr := runReviewGitWithRunner(runner, worktree, "diff", "--stat")
+	if statErr != nil {
+		result.errorMessage = statErr.Error()
+		return result
+	}
+	result.stat = strings.TrimSpace(statOutput)
+	if result.stat == "" {
+		result.stat = "(no unstaged diff)"
+	}
+	return result
+}
+
+func reviewChangedFilePaths(lines []string) []string {
+	paths := make([]string, 0, len(lines))
+	for _, line := range lines {
+		path := reviewGitStatusPath(line)
+		if path != "" {
+			paths = append(paths, path)
+		}
+	}
+	return paths
+}
+
+func reviewDiffCounts(lines []string) (staged int, unstaged int, untracked int) {
+	for _, line := range lines {
+		if strings.HasPrefix(line, "??") {
+			untracked++
+			continue
+		}
+		if len(line) < 2 {
+			continue
+		}
+		if line[0] != ' ' {
+			staged++
+		}
+		if line[1] != ' ' {
+			unstaged++
+		}
+	}
+	return staged, unstaged, untracked
+}
+
+func (model Model) renderReviewDiffBody() string {
+	view := model.reviewDiff
+	if view == nil {
+		return ""
+	}
+	result := view.result
+	lines := []string{
+		"  Task: " + fallback(result.task, fallback(view.task.Slug, "(unknown)")),
+		"  Worktree: " + fallback(result.worktree, fallback(view.worktree, "(unknown)")),
+		"",
+		"  Files changed:",
+	}
+	if view.loading {
+		lines = append(lines, "  loading diff summary...")
+	} else if len(result.changedFiles) == 0 {
+		lines = append(lines, "  - (none)")
+	} else {
+		for _, file := range result.changedFiles {
+			lines = append(lines, "  - "+file)
+		}
+	}
+	lines = append(lines,
+		"",
+		"  Counts:",
+		fmt.Sprintf("  staged=%d unstaged=%d untracked=%d", result.stagedCount, result.unstagedCount, result.untrackedCount),
+		"",
+		"  Stat:",
+	)
+	if view.loading {
+		lines = append(lines, "  (loading)")
+	} else if strings.TrimSpace(result.stat) != "" {
+		for _, line := range strings.Split(strings.ReplaceAll(result.stat, "\r\n", "\n"), "\n") {
+			lines = append(lines, "  "+line)
+		}
+	} else {
+		lines = append(lines, "  (empty)")
+	}
+	if strings.TrimSpace(result.errorMessage) != "" {
+		lines = append(lines, "", "  Error:", "  "+result.errorMessage)
+	}
+	lines = append(lines,
+		"",
+		"  Actions:",
+		"  [d] refresh diff  [s] status  [b] back  [o] code  [e] explorer  [q] quit",
+	)
+	return model.renderScrollablePanel("DIFF SUMMARY", lines, view.scroll, detailTruncatedIndicator)
 }
 
 func reviewAction(label string) ActionDescriptor {

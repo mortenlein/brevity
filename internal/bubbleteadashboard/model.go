@@ -47,6 +47,10 @@ type commandResultMsg struct {
 	result pscontract.ExecutionResult
 }
 
+type reviewDiffLoadedMsg struct {
+	result reviewDiffResult
+}
+
 type commandStatus string
 
 const (
@@ -108,6 +112,8 @@ type Model struct {
 	source          string
 	reviewMode      bool
 	reviewSelected  int
+	reviewDiff      *reviewDiffView
+	reviewRunner    reviewCommandRunner
 }
 
 func NewModel(client runtimeclient.Client, refreshInterval time.Duration) Model {
@@ -260,6 +266,13 @@ func (model Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return model, func() tea.Msg { return refreshStartedMsg{} }
 		}
 		return model, nil
+	case reviewDiffLoadedMsg:
+		if model.reviewDiff != nil {
+			model.reviewDiff.loading = false
+			model.reviewDiff.result = msg.result
+			model.reviewDiff.scroll = 0
+		}
+		return model, nil
 	default:
 		return model, nil
 	}
@@ -267,6 +280,67 @@ func (model Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 func (model Model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if model.reviewMode {
+		if model.reviewDiff != nil {
+			if model.commandRun != nil {
+				switch msg.String() {
+				case "esc", "q":
+					if model.commandRun.status.isActive() {
+						return model, nil
+					}
+					model.commandRun = nil
+					return model, nil
+				case "j", "down":
+					model.commandRun.scroll++
+					return model, nil
+				case "k", "up":
+					if model.commandRun.scroll > 0 {
+						model.commandRun.scroll--
+					}
+					return model, nil
+				case "home":
+					model.commandRun.scroll = 0
+					return model, nil
+				case "end":
+					model.commandRun.scroll = maxInt
+					return model, nil
+				default:
+					return model, nil
+				}
+			}
+			switch msg.String() {
+			case "b", "esc":
+				model.reviewDiff = nil
+				return model, nil
+			case "q", "ctrl+c":
+				return model, tea.Quit
+			case "d":
+				model.reviewDiff.loading = strings.TrimSpace(model.reviewDiff.worktree) != ""
+				return model, model.reviewDiffCmd()
+			case "s", "o", "e", "a", "x", "m":
+				action, cmd, ok := model.reviewCommandForKey(msg.String())
+				if !ok {
+					return model, nil
+				}
+				model.startCommandRun(action)
+				return model, cmd(model.commandRun.id)
+			case "j", "down":
+				model.reviewDiff.scroll++
+				return model, nil
+			case "k", "up":
+				if model.reviewDiff.scroll > 0 {
+					model.reviewDiff.scroll--
+				}
+				return model, nil
+			case "home":
+				model.reviewDiff.scroll = 0
+				return model, nil
+			case "end":
+				model.reviewDiff.scroll = maxInt
+				return model, nil
+			default:
+				return model, nil
+			}
+		}
 		if model.commandRun != nil {
 			switch msg.String() {
 			case "esc":
@@ -316,7 +390,10 @@ func (model Model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		case "p", "shift+tab":
 			model.moveReviewSelection(-1)
 			return model, nil
-		case "s", "d", "o", "e", "a", "x", "m":
+		case "d":
+			cmd := model.openReviewDiff()
+			return model, cmd
+		case "s", "o", "e", "a", "x", "m":
 			action, cmd, ok := model.reviewCommandForKey(msg.String())
 			if !ok {
 				return model, nil
@@ -2277,10 +2354,13 @@ func (model Model) renderFooter() string {
 	controls := "up/down or j/k move | r refresh | p actions | d details | q quit | ? help"
 	compactControls := "j/k r p d q quit ? help"
 	if model.reviewMode {
-		controls = "n/p queue | s status | d diff | o explorer | e editor | a approve | x reject | m merge prep | r refresh | q quit"
+		controls = "n/p queue | s status | d diff | o editor | e explorer | a approve | x reject | m merge prep | r refresh | q quit"
 		compactControls = "n/p s d o e a x m r q"
 	}
-	if model.commandRun != nil {
+	if model.reviewDiff != nil {
+		controls = "d refresh diff | s status | b back | o editor | e explorer | q quit | j/k scroll"
+		compactControls = "d refresh | b back | q"
+	} else if model.commandRun != nil {
 		if model.commandRun.status.isActive() {
 			controls = "command running | q/esc wait | read-only"
 			compactControls = "running | wait"

@@ -1,6 +1,7 @@
 package bubbleteadashboard
 
 import (
+	"context"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -165,7 +166,8 @@ func TestReviewWorkspaceCommandRendering(t *testing.T) {
 		"brevity cmux --review review-me",
 		"s status      inspect       git -C C:\\repo\\worktrees\\active\\review-me status",
 		"d diff        inspect       git -C C:\\repo\\worktrees\\active\\review-me diff",
-		"o explorer    external      open C:\\repo\\worktrees\\active\\review-me",
+		"o editor      external      code C:\\repo\\worktrees\\active\\review-me",
+		"e explorer    external      open C:\\repo\\worktrees\\active\\review-me",
 		"a approve     inspect first  approval gate for review-me",
 		"x reject      available     capture rejection notes for review-me",
 		"git -C C:\\repo\\worktrees\\active\\review-me status",
@@ -253,6 +255,40 @@ func runReviewTestGit(t *testing.T, dir string, args ...string) {
 	}
 }
 
+type fakeReviewRunner struct {
+	calls     [][]string
+	responses map[string]reviewCommandOutput
+}
+
+func (runner *fakeReviewRunner) Run(_ context.Context, name string, args ...string) reviewCommandOutput {
+	call := append([]string{name}, args...)
+	runner.calls = append(runner.calls, call)
+	if runner.responses == nil {
+		return reviewCommandOutput{}
+	}
+	if response, ok := runner.responses[strings.Join(call, "\x00")]; ok {
+		return response
+	}
+	return reviewCommandOutput{ExitCode: 127, Err: exec.ErrNotFound}
+}
+
+func equalStringSlices2D(a [][]string, b [][]string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if len(a[i]) != len(b[i]) {
+			return false
+		}
+		for j := range a[i] {
+			if a[i][j] != b[i][j] {
+				return false
+			}
+		}
+	}
+	return true
+}
+
 func TestReviewWorkspaceDoesNotMutateRuntimeFilesOrBridge(t *testing.T) {
 	dir := t.TempDir()
 	queueFile := dir + string(os.PathSeparator) + "runtime-queue.json"
@@ -323,18 +359,19 @@ func TestReviewWorkspaceKeyboardActionsOpenCommandPanels(t *testing.T) {
 	model = updated.(Model)
 	output := plainView(model.View())
 	for _, want := range []string{
-		"Review Action",
-		"action        Git diff",
-		"outcome       completed",
-		"next          approve, reject, or run merge prep after human diff review",
+		"DIFF SUMMARY",
+		"Task: keyboard-task",
+		"Files changed:",
+		"Stat:",
 		"main.go",
+		"[d] refresh diff",
 	} {
 		if !strings.Contains(output, want) {
 			t.Fatalf("review diff command output missing %q:\n%s", want, output)
 		}
 	}
 
-	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("b")})
 	model = updated.(Model)
 	updated, cmd = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("m")})
 	model = updated.(Model)
@@ -356,6 +393,116 @@ func TestReviewWorkspaceKeyboardActionsOpenCommandPanels(t *testing.T) {
 		if !strings.Contains(output, want) {
 			t.Fatalf("merge prep command output missing %q:\n%s", want, output)
 		}
+	}
+}
+
+func TestReviewWorkspaceDiffViewUsesFakeRunnerAndShowsStat(t *testing.T) {
+	state := emptyBubbleState()
+	task := reviewTask("diff-task", "ready-for-review", "completed", "succeeded")
+	task.WorktreePath = `C:\repo\worktrees\active\diff-task`
+	state.Tasks = []contracts.TaskSummary{task}
+	runner := &fakeReviewRunner{responses: map[string]reviewCommandOutput{
+		"git\x00-C\x00" + task.WorktreePath + "\x00status\x00--porcelain": {Stdout: " M src/foo.go\nA  internal/bar_test.go\n?? docs/note.md\n"},
+		"git\x00-C\x00" + task.WorktreePath + "\x00diff\x00--stat":        {Stdout: " src/foo.go | 2 ++\n 1 file changed, 2 insertions(+)\n"},
+	}}
+	model := reviewTestModel(state, 44)
+	model.reviewRunner = runner
+
+	updated, cmd := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("d")})
+	model = updated.(Model)
+	if cmd == nil {
+		t.Fatal("diff view returned nil command")
+	}
+	updated, _ = model.Update(cmd())
+	model = updated.(Model)
+
+	output := plainView(model.View())
+	for _, want := range []string{
+		"DIFF SUMMARY",
+		"Task: diff-task",
+		"- src/foo.go",
+		"- internal/bar_test.go",
+		"- docs/note.md",
+		"staged=1 unstaged=1 untracked=1",
+		"src/foo.go | 2 ++",
+	} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("diff view missing %q:\n%s", want, output)
+		}
+	}
+	assertLinesWithinWidth(t, output, model.width)
+	wantCommands := [][]string{
+		{"git", "-C", task.WorktreePath, "status", "--porcelain"},
+		{"git", "-C", task.WorktreePath, "diff", "--stat"},
+	}
+	if got := runner.calls; !equalStringSlices2D(got, wantCommands) {
+		t.Fatalf("commands = %#v, want %#v", got, wantCommands)
+	}
+}
+
+func TestReviewWorkspaceDiffViewRendersErrorsClearly(t *testing.T) {
+	state := emptyBubbleState()
+	task := reviewTask("bad-diff", "ready-for-review", "completed", "succeeded")
+	state.Tasks = []contracts.TaskSummary{task}
+	runner := &fakeReviewRunner{responses: map[string]reviewCommandOutput{
+		"git\x00-C\x00" + task.WorktreePath + "\x00status\x00--porcelain": {Stderr: "fatal: not a git repository", ExitCode: 128},
+	}}
+	model := reviewTestModel(state, 90)
+	model.reviewRunner = runner
+
+	updated, cmd := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("d")})
+	model = updated.(Model)
+	updated, _ = model.Update(cmd())
+	model = updated.(Model)
+
+	output := plainView(model.View())
+	for _, want := range []string{"DIFF SUMMARY", "Error:", "fatal: not a git repository"} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("diff error missing %q:\n%s", want, output)
+		}
+	}
+}
+
+func TestReviewWorkspaceMissingWorktreeDisablesDiffGracefully(t *testing.T) {
+	state := emptyBubbleState()
+	task := reviewTask("missing-worktree", "ready-for-review", "completed", "succeeded")
+	task.WorktreePath = ""
+	state.Tasks = []contracts.TaskSummary{task}
+	runner := &fakeReviewRunner{}
+	model := reviewTestModel(state, 80)
+	model.reviewRunner = runner
+
+	updated, cmd := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("d")})
+	model = updated.(Model)
+	if cmd != nil {
+		t.Fatal("missing worktree returned command")
+	}
+	output := plainView(model.View())
+	if !strings.Contains(output, "worktree path is unavailable; diff view is disabled") {
+		t.Fatalf("missing worktree message not rendered:\n%s", output)
+	}
+	if len(runner.calls) != 0 {
+		t.Fatalf("runner called for missing worktree: %#v", runner.calls)
+	}
+}
+
+func TestReviewWorkspaceDiffBackReturnsToReviewQueue(t *testing.T) {
+	state := emptyBubbleState()
+	state.Tasks = []contracts.TaskSummary{reviewTask("back-task", "ready-for-review", "completed", "succeeded")}
+	model := reviewTestModel(state, 90)
+
+	updated, cmd := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("d")})
+	model = updated.(Model)
+	if cmd != nil {
+		updated, _ = model.Update(cmd())
+		model = updated.(Model)
+	}
+	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("b")})
+	model = updated.(Model)
+
+	output := plainView(model.View())
+	if strings.Contains(output, "DIFF SUMMARY") || !strings.Contains(output, "Review Queue") {
+		t.Fatalf("back did not return to review workspace:\n%s", output)
 	}
 }
 
