@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os/exec"
+	"sort"
 	"strings"
 	"time"
 
@@ -28,6 +29,7 @@ type reviewGitSummary struct {
 	diffLine        string
 	branchLine      string
 	changedFiles    []string
+	fileChanges     []reviewFileChange
 	fileFocus       reviewFileFocus
 	stagedCount     int
 	modifiedCount   int
@@ -76,6 +78,13 @@ type reviewFileFocus struct {
 	docs    int
 	config  int
 	unknown int
+}
+
+type reviewFileChange struct {
+	status   string
+	path     string
+	category string
+	priority int
 }
 
 func (model Model) reviewView() string {
@@ -144,6 +153,7 @@ func (model Model) renderReviewBody() string {
 	output.WriteString(model.reviewWrappedDetail("why", candidate.reason))
 	output.WriteString(model.reviewDetail("confidence", reviewConfidence(candidate, git)))
 	output.WriteString(model.reviewDetail("merge gate", reviewMergeGate(candidate, git)))
+	output.WriteString(model.reviewDetail("readiness", reviewReadinessLine(candidate, git)))
 
 	output.WriteString("\n")
 	renderSection(&output, "Review Queue")
@@ -168,14 +178,22 @@ func (model Model) renderReviewBody() string {
 	output.WriteString(model.reviewDetail("review focus", reviewFocusLine(git)))
 	output.WriteString(model.reviewWrappedDetail("attention", reviewFocusGuidance(git)))
 	output.WriteString(model.reviewDetail("diff summary", fallback(git.diffLine, "(unknown)")))
-	for _, file := range firstNStrings(git.changedFiles, 5) {
-		output.WriteString(model.renderLine("  "+file) + "\n")
-	}
-	if len(git.changedFiles) > 5 {
-		output.WriteString(model.renderLine(fmt.Sprintf("  ... %d more files", len(git.changedFiles)-5)) + "\n")
-	}
 	if git.inspectionError != "" {
 		output.WriteString(model.reviewWrappedDetail("inspection", git.inspectionError))
+	}
+
+	output.WriteString("\n")
+	renderSection(&output, "Changed Files")
+	output.WriteString(model.reviewDetail("file counts", reviewFileCountsLine(git)))
+	output.WriteString(model.reviewDetail("groups", reviewFocusLine(git)))
+	for _, line := range reviewFileBrowserLines(git, 8) {
+		output.WriteString(model.renderLine("  "+line) + "\n")
+	}
+
+	output.WriteString("\n")
+	renderSection(&output, "File Detail")
+	for _, line := range reviewSelectedFileDetailLines(git) {
+		output.WriteString(model.renderLine("  "+line) + "\n")
 	}
 
 	output.WriteString("\n")
@@ -227,6 +245,7 @@ func inspectReviewGitWithRunner(runner reviewCommandRunner, worktree string) rev
 		lines = lines[1:]
 	}
 	summary.changedFiles = lines
+	summary.fileChanges = reviewFileChanges(lines)
 	summary.stagedCount, summary.modifiedCount, summary.deletedCount, summary.untrackedCount = reviewGitCounts(lines)
 	summary.fileFocus = reviewFileFocusCounts(lines)
 	switch len(lines) {
@@ -270,6 +289,47 @@ func reviewFileFocusCounts(lines []string) reviewFileFocus {
 		}
 	}
 	return focus
+}
+
+func reviewFileChanges(lines []string) []reviewFileChange {
+	changes := make([]reviewFileChange, 0, len(lines))
+	for _, line := range lines {
+		path := reviewGitStatusPath(line)
+		if path == "" {
+			continue
+		}
+		status := reviewGitStatusCode(line)
+		category, priority := reviewFileCategory(path)
+		changes = append(changes, reviewFileChange{status: status, path: path, category: category, priority: priority})
+	}
+	return changes
+}
+
+func reviewGitStatusCode(line string) string {
+	line = strings.TrimRight(line, "\r")
+	if strings.HasPrefix(line, "??") {
+		return "??"
+	}
+	if len(line) < 2 {
+		return "??"
+	}
+	return strings.TrimSpace(line[:2])
+}
+
+func reviewFileCategory(path string) (string, int) {
+	lower := strings.ToLower(path)
+	switch {
+	case strings.Contains(lower, "_test.") || strings.Contains(lower, ".test.") || strings.Contains(lower, ".spec.") || strings.Contains(lower, "/test/") || strings.Contains(lower, "\\test\\") || strings.Contains(lower, "/tests/") || strings.Contains(lower, "\\tests\\"):
+		return "tests", 2
+	case strings.HasSuffix(lower, ".go") || strings.HasSuffix(lower, ".ps1") || strings.HasSuffix(lower, ".js") || strings.HasSuffix(lower, ".ts") || strings.HasSuffix(lower, ".tsx") || strings.HasSuffix(lower, ".jsx") || strings.HasSuffix(lower, ".py") || strings.HasSuffix(lower, ".cs") || strings.HasSuffix(lower, ".rs"):
+		return "code", 1
+	case strings.HasSuffix(lower, ".json") || strings.HasSuffix(lower, ".yaml") || strings.HasSuffix(lower, ".yml") || strings.HasSuffix(lower, ".toml") || strings.HasSuffix(lower, ".mod") || strings.HasSuffix(lower, ".sum") || strings.HasPrefix(lower, ".github/") || strings.HasPrefix(lower, ".github\\"):
+		return "config", 3
+	case strings.HasSuffix(lower, ".md") || strings.HasSuffix(lower, ".txt") || strings.HasPrefix(lower, "docs/") || strings.HasPrefix(lower, "docs\\"):
+		return "docs", 4
+	default:
+		return "other", 5
+	}
 }
 
 func reviewGitStatusPath(line string) string {
@@ -409,6 +469,25 @@ func reviewMergeGate(candidate reviewCandidate, git reviewGitSummary) string {
 	return "ready for merge prep after human approval"
 }
 
+func reviewReadinessLine(candidate reviewCandidate, git reviewGitSummary) string {
+	if len(candidate.blockers) > 0 {
+		return fmt.Sprintf("blocked (%d)", len(candidate.blockers))
+	}
+	if !git.available {
+		return "needs worktree inspection"
+	}
+	if len(git.changedFiles) == 0 {
+		return "needs run-output review"
+	}
+	if git.untrackedCount > 0 {
+		return "reviewable with untracked-file caution"
+	}
+	if git.fileFocus.code > 0 && git.fileFocus.tests == 0 {
+		return "reviewable; test coverage needs attention"
+	}
+	return "reviewable; merge prep gated by human approval"
+}
+
 func reviewChangeMix(git reviewGitSummary) string {
 	if !git.available {
 		return "(unknown)"
@@ -480,6 +559,110 @@ func reviewFocusGuidance(git reviewGitSummary) string {
 	return "review code and tests together before approval"
 }
 
+func reviewFileCountsLine(git reviewGitSummary) string {
+	if !git.available {
+		return "(unknown)"
+	}
+	if len(git.changedFiles) == 0 {
+		return "0 changed"
+	}
+	return fmt.Sprintf("%d total | %d staged | %d modified | %d deleted | %d untracked", len(git.changedFiles), git.stagedCount, git.modifiedCount, git.deletedCount, git.untrackedCount)
+}
+
+func reviewFileBrowserLines(git reviewGitSummary, limit int) []string {
+	if !git.available {
+		return []string{"(git inspection unavailable)"}
+	}
+	if len(git.fileChanges) == 0 {
+		return []string{"(no changed files)"}
+	}
+	changes := append([]reviewFileChange{}, git.fileChanges...)
+	sortReviewFileChanges(changes)
+	if limit < 0 {
+		limit = 0
+	}
+	lines := make([]string, 0, minInt(len(changes), limit)+1)
+	for index, change := range changes {
+		if index >= limit {
+			break
+		}
+		lines = append(lines, fmt.Sprintf("%-6s %-7s %s", change.category, fallback(change.status, "??"), change.path))
+	}
+	if len(changes) > limit {
+		lines = append(lines, fmt.Sprintf("... %d more files; press d for the full diff summary", len(changes)-limit))
+	}
+	return lines
+}
+
+func reviewSelectedFileDetailLines(git reviewGitSummary) []string {
+	if !git.available {
+		return []string{"status          unavailable", "next            inspect worktree path before file review"}
+	}
+	if len(git.fileChanges) == 0 {
+		return []string{"status          no changed file selected", "next            inspect latest run output before approval"}
+	}
+	changes := append([]reviewFileChange{}, git.fileChanges...)
+	sortReviewFileChanges(changes)
+	change := changes[0]
+	return []string{
+		"selected        " + change.path,
+		"status          " + reviewFileStatusLabel(change.status),
+		"type            " + change.category,
+		"next            " + reviewFileNextStep(change),
+	}
+}
+
+func sortReviewFileChanges(changes []reviewFileChange) {
+	sort.SliceStable(changes, func(i, j int) bool {
+		if changes[i].priority != changes[j].priority {
+			return changes[i].priority < changes[j].priority
+		}
+		return strings.ToLower(changes[i].path) < strings.ToLower(changes[j].path)
+	})
+}
+
+func reviewFileStatusLabel(status string) string {
+	switch status {
+	case "??":
+		return "untracked"
+	case "A":
+		return "added"
+	case "M":
+		return "modified"
+	case "D":
+		return "deleted"
+	default:
+		if strings.Contains(status, "A") {
+			return "added"
+		}
+		if strings.Contains(status, "D") {
+			return "deleted"
+		}
+		if strings.Contains(status, "M") {
+			return "modified"
+		}
+		return fallback(status, "changed")
+	}
+}
+
+func reviewFileNextStep(change reviewFileChange) string {
+	if change.status == "??" {
+		return "decide whether the new file belongs in the merge"
+	}
+	switch change.category {
+	case "code":
+		return "inspect implementation diff and matching tests"
+	case "tests":
+		return "verify coverage matches changed behavior"
+	case "config":
+		return "verify runtime and CI impact"
+	case "docs":
+		return "check that docs match the implemented behavior"
+	default:
+		return "inspect file before approval"
+	}
+}
+
 func reviewActionBar(candidate reviewCandidate, task contracts.TaskSummary, git reviewGitSummary) []string {
 	slug := fallback(task.Slug, "<task>")
 	worktree := fallback(taskWorktreePath(task), "<worktree>")
@@ -494,7 +677,7 @@ func reviewActionBar(candidate reviewCandidate, task contracts.TaskSummary, git 
 	}
 	return []string{
 		"s status      inspect       git -C " + worktree + " status",
-		"d diff        inspect       git -C " + worktree + " diff",
+		"d diff        inspect       changed files + diff stat",
 		"o editor      external      code " + worktree,
 		"e explorer    external      open " + worktree,
 		"a approve     " + padRight(approveState, 15) + "approval gate for " + slug,
@@ -925,6 +1108,13 @@ func firstNStrings(values []string, count int) []string {
 		return values
 	}
 	return values[:count]
+}
+
+func minInt(a int, b int) int {
+	if a < b {
+		return a
+	}
+	return b
 }
 
 func selectReviewCandidate(state contracts.RuntimeState) (reviewCandidate, bool) {

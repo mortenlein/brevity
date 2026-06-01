@@ -43,7 +43,10 @@ func TestReviewWorkspaceCompletedExecutionCandidate(t *testing.T) {
 		"latest run       id=run-1 status=succeeded exit=0",
 		"git status       (unknown)",
 		"merge gate       blocked until worktree is inspected",
+		"readiness        needs worktree inspection",
 		"attention        inspect worktree manually; git summary is unavailable",
+		"Changed Files",
+		"File Detail",
 		"none detected; candidate for review, not a merge verdict",
 	} {
 		if !strings.Contains(output, want) {
@@ -165,7 +168,7 @@ func TestReviewWorkspaceCommandRendering(t *testing.T) {
 	for _, want := range []string{
 		"brevity cmux --review review-me",
 		"s status      inspect       git -C C:\\repo\\worktrees\\active\\review-me status",
-		"d diff        inspect       git -C C:\\repo\\worktrees\\active\\review-me diff",
+		"d diff        inspect       changed files + diff stat",
 		"o editor      external      code C:\\repo\\worktrees\\active\\review-me",
 		"e explorer    external      open C:\\repo\\worktrees\\active\\review-me",
 		"a approve     inspect first  approval gate for review-me",
@@ -190,7 +193,7 @@ func TestReviewWorkspaceWidths(t *testing.T) {
 			model := reviewTestModel(state, width)
 			output := plainView(model.View())
 			assertLinesWithinWidth(t, output, width)
-			for _, want := range []string{"BREVITY REVIEW", "Decision", "Action Bar", "Blockers"} {
+			for _, want := range []string{"BREVITY REVIEW", "Decision", "Changed Files", "File Detail", "Action Bar", "Blockers"} {
 				if !strings.Contains(output, want) {
 					t.Fatalf("width %d missing %q:\n%s", width, want, output)
 				}
@@ -231,14 +234,19 @@ func TestReviewWorkspaceGitInspectionSummary(t *testing.T) {
 		"next action      review diff, then approve or reject",
 		"confidence       ready for human review",
 		"merge gate       caution; untracked files need review",
+		"readiness        reviewable with untracked-file caution",
 		"git status       3 changed files",
 		"change mix       1 modified | 2 untracked",
 		"review focus     1 code | 1 tests | 1 docs",
+		"file counts      3 total | 0 staged | 1 modified | 0 deleted | 2 untracked",
+		"code   M       main.go",
+		"tests  ??      file_test.go",
+		"selected        main.go",
+		"status          modified",
+		"next            inspect implementation diff and matching tests",
 		"attention        untracked files present; decide whether they belong in the merge",
 		"a approve     available      approval gate for git-task",
 		"m merge prep  after approval brevity task merge git-task --plan",
-		"M main.go",
-		"?? new.txt",
 	} {
 		if !strings.Contains(output, want) {
 			t.Fatalf("git inspection output missing %q:\n%s", want, output)
