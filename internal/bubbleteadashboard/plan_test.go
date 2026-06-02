@@ -714,6 +714,7 @@ func TestPlanningReviewHandoffCompletedExecutionRecommendsReview(t *testing.T) {
 		"Execution completed",
 		"Review generated work",
 		"Execution completed successfully and is ready for operator review.",
+		"brevity review review-notes-persistence",
 		"[w] Open Review Workspace",
 		"[v] View Execution",
 		"[b] Back",
@@ -741,15 +742,14 @@ func TestPlanningReviewHandoffFailedExecutionRecommendsFailureReview(t *testing.
 		"Review Handoff",
 		"Execution failed",
 		"Inspect execution failure",
+		"brevity review review-notes-persistence",
+		"[w] Open Review Workspace",
 		"[v] View Execution",
 		"[r] Review Failure Details",
 	} {
 		if !strings.Contains(output, want) {
 			t.Fatalf("failed review handoff missing %q:\n%s", want, output)
 		}
-	}
-	if strings.Contains(output, "[w] Open Review Workspace") {
-		t.Fatalf("failed execution should not show open review workspace action:\n%s", output)
 	}
 }
 
@@ -785,7 +785,7 @@ func TestPlanningReviewHandoffOpenReviewActionWiring(t *testing.T) {
 	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("w")})
 	model = updated.(PlanningModel)
 
-	if !strings.Contains(model.message, "Open review workspace: brevity review") {
+	if !strings.Contains(model.message, "Open review workspace: brevity review review-notes-persistence") {
 		t.Fatalf("message = %q, want review workspace handoff", model.message)
 	}
 	if after := readPlanningFile(t, filepath.Join(root, ".brevity", runtimequeue.FileName)); after != beforeQueue {
@@ -809,6 +809,28 @@ func TestPlanningReviewHandoffFailureReviewActionWiring(t *testing.T) {
 
 	if !strings.Contains(model.message, "Review failure details for execution exec-1.") {
 		t.Fatalf("message = %q, want failure review context", model.message)
+	}
+	if after := readPlanningFile(t, filepath.Join(root, ".brevity", runtimequeue.FileName)); after != beforeQueue {
+		t.Fatalf("queue mutated\nbefore: %s\nafter: %s", beforeQueue, after)
+	}
+	if after := readPlanningFile(t, filepath.Join(root, ".brevity", runtimeexecution.FileName)); after != beforeExecutions {
+		t.Fatalf("executions mutated\nbefore: %s\nafter: %s", beforeExecutions, after)
+	}
+	assertPlanningNoLaunchState(t, root)
+}
+
+func TestPlanningReviewHandoffFailedExecutionOpenReviewActionWiring(t *testing.T) {
+	root := planningActivationFixture(t)
+	model := activatedPlanningModel(t, root)
+	writeCompletedPlanningExecution(t, root, runtimeexecution.StatusFailed)
+	beforeQueue := readPlanningFile(t, filepath.Join(root, ".brevity", runtimequeue.FileName))
+	beforeExecutions := readPlanningFile(t, filepath.Join(root, ".brevity", runtimeexecution.FileName))
+
+	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("w")})
+	model = updated.(PlanningModel)
+
+	if !strings.Contains(model.message, "Open review workspace: brevity review review-notes-persistence") {
+		t.Fatalf("message = %q, want scoped review workspace handoff", model.message)
 	}
 	if after := readPlanningFile(t, filepath.Join(root, ".brevity", runtimequeue.FileName)); after != beforeQueue {
 		t.Fatalf("queue mutated\nbefore: %s\nafter: %s", beforeQueue, after)

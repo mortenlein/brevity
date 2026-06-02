@@ -112,6 +112,9 @@ type Model struct {
 	source          string
 	reviewMode      bool
 	reviewSelected  int
+	reviewTaskSlug  string
+	reviewDecisions reviewDecisionStore
+	reviewNow       func() time.Time
 	reviewDiff      *reviewDiffView
 	reviewRunner    reviewCommandRunner
 }
@@ -132,6 +135,7 @@ func NewModelWithSource(client runtimeclient.Client, refreshInterval time.Durati
 		commandBridge:   RuntimeClientCommandBridge{Client: client},
 		refreshInterval: refreshInterval,
 		source:          source,
+		reviewNow:       time.Now,
 	}
 }
 
@@ -144,8 +148,13 @@ func RunWithSource(ctx context.Context, input io.Reader, stdout io.Writer, clien
 }
 
 func RunReviewWithSource(ctx context.Context, input io.Reader, stdout io.Writer, client runtimeclient.Client, refreshInterval time.Duration, source string) error {
+	return RunReviewWithTaskSource(ctx, input, stdout, client, refreshInterval, source, "")
+}
+
+func RunReviewWithTaskSource(ctx context.Context, input io.Reader, stdout io.Writer, client runtimeclient.Client, refreshInterval time.Duration, source string, taskSlug string) error {
 	model := NewModelWithSource(client, refreshInterval, source)
 	model.reviewMode = true
+	model.reviewTaskSlug = strings.TrimSpace(taskSlug)
 	return runWithModel(ctx, input, stdout, model)
 }
 
@@ -253,6 +262,10 @@ func (model Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		model.lastError = nil
 		model.lastRefresh = msg.at.Format(time.RFC3339)
 		model.selection.Clamp(len(model.selectableItems()))
+		if model.reviewMode {
+			model.applyReviewTaskContext()
+			model.loadReviewDecisions()
+		}
 		return model, nil
 	case tickMsg:
 		cmds := []tea.Cmd{model.tickCmd()}
@@ -316,7 +329,13 @@ func (model Model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			case "d":
 				model.reviewDiff.loading = strings.TrimSpace(model.reviewDiff.worktree) != ""
 				return model, model.reviewDiffCmd()
-			case "s", "o", "e", "a", "x", "m":
+			case "a":
+				return model.persistSelectedReviewDecision(reviewDecisionApproved), nil
+			case "c":
+				return model.persistSelectedReviewDecision(reviewDecisionNeedsChanges), nil
+			case "x":
+				return model.persistSelectedReviewDecision(reviewDecisionRejected), nil
+			case "s", "o", "e", "m":
 				action, cmd, ok := model.reviewCommandForKey(msg.String())
 				if !ok {
 					return model, nil
@@ -393,7 +412,13 @@ func (model Model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		case "d":
 			cmd := model.openReviewDiff()
 			return model, cmd
-		case "s", "o", "e", "a", "x", "m":
+		case "a":
+			return model.persistSelectedReviewDecision(reviewDecisionApproved), nil
+		case "c":
+			return model.persistSelectedReviewDecision(reviewDecisionNeedsChanges), nil
+		case "x":
+			return model.persistSelectedReviewDecision(reviewDecisionRejected), nil
+		case "s", "o", "e", "m":
 			action, cmd, ok := model.reviewCommandForKey(msg.String())
 			if !ok {
 				return model, nil
@@ -2354,8 +2379,8 @@ func (model Model) renderFooter() string {
 	controls := "up/down or j/k move | r refresh | p actions | d details | q quit | ? help"
 	compactControls := "j/k r p d q quit ? help"
 	if model.reviewMode {
-		controls = "n/p queue | s status | d diff | o editor | e explorer | a approve | x reject | m merge prep | r refresh | q quit"
-		compactControls = "n/p s d o e a x m r q"
+		controls = "n/p queue | s status | d diff | o editor | e explorer | a approve | c changes | x reject | m merge prep | r refresh | q quit"
+		compactControls = "n/p s d o e a c x m r q"
 	}
 	if model.reviewDiff != nil {
 		controls = "d refresh diff | s status | b back | o editor | e explorer | q quit | j/k scroll"

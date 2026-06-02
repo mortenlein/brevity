@@ -861,26 +861,26 @@ func finalizeExecutionHandoff(handoff executionHandoff) executionHandoff {
 		case runtimeexecution.StatusCompleted:
 			handoff.NextStep = "Review generated work"
 			handoff.Why = "Execution completed successfully and is ready for operator review."
-			handoff.Commands = []string{"brevity review", "brevity cmux --review " + handoff.Slug, "brevity task status"}
+			handoff.Commands = []string{"brevity review " + handoff.Slug, "brevity cmux --review " + handoff.Slug, "brevity task status"}
 			handoff.Actions = []workflowAction{{Key: "w", Label: "Open Review Workspace"}, {Key: "v", Label: "View Execution"}, {Key: "b", Label: "Back"}}
 			handoff.Review = &reviewHandoff{
 				Status:   "Execution completed",
 				NextStep: "Review generated work",
 				Why:      "Execution completed successfully and is ready for operator review.",
-				Commands: []string{"brevity review", "brevity cmux --review " + handoff.Slug},
+				Commands: []string{"brevity review " + handoff.Slug, "brevity cmux --review " + handoff.Slug},
 				Actions:  []workflowAction{{Key: "w", Label: "Open Review Workspace"}, {Key: "v", Label: "View Execution"}, {Key: "b", Label: "Back"}},
 			}
 		case runtimeexecution.StatusFailed:
 			handoff.NextStep = "Inspect execution failure"
 			handoff.Why = "Execution failed; inspect the failure details before deciding whether any later retry or manual review is appropriate."
-			handoff.Commands = []string{"brevity execution inspect", "brevity review", "brevity execution flow"}
-			handoff.Actions = []workflowAction{{Key: "v", Label: "View Execution"}, {Key: "r", Label: "Review Failure Details"}, {Key: "b", Label: "Back"}}
+			handoff.Commands = []string{"brevity execution inspect", "brevity review " + handoff.Slug, "brevity execution flow"}
+			handoff.Actions = []workflowAction{{Key: "w", Label: "Open Review Workspace"}, {Key: "v", Label: "View Execution"}, {Key: "r", Label: "Review Failure Details"}, {Key: "b", Label: "Back"}}
 			handoff.Review = &reviewHandoff{
 				Status:   "Execution failed",
 				NextStep: "Inspect execution failure",
 				Why:      "Execution failed; inspect failure details before retry or merge decisions.",
-				Commands: []string{"brevity execution inspect", "brevity review"},
-				Actions:  []workflowAction{{Key: "v", Label: "View Execution"}, {Key: "r", Label: "Review Failure Details"}},
+				Commands: []string{"brevity review " + handoff.Slug, "brevity execution inspect"},
+				Actions:  []workflowAction{{Key: "w", Label: "Open Review Workspace"}, {Key: "v", Label: "View Execution"}, {Key: "r", Label: "Review Failure Details"}},
 			}
 		default:
 			handoff.NextStep = "Inspect execution state"
@@ -1104,11 +1104,11 @@ func (model PlanningModel) openReviewWorkspace() PlanningModel {
 		return model
 	}
 	handoff := model.executionHandoff(draft.TaskSlug, active)
-	if handoff.Review == nil || handoff.Execution == nil || !strings.EqualFold(handoff.Execution.Status, runtimeexecution.StatusCompleted) {
-		model.message = "Review workspace opens after completed execution."
+	if handoff.Review == nil || handoff.Execution == nil {
+		model.message = "Review workspace opens after execution handoff."
 		return model
 	}
-	model.message = "Open review workspace: brevity review"
+	model.message = "Open review workspace: brevity review " + strings.TrimSpace(draft.TaskSlug)
 	return model
 }
 

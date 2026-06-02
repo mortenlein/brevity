@@ -2,9 +2,12 @@ package bubbleteadashboard
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -15,6 +18,13 @@ import (
 )
 
 const reviewGitTimeout = 750 * time.Millisecond
+const reviewDecisionsFileName = "review-decisions.json"
+
+const (
+	reviewDecisionApproved     = "approved"
+	reviewDecisionNeedsChanges = "needs-changes"
+	reviewDecisionRejected     = "rejected"
+)
 
 type reviewCandidate struct {
 	task      contracts.TaskSummary
@@ -87,6 +97,22 @@ type reviewFileChange struct {
 	priority int
 }
 
+type reviewDecisionDocument struct {
+	Version   int                       `json:"version"`
+	Reviews   map[string]reviewDecision `json:"reviews"`
+	UpdatedAt string                    `json:"updatedAt,omitempty"`
+}
+
+type reviewDecision struct {
+	Task       string `json:"task"`
+	Status     string `json:"status"`
+	ReviewedAt string `json:"reviewedAt"`
+	Reviewer   string `json:"reviewer,omitempty"`
+	Notes      string `json:"notes,omitempty"`
+}
+
+type reviewDecisionStore map[string]reviewDecision
+
 func (model Model) reviewView() string {
 	if model.usesUltraSmallHeightMode() {
 		return model.renderUltraSmallHeightView()
@@ -138,17 +164,25 @@ func (model Model) renderReviewBody() string {
 	if !ok {
 		renderSection(&output, "Decision")
 		output.WriteString(model.renderLine("  No review candidate yet.") + "\n")
+		if model.hasReviewTaskContext() {
+			output.WriteString(model.reviewDetail("selected task", model.reviewTaskSlug))
+			output.WriteString(model.renderLine("  No matching review candidate was found for this task.") + "\n")
+		}
 		output.WriteString(model.renderLine("  Queue or launch work, then return here.") + "\n")
 		output.WriteString("\n")
 		renderSection(&output, "Commands")
 		output.WriteString(model.renderLine("  brevity queue add <task>") + "\n")
-		output.WriteString(model.renderLine("  brevity --bubble --review") + "\n")
+		output.WriteString(model.renderLine("  brevity review") + "\n")
 		return output.String()
 	}
 
 	task := candidate.task
 	git := model.inspectReviewGit(taskWorktreePath(task))
 	renderSection(&output, "Decision")
+	if model.hasReviewTaskContext() {
+		output.WriteString(model.reviewDetail("selected task", model.reviewTaskContextLine(candidate)))
+	}
+	output.WriteString(model.renderReviewDecisionStatus(task.Slug))
 	output.WriteString(model.reviewDetail("next action", reviewNextAction(candidate, git)))
 	output.WriteString(model.reviewWrappedDetail("why", candidate.reason))
 	output.WriteString(model.reviewDetail("confidence", reviewConfidence(candidate, git)))
@@ -666,13 +700,10 @@ func reviewFileNextStep(change reviewFileChange) string {
 func reviewActionBar(candidate reviewCandidate, task contracts.TaskSummary, git reviewGitSummary) []string {
 	slug := fallback(task.Slug, "<task>")
 	worktree := fallback(taskWorktreePath(task), "<worktree>")
-	approveState := "blocked"
 	mergeState := "blocked"
 	if len(candidate.blockers) == 0 && git.available && len(git.changedFiles) > 0 {
-		approveState = "available"
 		mergeState = "after approval"
 	} else if len(candidate.blockers) == 0 {
-		approveState = "inspect first"
 		mergeState = "inspect first"
 	}
 	return []string{
@@ -680,8 +711,9 @@ func reviewActionBar(candidate reviewCandidate, task contracts.TaskSummary, git 
 		"d diff        inspect       changed files + diff stat",
 		"o editor      external      code " + worktree,
 		"e explorer    external      open " + worktree,
-		"a approve     " + padRight(approveState, 15) + "approval gate for " + slug,
-		"x reject      available     capture rejection notes for " + slug,
+		"a approve     persist       mark " + slug + " approved",
+		"c changes     persist       mark " + slug + " needs-changes",
+		"x reject      persist       mark " + slug + " rejected",
 		"m merge prep  " + padRight(mergeState, 15) + "brevity task merge " + slug + " --plan",
 	}
 }
@@ -704,15 +736,161 @@ func (model Model) reviewCommandForKey(key string) (ActionDescriptor, reviewComm
 		return reviewAction("Open editor"), model.reviewStartCommand("Open editor", "code", worktree), worktree != ""
 	case "e":
 		return reviewAction("Open worktree"), model.reviewStartCommand("Open worktree", "explorer", worktree), worktree != ""
-	case "a":
-		return reviewAction("Approve review"), model.reviewSyntheticCommand("Approve review", reviewApprovalOutput(candidate, task, model.inspectReviewGit(worktree))), true
-	case "x":
-		return reviewAction("Reject review"), model.reviewSyntheticCommand("Reject review", reviewRejectionOutput(task)), true
 	case "m":
 		return reviewAction("Merge prep"), model.reviewSyntheticCommand("Merge prep", strings.Join(reviewMergePrepOutput(candidate, task, model.inspectReviewGit(worktree)), "\n")), true
 	default:
 		return ActionDescriptor{}, nil, false
 	}
+}
+
+func (model Model) renderReviewDecisionStatus(slug string) string {
+	decision, ok := model.reviewDecisionForTask(slug)
+	if !ok {
+		var output strings.Builder
+		output.WriteString(model.reviewDetail("review status", "(none)"))
+		output.WriteString(model.reviewDetail("reviewed", "(not recorded)"))
+		output.WriteString(model.reviewDetail("reviewer", fallback(reviewReviewer(), "(unknown)")))
+		return output.String()
+	}
+	var output strings.Builder
+	output.WriteString(model.reviewDetail("review status", decision.Status))
+	output.WriteString(model.reviewDetail("reviewed", formatReviewTimestamp(decision.ReviewedAt)))
+	output.WriteString(model.reviewDetail("reviewer", fallback(decision.Reviewer, "(unknown)")))
+	if strings.TrimSpace(decision.Notes) != "" {
+		output.WriteString(model.reviewWrappedDetail("decision notes", decision.Notes))
+	}
+	return output.String()
+}
+
+func (model Model) reviewDecisionForTask(slug string) (reviewDecision, bool) {
+	slug = strings.TrimSpace(slug)
+	if slug == "" || model.reviewDecisions == nil {
+		return reviewDecision{}, false
+	}
+	decision, ok := model.reviewDecisions[slug]
+	return decision, ok
+}
+
+func (model Model) persistSelectedReviewDecision(status string) Model {
+	candidate, ok := model.selectedReviewCandidate()
+	if !ok {
+		return model.withReviewMessage("No review candidate selected.")
+	}
+	slug := strings.TrimSpace(candidate.task.Slug)
+	if slug == "" {
+		return model.withReviewMessage("Selected review candidate is missing a task slug.")
+	}
+	now := time.Now
+	if model.reviewNow != nil {
+		now = model.reviewNow
+	}
+	decision := reviewDecision{
+		Task:       slug,
+		Status:     status,
+		ReviewedAt: now().UTC().Format(time.RFC3339),
+		Reviewer:   reviewReviewer(),
+	}
+	decisions := model.reviewDecisions
+	if decisions == nil {
+		decisions = reviewDecisionStore{}
+	}
+	decisions[slug] = decision
+	model.reviewDecisions = decisions
+	if err := saveReviewDecisions(model.state.RepoRoot, decisions); err != nil {
+		return model.withReviewMessage("Could not save review decision: " + err.Error())
+	}
+	return model.withReviewMessage("Review decision recorded: " + slug + " " + status + ".")
+}
+
+func (model Model) withReviewMessage(message string) Model {
+	now := time.Now()
+	model.commandRun = &commandRunState{
+		id:     model.nextCommandID + 1,
+		action: reviewAction("Review decision"),
+		status: commandCompleted,
+		result: &pscontract.ExecutionResult{
+			CommandDisplayLabel: "Review decision",
+			StartedAt:           now,
+			CompletedAt:         now,
+			Stdout:              message,
+		},
+	}
+	model.nextCommandID++
+	return model
+}
+
+func (model *Model) loadReviewDecisions() {
+	decisions, err := loadReviewDecisions(model.state.RepoRoot)
+	if err != nil {
+		model.lastError = err
+		return
+	}
+	model.reviewDecisions = decisions
+}
+
+func loadReviewDecisions(repoRoot string) (reviewDecisionStore, error) {
+	path := reviewDecisionsPath(repoRoot)
+	data, err := os.ReadFile(path)
+	if os.IsNotExist(err) {
+		return reviewDecisionStore{}, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	var document reviewDecisionDocument
+	if err := json.Unmarshal(data, &document); err != nil {
+		return nil, err
+	}
+	if document.Reviews == nil {
+		return reviewDecisionStore{}, nil
+	}
+	return reviewDecisionStore(document.Reviews), nil
+}
+
+func saveReviewDecisions(repoRoot string, decisions reviewDecisionStore) error {
+	path := reviewDecisionsPath(repoRoot)
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	document := reviewDecisionDocument{
+		Version:   1,
+		Reviews:   map[string]reviewDecision(decisions),
+		UpdatedAt: time.Now().UTC().Format(time.RFC3339),
+	}
+	data, err := json.MarshalIndent(document, "", "  ")
+	if err != nil {
+		return err
+	}
+	data = append(data, '\n')
+	return os.WriteFile(path, data, 0o644)
+}
+
+func reviewDecisionsPath(repoRoot string) string {
+	repoRoot = strings.TrimSpace(repoRoot)
+	if repoRoot == "" {
+		repoRoot = "."
+	}
+	return filepath.Join(repoRoot, ".brevity", reviewDecisionsFileName)
+}
+
+func reviewReviewer() string {
+	for _, name := range []string{"BREVITY_REVIEWER", "GIT_AUTHOR_NAME", "USERNAME", "USER"} {
+		if value := strings.TrimSpace(os.Getenv(name)); value != "" {
+			return value
+		}
+	}
+	return ""
+}
+
+func formatReviewTimestamp(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return "(unknown)"
+	}
+	if parsed, err := time.Parse(time.RFC3339, value); err == nil {
+		return parsed.Local().Format("2006-01-02 15:04")
+	}
+	return value
 }
 
 func (model *Model) openReviewDiff() tea.Cmd {
@@ -1132,6 +1310,31 @@ func (model Model) selectedReviewCandidate() (reviewCandidate, bool) {
 	}
 	index := clampReviewSelection(model.reviewSelected, len(candidates))
 	return candidates[index], true
+}
+
+func (model *Model) applyReviewTaskContext() {
+	if !model.hasReviewTaskContext() {
+		return
+	}
+	candidates := collectReviewCandidates(model.state)
+	for index, candidate := range candidates {
+		if strings.EqualFold(strings.TrimSpace(candidate.task.Slug), model.reviewTaskSlug) {
+			model.reviewSelected = index
+			return
+		}
+	}
+	model.reviewSelected = clampReviewSelection(model.reviewSelected, len(candidates))
+}
+
+func (model Model) hasReviewTaskContext() bool {
+	return strings.TrimSpace(model.reviewTaskSlug) != ""
+}
+
+func (model Model) reviewTaskContextLine(candidate reviewCandidate) string {
+	if strings.EqualFold(strings.TrimSpace(candidate.task.Slug), model.reviewTaskSlug) {
+		return model.reviewTaskSlug + " (matched)"
+	}
+	return model.reviewTaskSlug + " (candidate unavailable; showing fallback)"
 }
 
 func (model *Model) moveReviewSelection(delta int) {

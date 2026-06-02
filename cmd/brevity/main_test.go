@@ -174,6 +174,19 @@ func TestParsePlanCommand(t *testing.T) {
 	}
 }
 
+func TestParseReviewCommandAcceptsTaskContext(t *testing.T) {
+	options, err := parseOptions([]string{"review", "review-workspace-v2"})
+	if err != nil {
+		t.Fatalf("parseOptions returned error: %v", err)
+	}
+	if options.kind != commandReview || !options.bubble || !options.review || options.jsonSource != "native" {
+		t.Fatalf("options = %#v, want native Bubble Tea review command", options)
+	}
+	if options.slug != "review-workspace-v2" {
+		t.Fatalf("slug = %q, want task context", options.slug)
+	}
+}
+
 func TestCommandGroupHelpDocumentsPipelineAndMutationBoundaries(t *testing.T) {
 	tests := []struct {
 		name  string

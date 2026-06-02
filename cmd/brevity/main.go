@@ -224,10 +224,17 @@ func parseOptions(args []string) (cliOptions, error) {
 		return parseSupportOptions(args)
 	}
 	if len(args) > 0 && args[0] == "review" {
-		if len(args) != 1 {
-			return cliOptions{}, fmt.Errorf("usage: brevity review")
+		if len(args) > 2 {
+			return cliOptions{}, fmt.Errorf("usage: brevity review [task]")
 		}
-		return cliOptions{kind: commandReview, bubble: true, review: true, refresh: 5 * time.Second, jsonSource: "native"}, nil
+		options := cliOptions{kind: commandReview, bubble: true, review: true, refresh: 5 * time.Second, jsonSource: "native"}
+		if len(args) == 2 {
+			options.slug = strings.TrimSpace(args[1])
+			if options.slug == "" {
+				return cliOptions{}, fmt.Errorf("usage: brevity review [task]")
+			}
+		}
+		return options, nil
 	}
 	if len(args) > 0 && args[0] == "plan" {
 		if len(args) != 1 {
@@ -1112,7 +1119,7 @@ func runWithContextOptions(ctx context.Context, stdout io.Writer, client runtime
 		if options.refresh <= 0 {
 			options.refresh = 5 * time.Second
 		}
-		return bubbleteadashboard.RunReviewWithSource(ctx, os.Stdin, stdout, client, options.refresh, options.jsonSource)
+		return bubbleteadashboard.RunReviewWithTaskSource(ctx, os.Stdin, stdout, client, options.refresh, options.jsonSource, options.slug)
 	case commandQueueHelp:
 		writeQueueUsage(stdout)
 		return nil

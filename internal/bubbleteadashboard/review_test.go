@@ -122,6 +122,82 @@ func TestReviewWorkspaceShowsPrioritizedReviewQueue(t *testing.T) {
 	}
 }
 
+func TestReviewWorkspaceTaskContextPreselectsMatchingCandidate(t *testing.T) {
+	state := emptyBubbleState()
+	state.Tasks = []contracts.TaskSummary{
+		reviewTask("first-ready", "ready-for-review", "completed", "succeeded"),
+		reviewTask("review-workspace-v2", "needs-inspection", "completed", "succeeded"),
+	}
+	model := reviewTestModel(state, 120)
+	model.reviewTaskSlug = "review-workspace-v2"
+	model.applyReviewTaskContext()
+
+	output := plainView(model.View())
+	for _, want := range []string{
+		"selected task    review-workspace-v2 (matched)",
+		"> review-workspace-v2",
+		"task             review-workspace-v2",
+		"diff summary",
+		"Changed Files",
+		"Action Bar",
+	} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("task-scoped review missing %q:\n%s", want, output)
+		}
+	}
+}
+
+func TestReviewWorkspaceTaskContextMissingCandidateFallback(t *testing.T) {
+	state := emptyBubbleState()
+	state.Tasks = []contracts.TaskSummary{reviewTask("fallback-ready", "ready-for-review", "completed", "succeeded")}
+	model := reviewTestModel(state, 100)
+	model.reviewTaskSlug = "missing-task"
+	model.applyReviewTaskContext()
+
+	output := plainView(model.View())
+	for _, want := range []string{
+		"selected task    missing-task (candidate unavailable; showing fallback)",
+		"> fallback-ready",
+		"task             fallback-ready",
+	} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("missing task fallback missing %q:\n%s", want, output)
+		}
+	}
+}
+
+func TestReviewWorkspaceTaskContextMissingCandidateEmptyState(t *testing.T) {
+	model := reviewTestModel(emptyBubbleState(), 90)
+	model.reviewTaskSlug = "missing-task"
+
+	output := plainView(model.View())
+	for _, want := range []string{
+		"No review candidate yet.",
+		"selected task    missing-task",
+		"No matching review candidate was found for this task.",
+	} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("empty task fallback missing %q:\n%s", want, output)
+		}
+	}
+}
+
+func TestReviewWorkspaceTaskContextNarrowWidthReadable(t *testing.T) {
+	state := emptyBubbleState()
+	state.Tasks = []contracts.TaskSummary{reviewTask("review-workspace-v2", "ready-for-review", "completed", "succeeded")}
+	model := reviewTestModel(state, 42)
+	model.reviewTaskSlug = "review-workspace-v2"
+	model.applyReviewTaskContext()
+
+	output := plainView(model.View())
+	assertLinesWithinWidth(t, output, model.width)
+	for _, want := range []string{"BREVITY REVIEW", "selected task", "review-workspace-v2", "Changed Files"} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("narrow task context missing %q:\n%s", want, output)
+		}
+	}
+}
+
 func TestReviewWorkspaceKeyboardMovesReviewQueueSelection(t *testing.T) {
 	state := emptyBubbleState()
 	state.Tasks = []contracts.TaskSummary{
@@ -151,7 +227,7 @@ func TestReviewWorkspaceKeyboardMovesReviewQueueSelection(t *testing.T) {
 		"candidate 1 of 3",
 		"> ready-task",
 		"task             ready-task",
-		"n/p s d o e a x m r q",
+		"n/p s d o e a c x m r q",
 	} {
 		if !strings.Contains(output, want) {
 			t.Fatalf("previous review selection missing %q:\n%s", want, output)
@@ -171,12 +247,13 @@ func TestReviewWorkspaceCommandRendering(t *testing.T) {
 		"d diff        inspect       changed files + diff stat",
 		"o editor      external      code C:\\repo\\worktrees\\active\\review-me",
 		"e explorer    external      open C:\\repo\\worktrees\\active\\review-me",
-		"a approve     inspect first  approval gate for review-me",
-		"x reject      available     capture rejection notes for review-me",
 		"git -C C:\\repo\\worktrees\\active\\review-me status",
 		"git -C C:\\repo\\worktrees\\active\\review-me diff --stat",
 		"git -C C:\\repo\\worktrees\\active\\review-me log --oneline -5",
 		"brevity task merge review-me --plan",
+		"a approve     persist       mark review-me approved",
+		"c changes     persist       mark review-me needs-changes",
+		"x reject      persist       mark review-me rejected",
 	} {
 		if !strings.Contains(output, want) {
 			t.Fatalf("command rendering missing %q:\n%s", want, output)
@@ -245,7 +322,7 @@ func TestReviewWorkspaceGitInspectionSummary(t *testing.T) {
 		"status          modified",
 		"next            inspect implementation diff and matching tests",
 		"attention        untracked files present; decide whether they belong in the merge",
-		"a approve     available      approval gate for git-task",
+		"a approve     persist       mark git-task approved",
 		"m merge prep  after approval brevity task merge git-task --plan",
 	} {
 		if !strings.Contains(output, want) {
@@ -295,6 +372,126 @@ func equalStringSlices2D(a [][]string, b [][]string) bool {
 		}
 	}
 	return true
+}
+
+func TestReviewDecisionApprovePersists(t *testing.T) {
+	model := reviewDecisionTestModel(t, "approved-task")
+	updated, cmd := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("a")})
+	model = updated.(Model)
+	if cmd != nil {
+		t.Fatal("approve returned command; decision should persist directly")
+	}
+	decision := readReviewDecisionForTask(t, model.state.RepoRoot, "approved-task")
+	if decision.Status != reviewDecisionApproved || decision.Reviewer != "morten" || decision.ReviewedAt != "2026-06-02T12:22:00Z" {
+		t.Fatalf("decision = %#v, want approved reviewer timestamp", decision)
+	}
+	output := plainView(model.View())
+	for _, want := range []string{
+		"review status    approved",
+		"reviewed         2026-06-02",
+		"reviewer         morten",
+		"Review decision recorded: approved-task approved.",
+	} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("approved decision render missing %q:\n%s", want, output)
+		}
+	}
+}
+
+func TestReviewDecisionNeedsChangesPersists(t *testing.T) {
+	model := reviewDecisionTestModel(t, "changes-task")
+	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("c")})
+	model = updated.(Model)
+
+	decision := readReviewDecisionForTask(t, model.state.RepoRoot, "changes-task")
+	if decision.Status != reviewDecisionNeedsChanges {
+		t.Fatalf("decision = %#v, want needs-changes", decision)
+	}
+	if !strings.Contains(plainView(model.View()), "review status    needs-changes") {
+		t.Fatalf("needs-changes status not rendered:\n%s", plainView(model.View()))
+	}
+}
+
+func TestReviewDecisionRejectPersists(t *testing.T) {
+	model := reviewDecisionTestModel(t, "reject-task")
+	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("x")})
+	model = updated.(Model)
+
+	decision := readReviewDecisionForTask(t, model.state.RepoRoot, "reject-task")
+	if decision.Status != reviewDecisionRejected {
+		t.Fatalf("decision = %#v, want rejected", decision)
+	}
+	if !strings.Contains(plainView(model.View()), "review status    rejected") {
+		t.Fatalf("rejected status not rendered:\n%s", plainView(model.View()))
+	}
+}
+
+func TestReviewDecisionReloadRetainsDecision(t *testing.T) {
+	model := reviewDecisionTestModel(t, "reload-task")
+	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("a")})
+	model = updated.(Model)
+
+	reloaded := reviewTestModel(model.state, 100)
+	reloaded.loadReviewDecisions()
+
+	output := plainView(reloaded.View())
+	for _, want := range []string{"review status    approved", "reviewer         morten", "reviewed         2026-06-02"} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("reloaded decision missing %q:\n%s", want, output)
+		}
+	}
+}
+
+func TestReviewDecisionNarrowWidthReadable(t *testing.T) {
+	model := reviewDecisionTestModel(t, "narrow-decision-task")
+	model.width = 42
+	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("a")})
+	model = updated.(Model)
+
+	output := plainView(model.View())
+	assertLinesWithinWidth(t, output, model.width)
+	for _, want := range []string{"review status", "approved", "reviewed", "reviewer"} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("narrow decision output missing %q:\n%s", want, output)
+		}
+	}
+}
+
+func TestReviewDecisionDoesNotMutateWorkflowStateOrLaunch(t *testing.T) {
+	model := reviewDecisionTestModel(t, "boundary-task")
+	queueFile := filepath.Join(model.state.RepoRoot, ".brevity", "runtime-queue.json")
+	execFile := filepath.Join(model.state.RepoRoot, ".brevity", "runtime-executions.json")
+	if err := os.WriteFile(queueFile, []byte("queue-before"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(execFile, []byte("exec-before"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	bridge := &fakeCommandBridge{state: model.state}
+	runner := &fakeReviewRunner{}
+	model.commandBridge = bridge
+	model.reviewRunner = runner
+
+	updated, cmd := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("a")})
+	model = updated.(Model)
+	if cmd != nil {
+		t.Fatal("review decision returned executable command")
+	}
+	if bridge.executeCalls != 0 || bridge.mutateCalls != 0 || bridge.startCalls != 0 || bridge.runCalls != 0 {
+		t.Fatalf("review decision called command bridge: %+v", bridge)
+	}
+	if len(runner.calls) != 0 {
+		t.Fatalf("review decision called git runner: %#v", runner.calls)
+	}
+	if got, _ := os.ReadFile(queueFile); string(got) != "queue-before" {
+		t.Fatalf("queue file mutated by review decision: %q", got)
+	}
+	if got, _ := os.ReadFile(execFile); string(got) != "exec-before" {
+		t.Fatalf("execution file mutated by review decision: %q", got)
+	}
+	if _, err := os.Stat(reviewDecisionsPath(model.state.RepoRoot)); err != nil {
+		t.Fatalf("review decision file not written: %v", err)
+	}
 }
 
 func TestReviewWorkspaceDoesNotMutateRuntimeFilesOrBridge(t *testing.T) {
@@ -514,38 +711,34 @@ func TestReviewWorkspaceDiffBackReturnsToReviewQueue(t *testing.T) {
 	}
 }
 
-func TestReviewWorkspaceApprovalGateUsesGitAndBlockers(t *testing.T) {
+func reviewDecisionTestModel(t *testing.T, slug string) Model {
+	t.Helper()
+	t.Setenv("BREVITY_REVIEWER", "morten")
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, ".brevity"), 0o755); err != nil {
+		t.Fatal(err)
+	}
 	state := emptyBubbleState()
-	task := reviewTask("blocked-task", "provider-gated", "", "")
-	task.ProviderGated = true
-	state.Tasks = []contracts.TaskSummary{task}
+	state.RepoRoot = root
+	state.Tasks = []contracts.TaskSummary{reviewTask(slug, "ready-for-review", "completed", "succeeded")}
 	model := reviewTestModel(state, 120)
+	model.reviewNow = func() time.Time {
+		return time.Date(2026, 6, 2, 12, 22, 0, 0, time.UTC)
+	}
+	return model
+}
 
-	updated, cmd := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("a")})
-	model = updated.(Model)
-	if cmd == nil {
-		t.Fatal("approve shortcut returned nil command")
+func readReviewDecisionForTask(t *testing.T, repoRoot string, slug string) reviewDecision {
+	t.Helper()
+	decisions, err := loadReviewDecisions(repoRoot)
+	if err != nil {
+		t.Fatal(err)
 	}
-	updated, _ = model.Update(cmd())
-	model = updated.(Model)
-	output := plainView(model.View())
-	for _, want := range []string{
-		"action        Approve review",
-		"outcome       completed",
-		"next          run merge prep only after the diff is acceptable",
-		"Approval gate",
-		"merge gate: blocked by task/runtime signals",
-		"attention: inspect worktree manually; git summary is unavailable",
-		"decision: blocked; resolve blockers before approval",
-		"provider gated",
-	} {
-		if !strings.Contains(output, want) {
-			t.Fatalf("approval gate output missing %q:\n%s", want, output)
-		}
+	decision, ok := decisions[slug]
+	if !ok {
+		t.Fatalf("missing review decision for %s: %#v", slug, decisions)
 	}
-	if strings.Contains(output, "approval can proceed") {
-		t.Fatalf("approval gate allowed a blocked task:\n%s", output)
-	}
+	return decision
 }
 
 func reviewTestModel(state contracts.RuntimeState, width int) Model {

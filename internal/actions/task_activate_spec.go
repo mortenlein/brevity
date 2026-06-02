@@ -92,10 +92,39 @@ func (service TaskActivateService) Activate(slug string) (contracts.CommandResul
 		return taskActivateError("prompt-write-failed", err.Error(), map[string]any{"promptPath": promptPath})
 	}
 	task := state.Task{Slug: slug, Branch: branch, WorktreePath: worktreePath, PromptPath: promptPath, SpecPath: specPath, Status: taskNewInitialState, NormalizedState: taskNewInitialState, CreatedAt: createdAt, UpdatedAt: createdAt, PromptRefreshedAt: createdAt, PromptRefreshStatus: "fresh"}
-	if _, err := state.CreateTask(service.Store, task, state.TaskCreateOptions{LockOptions: service.LockOptions}); err != nil {
+	if tasks, _, err := state.LoadTasks(service.Store); err == nil && taskExists(tasks, slug) {
+		if _, err := state.UpdateTask(service.Store, slug, state.TaskUpdateOptions{LockOptions: service.LockOptions}, func(rawTask map[string]json.RawMessage) error {
+			setTaskActivateRaw(rawTask, "branch", branch)
+			setTaskActivateRaw(rawTask, "worktreePath", worktreePath)
+			setTaskActivateRaw(rawTask, "promptPath", promptPath)
+			setTaskActivateRaw(rawTask, "specPath", specPath)
+			setTaskActivateRaw(rawTask, "status", taskNewInitialState)
+			setTaskActivateRaw(rawTask, "normalizedState", taskNewInitialState)
+			setTaskActivateRaw(rawTask, "updatedAt", createdAt)
+			setTaskActivateRaw(rawTask, "promptRefreshedAt", createdAt)
+			setTaskActivateRaw(rawTask, "promptRefreshStatus", "fresh")
+			return nil
+		}); err != nil {
+			return taskActivateError("task-metadata-update-failed", err.Error(), map[string]any{"slug": slug, "metadataPath": metadataPath, "lockPath": service.Store.LockPath()})
+		}
+	} else if _, err := state.CreateTask(service.Store, task, state.TaskCreateOptions{LockOptions: service.LockOptions}); err != nil {
 		return taskActivateError("task-metadata-create-failed", err.Error(), map[string]any{"slug": slug, "metadataPath": metadataPath, "lockPath": service.Store.LockPath()})
 	}
 	return taskActivateSuccess(contracts.TaskActivatePayload{Slug: slug, Branch: branch, WorktreePath: worktreePath, PromptPath: promptPath, SpecPath: specPath, ContextPath: contextPath, MetadataPath: metadataPath, CreatedAt: createdAt, NoProviderExecution: true, NoWorkerExecution: true}, nil), nil
+}
+
+func taskExists(tasks state.Tasks, slug string) bool {
+	for _, task := range tasks.Items {
+		if task.Key() == slug {
+			return true
+		}
+	}
+	return false
+}
+
+func setTaskActivateRaw(task map[string]json.RawMessage, key string, value any) {
+	data, _ := json.Marshal(value)
+	task[key] = data
 }
 
 func (service TaskSpecService) Show(slug string) (contracts.CommandResult, error) {
