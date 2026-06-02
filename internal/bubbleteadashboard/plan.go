@@ -15,6 +15,10 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"golang.org/x/term"
 
+	"github.com/mortenlein/brevity/internal/actions"
+	"github.com/mortenlein/brevity/internal/contracts"
+	runtimeexecution "github.com/mortenlein/brevity/internal/runtime/execution"
+	runtimequeue "github.com/mortenlein/brevity/internal/runtime/queue"
 	"github.com/mortenlein/brevity/internal/state"
 )
 
@@ -51,6 +55,33 @@ type planningTaskDraftStore struct {
 	path string
 }
 
+type executionHandoff struct {
+	Slug         string
+	Activated    bool
+	QueueState   string
+	QueueItem    *runtimequeue.Item
+	Execution    *runtimeexecution.Record
+	Review       *reviewHandoff
+	NextStep     string
+	Why          string
+	Commands     []string
+	Actions      []workflowAction
+	FutureAction string
+}
+
+type reviewHandoff struct {
+	Status   string
+	NextStep string
+	Why      string
+	Commands []string
+	Actions  []workflowAction
+}
+
+type workflowAction struct {
+	Key   string
+	Label string
+}
+
 type PlanningModel struct {
 	productGoal string
 	loadError   error
@@ -60,6 +91,7 @@ type PlanningModel struct {
 	draftStore  planningTaskDraftStore
 	ideas       []PlanningIdea
 	drafts      []PlanningTaskDraft
+	tasks       []state.Task
 	selected    int
 	inputMode   string
 	inputValue  string
@@ -85,6 +117,7 @@ func RunPlan(ctx context.Context, input io.Reader, stdout io.Writer, repoRoot st
 	if err != nil && model.storeError == nil {
 		model.storeError = err
 	}
+	model.reloadPlanningTasks()
 	if !isPlanningTerminalInput(input) {
 		return runPlanningLineFallback(stdout, input, model)
 	}
@@ -157,6 +190,10 @@ func (model PlanningModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		switch strings.ToLower(msg.String()) {
 		case "q", "esc", "ctrl+c":
+			if strings.ToLower(msg.String()) == "q" && model.workflowActionAvailable("q") {
+				model = model.queueSelectedTask()
+				return model, nil
+			}
 			model.quitting = true
 			return model, tea.Quit
 		case "n":
@@ -185,6 +222,28 @@ func (model PlanningModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		case "p":
 			model = model.promoteSelectedTaskDraft()
+		case "a":
+			model = model.activateSelectedPromotedTask()
+		case "r":
+			if model.workflowActionAvailable("r") {
+				model = model.runRWorkflowAction()
+			}
+		case "e":
+			if model.workflowActionAvailable("e") {
+				model = model.planSelectedTaskExecution()
+			}
+		case "v":
+			if model.workflowActionAvailable("v") {
+				model = model.viewSelectedExecution()
+			}
+		case "w":
+			if model.workflowActionAvailable("w") {
+				model = model.openReviewWorkspace()
+			}
+		case "b":
+			if model.workflowActionAvailable("b") {
+				model.message = "Returned to workflow handoff."
+			}
 		}
 	}
 	return model, nil
@@ -371,7 +430,93 @@ func (model PlanningModel) promoteSelectedTaskDraft() PlanningModel {
 		return model
 	}
 	model.message = "Task draft promoted: " + slug
+	model.reloadPlanningTasks()
 	return model
+}
+
+func (model *PlanningModel) reloadPlanningTasks() {
+	store, err := state.NewStore(model.repoRoot)
+	if err != nil {
+		return
+	}
+	tasks, _, err := state.LoadTasks(store)
+	if err != nil {
+		return
+	}
+	model.tasks = tasks.Items
+}
+
+func (model PlanningModel) activateSelectedPromotedTask() PlanningModel {
+	draft, ok := model.selectedDraft()
+	if !ok {
+		model.message = "Create and promote a task draft before activation."
+		return model
+	}
+	if draft.Status != "promoted" {
+		model.message = "Promote the selected task draft before activation."
+		return model
+	}
+	slug := strings.TrimSpace(draft.TaskSlug)
+	if slug == "" {
+		model.message = "Promoted draft is missing a task slug."
+		return model
+	}
+	if active, _ := model.taskActivation(slug); active {
+		model.message = "Task already activated: " + slug
+		return model
+	}
+	store, err := state.NewStore(model.repoRoot)
+	if err != nil {
+		model.storeError = err
+		model.message = "Could not open task store: " + err.Error()
+		return model
+	}
+	if err := model.ensurePromotedTaskSpec(store, draft); err != nil {
+		model.storeError = err
+		model.message = "Could not prepare task spec: " + err.Error()
+		return model
+	}
+	result, err := actions.TaskActivateService{Store: store, Now: model.now}.Activate(slug)
+	if err != nil && !result.Success {
+		model.storeError = err
+		model.message = "Could not activate task: " + err.Error()
+		return model
+	}
+	payload, parseErr := contracts.ParseTaskActivatePayload(result)
+	if parseErr != nil {
+		model.storeError = parseErr
+		model.message = "Task activated, but activation result could not be read."
+	} else {
+		model.message = "Task activated: " + payload.Slug
+	}
+	model.reloadPlanningTasks()
+	return model
+}
+
+func (model PlanningModel) ensurePromotedTaskSpec(store state.Store, draft PlanningTaskDraft) error {
+	config, missing, err := state.LoadConfig(store)
+	if err != nil {
+		return err
+	}
+	if missing {
+		return fmt.Errorf("Brevity config not found. Run brevity init first")
+	}
+	slug := strings.TrimSpace(draft.TaskSlug)
+	specPath := filepath.Join(config.VaultPath, "tasks", slug+".md")
+	if _, err := os.Stat(specPath); err == nil {
+		return nil
+	} else if !os.IsNotExist(err) {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(specPath), 0o755); err != nil {
+		return err
+	}
+	var spec strings.Builder
+	spec.WriteString("# " + draft.Title + "\n\n")
+	spec.WriteString("## Description\n\n" + strings.TrimSpace(draft.Description) + "\n\n")
+	spec.WriteString("## Acceptance Criteria\n\n" + strings.TrimSpace(draft.AcceptanceCriteria) + "\n\n")
+	spec.WriteString("## Validation\n\n" + strings.TrimSpace(draft.Validation) + "\n")
+	return os.WriteFile(specPath, []byte(spec.String()), 0o644)
 }
 
 func taskSlugFromTitle(title string) string {
@@ -410,8 +555,8 @@ func (model PlanningModel) View() string {
 	width := model.contentWidth()
 	output.WriteString(dashboardStyles.title.Render(statusLine(width,
 		statusSegment{text: "BREVITY PLAN", priority: 0},
-		statusSegment{text: "idea -> plan -> task", compact: "planning", priority: 0},
-		statusSegment{text: "read-only workspace", compact: "read-only", priority: 1},
+		statusSegment{text: "idea -> plan -> task -> execute", compact: "workflow", priority: 0},
+		statusSegment{text: "safe actions", compact: "actions", priority: 1},
 	)) + "\n")
 
 	renderSection(&output, "Product Goal")
@@ -429,7 +574,8 @@ func (model PlanningModel) View() string {
 		"idea    Capture the operator intent before it becomes task machinery.",
 		"plan    Shape scope, acceptance, risk, and review notes.",
 		"task    Create a focused worktree-ready task.",
-		"execute Run the task outside this v1 planning workspace.",
+		"active  Materialize the task worktree without queue or execution mutation.",
+		"execute Queue and run the task after activation.",
 		"review  Inspect the result in Brevity.",
 		"merge   Approve and integrate completed work.",
 	} {
@@ -461,7 +607,8 @@ func (model PlanningModel) View() string {
 	output.WriteString("\n")
 	renderSection(&output, "Next Commands")
 	for _, command := range []string{
-		"brevity task new <slug>",
+		"brevity task activate <slug>",
+		"brevity task start <slug>",
 		"brevity task status",
 		"brevity review",
 		"brevity task merge <slug>",
@@ -471,7 +618,7 @@ func (model PlanningModel) View() string {
 
 	output.WriteString("\n")
 	renderSection(&output, "Mutation Boundary")
-	output.WriteString(model.wrapped("  ", "This workspace may update .brevity/ideas.json, .brevity/task-drafts.json, and .brevity/tasks.json only. It does not mutate queue, execution, provider, or run state."))
+	output.WriteString(model.wrapped("  ", "This workspace may update planning state, task state, activation worktree artifacts, queue items, reservations, and execution-plan records only. It does not launch providers, workers, supervisors, merges, cleanup, retries, or execution runs."))
 	output.WriteString(model.footer())
 	return output.String()
 }
@@ -517,6 +664,13 @@ func (model PlanningModel) renderTaskDrafts(output *strings.Builder) {
 		if draft.TaskSlug != "" {
 			output.WriteString(model.line("  Task:    " + draft.TaskSlug))
 		}
+		active, activeTask := model.taskActivation(draft.TaskSlug)
+		if active {
+			output.WriteString(model.line("  Active:  yes"))
+			output.WriteString(model.line("  Branch:  " + activeTask.Branch))
+			output.WriteString(model.line("  Worktree:" + " " + activeTask.WorktreePath))
+			output.WriteString(model.line("  Prompt:  " + activeTask.PromptPath))
+		}
 		output.WriteString(model.line("  Created: " + draft.CreatedAt))
 		if draft.PromotedAt != "" {
 			output.WriteString(model.line("  Promoted:" + " " + draft.PromotedAt))
@@ -531,12 +685,513 @@ func (model PlanningModel) renderTaskDrafts(output *strings.Builder) {
 		renderSection(output, "Next Steps")
 		steps := []string{"[refine] placeholder", "[p] Promote To Task", "[archive] placeholder"}
 		if draft.Status == "promoted" {
-			steps = []string{"activate task", "execute task", "review task"}
+			steps = []string{"[a] Activate Task"}
+			if active {
+				steps = []string{"queue task", "execute task", "review task"}
+			}
 		}
 		for _, step := range steps {
 			output.WriteString(model.line("  " + step))
 		}
+		if draft.Status == "promoted" {
+			model.renderSelectedDraftWorkflow(output, draft, active)
+			if active {
+				model.renderExecutionHandoff(output, draft.TaskSlug, active)
+				model.renderReviewHandoff(output, draft.TaskSlug, active)
+			}
+		}
 	}
+}
+
+func (model PlanningModel) renderSelectedDraftWorkflow(output *strings.Builder, draft PlanningTaskDraft, active bool) {
+	output.WriteString("\n")
+	renderSection(output, "Workflow Progress")
+	handoff := model.executionHandoff(draft.TaskSlug, active)
+	steps := workflowProgressSteps(draft, handoff)
+	for _, step := range steps {
+		mark := "-"
+		if step.done {
+			mark = "v"
+		} else if step.current {
+			mark = ">"
+		}
+		output.WriteString(model.line("  " + mark + " " + step.label))
+	}
+}
+
+func (model PlanningModel) renderExecutionHandoff(output *strings.Builder, slug string, active bool) {
+	handoff := model.executionHandoff(slug, active)
+	output.WriteString("\n")
+	renderSection(output, "Execution Handoff")
+	output.WriteString(model.line("  Task:"))
+	output.WriteString(model.line("  " + handoff.Slug))
+	output.WriteString("\n")
+	output.WriteString(model.line("  State:"))
+	if handoff.Activated {
+		output.WriteString(model.line("  Task activated"))
+	} else {
+		output.WriteString(model.line("  Task not activated"))
+	}
+	output.WriteString(model.line("  Queue: " + handoffQueueSummary(handoff)))
+	output.WriteString(model.line("  Reservation: " + handoffReservationSummary(handoff)))
+	output.WriteString(model.line("  Execution: " + handoffExecutionSummary(handoff)))
+	output.WriteString("\n")
+	output.WriteString(model.line("  Recommended Next Step:"))
+	output.WriteString(model.line("  " + handoff.NextStep))
+	output.WriteString("\n")
+	output.WriteString(model.line("  Why:"))
+	output.WriteString(model.wrapped("  ", handoff.Why))
+	output.WriteString("\n")
+	output.WriteString(model.line("  Commands:"))
+	for _, command := range handoff.Commands {
+		output.WriteString(model.line("  " + command))
+	}
+	if len(handoff.Actions) > 0 {
+		output.WriteString("\n")
+		output.WriteString(model.line("  Actions:"))
+		for _, action := range handoff.Actions {
+			output.WriteString(model.line("  [" + action.Key + "] " + action.Label))
+		}
+	} else if handoff.FutureAction != "" {
+		output.WriteString("\n")
+		output.WriteString(model.line("  Future action:"))
+		output.WriteString(model.line("  " + handoff.FutureAction))
+	}
+}
+
+func (model PlanningModel) renderReviewHandoff(output *strings.Builder, slug string, active bool) {
+	handoff := model.executionHandoff(slug, active)
+	if handoff.Review == nil {
+		return
+	}
+	review := handoff.Review
+	output.WriteString("\n")
+	renderSection(output, "Review Handoff")
+	output.WriteString(model.line("  Status:"))
+	output.WriteString(model.line("  " + review.Status))
+	output.WriteString("\n")
+	output.WriteString(model.line("  Recommended Next Step:"))
+	output.WriteString(model.line("  " + review.NextStep))
+	output.WriteString("\n")
+	output.WriteString(model.line("  Why:"))
+	output.WriteString(model.wrapped("  ", review.Why))
+	output.WriteString("\n")
+	output.WriteString(model.line("  Commands:"))
+	for _, command := range review.Commands {
+		output.WriteString(model.line("  " + command))
+	}
+	output.WriteString("\n")
+	output.WriteString(model.line("  Actions:"))
+	for _, action := range review.Actions {
+		output.WriteString(model.line("  [" + action.Key + "] " + action.Label))
+	}
+}
+
+func (model PlanningModel) executionHandoff(slug string, active bool) executionHandoff {
+	slug = strings.TrimSpace(slug)
+	handoff := executionHandoff{
+		Slug:      slug,
+		Activated: active,
+		NextStep:  "Inspect task activation",
+		Why:       "The selected draft does not have an activated task yet.",
+		Commands:  []string{"brevity task status"},
+	}
+	if slug == "" {
+		handoff.Slug = "(missing)"
+		return handoff
+	}
+	if !active {
+		handoff.Commands = []string{"brevity task activate " + slug, "brevity task status"}
+		return handoff
+	}
+
+	queueStore, err := runtimequeue.NewStore(model.repoRoot)
+	if err != nil {
+		handoff.QueueState = "unavailable: " + err.Error()
+		handoff.NextStep = "Inspect queue state"
+		handoff.Why = "The task is activated, but queue state could not be inspected."
+		handoff.Commands = []string{"brevity queue inspect"}
+		return handoff
+	}
+	queueState, missing, err := queueStore.Load()
+	if err != nil {
+		handoff.QueueState = "invalid: " + err.Error()
+		handoff.NextStep = "Inspect queue state"
+		handoff.Why = "The task is activated, but runtime queue state is not readable."
+		handoff.Commands = []string{"brevity queue inspect"}
+		return handoff
+	}
+	if missing {
+		handoff.QueueState = "missing"
+	} else {
+		handoff.QueueState = "valid"
+	}
+	handoff.QueueItem = newestQueueItemForTask(queueState.Items, slug)
+
+	executionStore, err := runtimeexecution.NewStore(model.repoRoot)
+	if err == nil {
+		executions, _, loadErr := executionStore.Load()
+		if loadErr == nil {
+			handoff.Execution = newestExecutionForTask(executions.Records, slug, handoff.QueueItem)
+		}
+	}
+
+	return finalizeExecutionHandoff(handoff)
+}
+
+func finalizeExecutionHandoff(handoff executionHandoff) executionHandoff {
+	if handoff.Execution != nil {
+		id := strings.TrimSpace(handoff.Execution.ID)
+		switch strings.ToLower(strings.TrimSpace(handoff.Execution.Status)) {
+		case runtimeexecution.StatusPlanned:
+			handoff.NextStep = "Mark execution ready"
+			handoff.Why = "The task has a planned execution record that is not ready for preflight or launch yet."
+			handoff.Commands = []string{"brevity execution mark-ready " + id, "brevity execution flow"}
+			handoff.Actions = []workflowAction{{Key: "v", Label: "View Execution"}, {Key: "b", Label: "Back"}}
+		case runtimeexecution.StatusReady:
+			handoff.NextStep = "Preflight and dry-run launch"
+			handoff.Why = "The execution is ready; validate it before any real provider launch."
+			handoff.Commands = []string{"brevity execution preflight " + id, "brevity execution launch-dry-run " + id, "brevity execution launch " + id}
+			handoff.Actions = []workflowAction{{Key: "v", Label: "View Execution"}, {Key: "b", Label: "Back"}}
+		case runtimeexecution.StatusLaunching:
+			handoff.NextStep = "Inspect active execution"
+			handoff.Why = "The execution is launching, so review should wait until the provider run finishes or fails."
+			handoff.Commands = []string{"brevity execution inspect", "brevity execution flow"}
+			handoff.Actions = []workflowAction{{Key: "v", Label: "View Execution"}, {Key: "b", Label: "Back"}}
+		case runtimeexecution.StatusCompleted:
+			handoff.NextStep = "Review generated work"
+			handoff.Why = "Execution completed successfully and is ready for operator review."
+			handoff.Commands = []string{"brevity review", "brevity cmux --review " + handoff.Slug, "brevity task status"}
+			handoff.Actions = []workflowAction{{Key: "w", Label: "Open Review Workspace"}, {Key: "v", Label: "View Execution"}, {Key: "b", Label: "Back"}}
+			handoff.Review = &reviewHandoff{
+				Status:   "Execution completed",
+				NextStep: "Review generated work",
+				Why:      "Execution completed successfully and is ready for operator review.",
+				Commands: []string{"brevity review", "brevity cmux --review " + handoff.Slug},
+				Actions:  []workflowAction{{Key: "w", Label: "Open Review Workspace"}, {Key: "v", Label: "View Execution"}, {Key: "b", Label: "Back"}},
+			}
+		case runtimeexecution.StatusFailed:
+			handoff.NextStep = "Inspect execution failure"
+			handoff.Why = "Execution failed; inspect the failure details before deciding whether any later retry or manual review is appropriate."
+			handoff.Commands = []string{"brevity execution inspect", "brevity review", "brevity execution flow"}
+			handoff.Actions = []workflowAction{{Key: "v", Label: "View Execution"}, {Key: "r", Label: "Review Failure Details"}, {Key: "b", Label: "Back"}}
+			handoff.Review = &reviewHandoff{
+				Status:   "Execution failed",
+				NextStep: "Inspect execution failure",
+				Why:      "Execution failed; inspect failure details before retry or merge decisions.",
+				Commands: []string{"brevity execution inspect", "brevity review"},
+				Actions:  []workflowAction{{Key: "v", Label: "View Execution"}, {Key: "r", Label: "Review Failure Details"}},
+			}
+		default:
+			handoff.NextStep = "Inspect execution state"
+			handoff.Why = "The task has an execution record in a state that needs operator inspection."
+			handoff.Commands = []string{"brevity execution inspect", "brevity execution flow"}
+			handoff.Actions = []workflowAction{{Key: "v", Label: "View Execution"}, {Key: "b", Label: "Back"}}
+		}
+		return handoff
+	}
+	if handoff.QueueItem != nil && handoff.QueueItem.Reservation != nil {
+		handoff.NextStep = "Plan execution from reservation"
+		handoff.Why = "The task has a reserved queue item but no execution record yet."
+		handoff.Commands = []string{"brevity scheduler plan-execution", "brevity execution list"}
+		handoff.Actions = []workflowAction{{Key: "e", Label: "Create Execution Plan"}}
+		return handoff
+	}
+	if handoff.QueueItem != nil {
+		handoff.NextStep = "Plan and reserve queued task"
+		handoff.Why = "The task is queued but not reserved, so the scheduler can select or reserve it next."
+		handoff.Commands = []string{"brevity scheduler plan", "brevity scheduler reserve-next"}
+		handoff.Actions = []workflowAction{{Key: "r", Label: "Reserve Task"}}
+		return handoff
+	}
+	handoff.NextStep = "Queue this task"
+	handoff.Why = "The task is activated but has no queue item yet."
+	handoff.Commands = []string{"brevity queue add " + handoff.Slug, "brevity queue inspect", "brevity scheduler plan"}
+	handoff.Actions = []workflowAction{{Key: "q", Label: "Queue Task"}}
+	return handoff
+}
+
+type workflowProgressStep struct {
+	label   string
+	done    bool
+	current bool
+}
+
+func workflowProgressSteps(draft PlanningTaskDraft, handoff executionHandoff) []workflowProgressStep {
+	executionPlanned := handoff.Execution != nil
+	executionCompleted := handoff.Execution != nil && strings.EqualFold(strings.TrimSpace(handoff.Execution.Status), runtimeexecution.StatusCompleted)
+	executionFailed := handoff.Execution != nil && strings.EqualFold(strings.TrimSpace(handoff.Execution.Status), runtimeexecution.StatusFailed)
+	queued := handoff.QueueItem != nil
+	reserved := queued && handoff.QueueItem.Reservation != nil
+	steps := []workflowProgressStep{
+		{label: "Idea Captured", done: strings.TrimSpace(draft.IdeaID) != ""},
+		{label: "Draft Created", done: strings.TrimSpace(draft.ID) != ""},
+		{label: "Task Created", done: strings.TrimSpace(draft.TaskSlug) != ""},
+		{label: "Task Activated", done: handoff.Activated},
+		{label: "Task Queued", done: queued},
+		{label: "Task Reserved", done: reserved},
+		{label: "Execution Planned", done: executionPlanned},
+	}
+	if executionCompleted {
+		steps = append(steps, workflowProgressStep{label: "Execution Completed", done: true})
+	} else if executionFailed {
+		steps = append(steps, workflowProgressStep{label: "Execution Failed", done: true})
+	}
+	for index := range steps {
+		if !steps[index].done {
+			steps[index].current = true
+			break
+		}
+	}
+	if len(steps) > 0 && steps[len(steps)-1].done {
+		steps[len(steps)-1].current = true
+	}
+	return steps
+}
+
+func (model PlanningModel) workflowActionAvailable(key string) bool {
+	draft, active, ok := model.selectedPromotedActivation()
+	if !ok || !active {
+		return false
+	}
+	handoff := model.executionHandoff(draft.TaskSlug, active)
+	for _, action := range handoff.Actions {
+		if strings.EqualFold(action.Key, key) {
+			return true
+		}
+	}
+	return false
+}
+
+func (model PlanningModel) selectedPromotedActivation() (PlanningTaskDraft, bool, bool) {
+	draft, ok := model.selectedDraft()
+	if !ok || draft.Status != "promoted" {
+		return PlanningTaskDraft{}, false, false
+	}
+	active, _ := model.taskActivation(draft.TaskSlug)
+	return draft, active, true
+}
+
+func (model PlanningModel) queueSelectedTask() PlanningModel {
+	draft, active, ok := model.selectedPromotedActivation()
+	if !ok || !active {
+		model.message = "No activated task is available to queue."
+		return model
+	}
+	slug := strings.TrimSpace(draft.TaskSlug)
+	store, err := runtimequeue.NewStore(model.repoRoot)
+	if err != nil {
+		model.message = "Could not open queue: " + err.Error()
+		return model
+	}
+	item, err := store.Add(slug)
+	if err != nil {
+		model.message = "Could not queue task: " + err.Error()
+		return model
+	}
+	model.message = "Queued task: " + slug + " (" + item.ID + ")"
+	return model
+}
+
+func (model PlanningModel) reserveSelectedTask() PlanningModel {
+	draft, active, ok := model.selectedPromotedActivation()
+	if !ok || !active {
+		model.message = "No queued task is available to reserve."
+		return model
+	}
+	handoff := model.executionHandoff(draft.TaskSlug, active)
+	if handoff.QueueItem == nil {
+		model.message = "Queue the task before reserving it."
+		return model
+	}
+	store, err := runtimequeue.NewStore(model.repoRoot)
+	if err != nil {
+		model.message = "Could not open queue: " + err.Error()
+		return model
+	}
+	item, err := store.Reserve(handoff.QueueItem.ID)
+	if err != nil {
+		model.message = "Could not reserve task: " + err.Error()
+		return model
+	}
+	reservationID := ""
+	if item.Reservation != nil {
+		reservationID = item.Reservation.ReservationID
+	}
+	model.message = "Reserved task: " + item.Task + " (" + reservationID + ")"
+	return model
+}
+
+func (model PlanningModel) runRWorkflowAction() PlanningModel {
+	draft, active, ok := model.selectedPromotedActivation()
+	if !ok || !active {
+		model.message = "No workflow action is available."
+		return model
+	}
+	handoff := model.executionHandoff(draft.TaskSlug, active)
+	for _, action := range handoff.Actions {
+		if !strings.EqualFold(action.Key, "r") {
+			continue
+		}
+		if strings.EqualFold(action.Label, "Review Failure Details") {
+			return model.reviewFailureDetails()
+		}
+		return model.reserveSelectedTask()
+	}
+	model.message = "No workflow action is available."
+	return model
+}
+
+func (model PlanningModel) reviewFailureDetails() PlanningModel {
+	draft, active, ok := model.selectedPromotedActivation()
+	if !ok || !active {
+		model.message = "No failed execution is available to review."
+		return model
+	}
+	handoff := model.executionHandoff(draft.TaskSlug, active)
+	if handoff.Execution == nil || !strings.EqualFold(handoff.Execution.Status, runtimeexecution.StatusFailed) {
+		model.message = "No failed execution is available to review."
+		return model
+	}
+	model.message = "Review failure details for execution " + handoff.Execution.ID + "."
+	return model
+}
+
+func (model PlanningModel) planSelectedTaskExecution() PlanningModel {
+	draft, active, ok := model.selectedPromotedActivation()
+	if !ok || !active {
+		model.message = "No reserved task is available for execution planning."
+		return model
+	}
+	handoff := model.executionHandoff(draft.TaskSlug, active)
+	if handoff.QueueItem == nil || handoff.QueueItem.Reservation == nil {
+		model.message = "Reserve the task before creating an execution plan."
+		return model
+	}
+	store, err := runtimeexecution.NewStore(model.repoRoot)
+	if err != nil {
+		model.message = "Could not open execution store: " + err.Error()
+		return model
+	}
+	record, err := store.PlanFromReservation(handoff.QueueItem.ID)
+	if err != nil {
+		model.message = "Could not create execution plan: " + err.Error()
+		return model
+	}
+	model.message = "Execution planned: " + record.ID + " for " + record.Task
+	return model
+}
+
+func (model PlanningModel) viewSelectedExecution() PlanningModel {
+	draft, active, ok := model.selectedPromotedActivation()
+	if !ok || !active {
+		model.message = "No execution is available to view."
+		return model
+	}
+	handoff := model.executionHandoff(draft.TaskSlug, active)
+	if handoff.Execution == nil {
+		model.message = "No execution is available to view."
+		return model
+	}
+	model.message = "Execution " + handoff.Execution.ID + " is " + handoff.Execution.Status + "."
+	return model
+}
+
+func (model PlanningModel) openReviewWorkspace() PlanningModel {
+	draft, active, ok := model.selectedPromotedActivation()
+	if !ok || !active {
+		model.message = "No completed execution is available for review."
+		return model
+	}
+	handoff := model.executionHandoff(draft.TaskSlug, active)
+	if handoff.Review == nil || handoff.Execution == nil || !strings.EqualFold(handoff.Execution.Status, runtimeexecution.StatusCompleted) {
+		model.message = "Review workspace opens after completed execution."
+		return model
+	}
+	model.message = "Open review workspace: brevity review"
+	return model
+}
+
+func newestQueueItemForTask(items []runtimequeue.Item, slug string) *runtimequeue.Item {
+	var selected *runtimequeue.Item
+	for index := range items {
+		if strings.TrimSpace(items[index].Task) != slug {
+			continue
+		}
+		if selected == nil || strings.TrimSpace(items[index].CreatedAt) >= strings.TrimSpace(selected.CreatedAt) {
+			item := items[index]
+			selected = &item
+		}
+	}
+	return selected
+}
+
+func newestExecutionForTask(records []runtimeexecution.Record, slug string, item *runtimequeue.Item) *runtimeexecution.Record {
+	queueItemID := ""
+	if item != nil {
+		queueItemID = strings.TrimSpace(item.ID)
+	}
+	var selected *runtimeexecution.Record
+	for index := range records {
+		record := records[index]
+		if strings.TrimSpace(record.Task) != slug {
+			continue
+		}
+		if queueItemID != "" && strings.TrimSpace(record.QueueItemID) != queueItemID {
+			continue
+		}
+		if selected == nil || strings.TrimSpace(record.CreatedAt) >= strings.TrimSpace(selected.CreatedAt) {
+			candidate := record
+			selected = &candidate
+		}
+	}
+	return selected
+}
+
+func handoffQueueSummary(handoff executionHandoff) string {
+	if handoff.QueueItem == nil {
+		queueState := strings.TrimSpace(handoff.QueueState)
+		if queueState != "" && queueState != "valid" && queueState != "missing" {
+			return handoff.QueueState
+		}
+		return "not queued"
+	}
+	return strings.TrimSpace(handoff.QueueItem.ID) + " (" + strings.TrimSpace(handoff.QueueItem.Status) + ")"
+}
+
+func handoffReservationSummary(handoff executionHandoff) string {
+	if handoff.QueueItem == nil || handoff.QueueItem.Reservation == nil {
+		return "none"
+	}
+	return strings.TrimSpace(handoff.QueueItem.Reservation.ReservationID) + " by " + strings.TrimSpace(handoff.QueueItem.Reservation.Owner)
+}
+
+func handoffExecutionSummary(handoff executionHandoff) string {
+	if handoff.Execution == nil {
+		return "none"
+	}
+	return strings.TrimSpace(handoff.Execution.ID) + " (" + strings.TrimSpace(handoff.Execution.Status) + ")"
+}
+
+func (model PlanningModel) taskActivation(slug string) (bool, state.Task) {
+	slug = strings.TrimSpace(slug)
+	if slug == "" {
+		return false, state.Task{}
+	}
+	for _, task := range model.tasks {
+		if task.Key() == slug && strings.TrimSpace(task.WorktreePath) != "" && pathExistsLocal(task.WorktreePath) {
+			return true, task
+		}
+	}
+	return false, state.Task{}
+}
+
+func pathExistsLocal(path string) bool {
+	if strings.TrimSpace(path) == "" {
+		return false
+	}
+	_, err := os.Stat(path)
+	return err == nil
 }
 
 func (model PlanningModel) selectedDraft() (PlanningTaskDraft, bool) {
@@ -583,6 +1238,16 @@ func (model PlanningModel) footer() string {
 		return "\n" + dashboardStyles.footer.Render(model.line("  title: "+model.inputValue+"  enter save  esc cancel"))
 	}
 	help := "  n new idea  enter inspect  d delete  t task draft  p promote  q quit"
+	if draft, active, ok := model.selectedPromotedActivation(); ok && active {
+		handoff := model.executionHandoff(draft.TaskSlug, active)
+		if len(handoff.Actions) > 0 {
+			parts := []string{}
+			for _, action := range handoff.Actions {
+				parts = append(parts, action.Key+" "+strings.ToLower(action.Label))
+			}
+			help = "  " + strings.Join(parts, "  ") + "  esc quit"
+		}
+	}
 	if model.message != "" {
 		help = "  " + model.message + "  |  " + strings.TrimSpace(help)
 	}
